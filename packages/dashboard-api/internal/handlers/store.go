@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -57,6 +58,23 @@ func NewAPIStore(
 
 func (s *APIStore) sendAPIStoreError(c *gin.Context, code int, message string) {
 	apierrors.SendAPIStoreError(c, code, message)
+}
+
+// identityProviderUnavailableMessage is the client-facing reason for the 503
+// on endpoints backed by the identity provider.
+const identityProviderUnavailableMessage = "No identity provider is configured; this endpoint is unavailable"
+
+// abortIfNoIdentityProvider answers 503 when the identity service reports
+// that no provider is configured — a missing capability, not a fault — and
+// reports whether it handled the request.
+func (s *APIStore) abortIfNoIdentityProvider(c *gin.Context, err error) bool {
+	if !errors.Is(err, identity.ErrNoIdentityProvider) {
+		return false
+	}
+
+	s.sendAPIStoreError(c, http.StatusServiceUnavailable, identityProviderUnavailableMessage)
+
+	return true
 }
 
 func (s *APIStore) GetHealth(c *gin.Context) {

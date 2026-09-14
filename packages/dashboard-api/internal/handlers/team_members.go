@@ -43,6 +43,10 @@ func (s *APIStore) GetTeamsTeamIDMembers(c *gin.Context, teamID api.TeamID) {
 
 	profiles, err := s.identityService.ProfilesByUserID(ctx, userIDs)
 	if err != nil {
+		if s.abortIfNoIdentityProvider(c, err) {
+			return
+		}
+
 		logger.L().Error(ctx, "failed to get member profiles", zap.Error(err), logger.WithTeamID(authTeamID.String()))
 		s.sendAPIStoreError(c, http.StatusInternalServerError, "Failed to get team member profiles")
 
@@ -109,6 +113,10 @@ func (s *APIStore) PostTeamsTeamIDMembers(c *gin.Context, teamID api.TeamID) {
 
 	profiles, err := s.identityService.FindProfilesByEmail(ctx, string(body.Email))
 	if err != nil {
+		if s.abortIfNoIdentityProvider(c, err) {
+			return
+		}
+
 		logger.L().Error(ctx, "failed to look up user by email", zap.Error(err))
 		s.sendAPIStoreError(c, http.StatusInternalServerError, "Failed to look up user")
 
@@ -133,6 +141,10 @@ func (s *APIStore) PostTeamsTeamIDMembers(c *gin.Context, teamID api.TeamID) {
 	if teamInfo, ok := auth.GetTeamInfo(c); ok && teamInfo != nil && teamInfo.Team != nil && teamInfo.Team.SsoOrganizationID != nil {
 		inviteeOrgID, err := s.identityService.UserOrganizationID(ctx, user.UserID)
 		if err != nil {
+			if s.abortIfNoIdentityProvider(c, err) {
+				return
+			}
+
 			logger.L().Error(ctx, "failed to resolve invitee organization", zap.Error(err), logger.WithUserID(user.UserID.String()))
 			s.sendAPIStoreError(c, http.StatusInternalServerError, "Failed to resolve invitee organization")
 

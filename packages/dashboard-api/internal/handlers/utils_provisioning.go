@@ -18,6 +18,13 @@ func (s *APIStore) sendProvisioningError(ctx context.Context, c *gin.Context, op
 		attribute.String("team.provision.operation", operation),
 	}
 
+	if errors.Is(err, identity.ErrNoIdentityProvider) {
+		telemetry.ReportErrorByCode(ctx, http.StatusServiceUnavailable, operation+" failed", err, attrs...)
+		s.sendAPIStoreError(c, http.StatusServiceUnavailable, identityProviderUnavailableMessage)
+
+		return
+	}
+
 	if errors.Is(err, identity.ErrUserNotFound) {
 		telemetry.ReportErrorByCode(ctx, http.StatusNotFound, operation+" failed", err, attrs...)
 		s.sendAPIStoreError(c, http.StatusNotFound, "User not found")

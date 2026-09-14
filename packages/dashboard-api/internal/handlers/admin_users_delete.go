@@ -23,6 +23,10 @@ func (s *APIStore) DeleteAdminUsersUserId(c *gin.Context, userId api.UserId) {
 
 	handle, err := s.identityService.PrepareDeleteUser(ctx, userId)
 	if err != nil {
+		if s.abortIfNoIdentityProvider(c, err) {
+			return
+		}
+
 		if errors.Is(err, identity.ErrUserNotFound) {
 			s.sendAPIStoreError(c, http.StatusNotFound, fmt.Sprintf("User %s not found or has no identity provider record", userId))
 

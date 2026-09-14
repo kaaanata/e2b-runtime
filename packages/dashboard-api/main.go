@@ -199,28 +199,7 @@ func run() int {
 	}
 	defer authService.Close(ctx)
 
-	oryIssuer, err := identity.ResolveOryIssuer(config.OrySDKURL, config.AuthProvider.JWT)
-	if err != nil {
-		l.Error(ctx, "Resolving Ory issuer", zap.Error(err))
-
-		return 1
-	}
-
-	oryDirectory, err := identity.NewOryDirectory(identity.OryConfig{
-		HTTPClient: authClient,
-		SDKURL:     config.OrySDKURL,
-		Token:      config.OryProjectAPIToken,
-	})
-	if err != nil {
-		l.Error(ctx, "Initializing ory identity directory", zap.Error(err))
-
-		return 1
-	}
-
-	identityService, err := identity.NewService(
-		map[string]identity.Directory{oryIssuer: oryDirectory},
-		identity.NewQueriesLinkage(authDB.Queries),
-	)
+	identityService, err := newIdentityService(ctx, l, config, authClient, identity.NewQueriesLinkage(authDB.Queries))
 	if err != nil {
 		l.Error(ctx, "Initializing identity service", zap.Error(err))
 
@@ -303,6 +282,40 @@ func run() int {
 
 func main() {
 	os.Exit(run())
+}
+
+// newIdentityService builds the Ory-backed identity service when Ory is
+// configured. With both Ory variables empty the service runs without an
+// identity provider: API-key requests are unaffected and the identity-backed
+// endpoints answer 503.
+func newIdentityService(
+	ctx context.Context,
+	l logger.Logger,
+	config cfg.Config,
+	httpClient *http.Client,
+	linkage identity.Linkage,
+) (identity.Service, error) {
+	if !config.IdentityProviderConfigured() {
+		l.Warn(ctx, "ORY_SDK_URL and ORY_PROJECT_API_TOKEN are not configured; no identity provider is configured and identity-backed endpoints will respond with 503")
+
+		return identity.NewUnavailableService(), nil
+	}
+
+	oryIssuer, err := identity.ResolveOryIssuer(config.OrySDKURL, config.AuthProvider.JWT)
+	if err != nil {
+		return nil, fmt.Errorf("resolve ory issuer: %w", err)
+	}
+
+	oryDirectory, err := identity.NewOryDirectory(identity.OryConfig{
+		HTTPClient: httpClient,
+		SDKURL:     config.OrySDKURL,
+		Token:      config.OryProjectAPIToken,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("initialize ory identity directory: %w", err)
+	}
+
+	return identity.NewService(map[string]identity.Directory{oryIssuer: oryDirectory}, linkage)
 }
 
 func newHTTPServer(
