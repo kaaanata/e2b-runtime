@@ -36,7 +36,7 @@ func (s *APIStore) PatchTeamsTeamID(c *gin.Context, teamID api.TeamID) {
 		return
 	}
 
-	if !body.NameSet && !body.ProfilePictureUrlSet {
+	if !body.NameSet {
 		s.sendAPIStoreError(c, http.StatusBadRequest, "At least one field must be provided")
 
 		return
@@ -49,11 +49,9 @@ func (s *APIStore) PatchTeamsTeamID(c *gin.Context, teamID api.TeamID) {
 	}
 
 	row, err := s.db.Dashboard.UpdateTeam(ctx, dashboardqueries.UpdateTeamParams{
-		TeamID:               authTeamID,
-		Name:                 body.NamePtr(),
-		NameSet:              body.NameSet,
-		ProfilePictureUrl:    body.ProfilePictureUrl,
-		ProfilePictureUrlSet: body.ProfilePictureUrlSet,
+		TeamID:  authTeamID,
+		Name:    body.NamePtr(),
+		NameSet: body.NameSet,
 	})
 	if err != nil {
 		logger.L().Error(ctx, "failed to update team", zap.Error(err), logger.WithTeamID(authTeamID.String()))
@@ -63,17 +61,14 @@ func (s *APIStore) PatchTeamsTeamID(c *gin.Context, teamID api.TeamID) {
 	}
 
 	c.JSON(http.StatusOK, api.UpdateTeamResponse{
-		Id:                row.ID,
-		Name:              row.Name,
-		ProfilePictureUrl: row.ProfilePictureUrl,
+		Id:   row.ID,
+		Name: row.Name,
 	})
 }
 
 type updateTeamBody struct {
-	NameSet              bool
-	Name                 string
-	ProfilePictureUrlSet bool
-	ProfilePictureUrl    *string
+	NameSet bool
+	Name    string
 }
 
 func (b updateTeamBody) NamePtr() *string {
@@ -94,7 +89,7 @@ func parseUpdateTeamBody(bodyReader io.Reader) (updateTeamBody, error) {
 	}
 
 	for field := range payload {
-		if field != "name" && field != "profilePictureUrl" {
+		if field != "name" {
 			return body, errors.New("unknown field")
 		}
 	}
@@ -112,21 +107,6 @@ func parseUpdateTeamBody(bodyReader io.Reader) (updateTeamBody, error) {
 		}
 
 		body.Name = name
-	}
-
-	profilePictureURLRaw, hasProfilePictureURL := payload["profilePictureUrl"]
-	if hasProfilePictureURL {
-		body.ProfilePictureUrlSet = true
-		if bytes.Equal(profilePictureURLRaw, []byte("null")) {
-			body.ProfilePictureUrl = nil
-		} else {
-			var profilePictureURL string
-			if err := json.Unmarshal(profilePictureURLRaw, &profilePictureURL); err != nil {
-				return body, err
-			}
-
-			body.ProfilePictureUrl = &profilePictureURL
-		}
 	}
 
 	return body, nil

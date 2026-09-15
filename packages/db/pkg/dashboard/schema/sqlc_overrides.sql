@@ -1,0 +1,14 @@
+-- Read by sqlc only, after pkg/dashboard/migrations; never executed against a
+-- database. It lets the generated dashboard queries diverge from the applied
+-- schema for the length of a two-step change. Only the dashboard package lists
+-- this file: the other packages never see the dashboard migrations, so the
+-- DROP below would fail for them.
+--
+-- Step 1 of removing the unused teams.profile_picture_url: hide the column from
+-- sqlc so no generated query names it in a column list. Every database keeps
+-- the column, so the previous revision keeps serving during the rollout.
+-- Step 2, once this revision is live everywhere, drops the column with a
+-- forward migration and removes this directory together with its
+-- `pkg/dashboard/schema` entry in sqlc.yaml: the entry is a bare path, so sqlc
+-- fails on a missing directory, and git does not keep an empty one.
+ALTER TABLE public.teams DROP COLUMN profile_picture_url;

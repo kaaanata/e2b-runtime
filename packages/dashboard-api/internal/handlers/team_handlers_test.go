@@ -26,30 +26,24 @@ import (
 
 const testBaseTier = "base_v1"
 
-func TestParseUpdateTeamBody_ProfilePictureNullClearsValue(t *testing.T) {
-	t.Parallel()
-
-	body, err := parseUpdateTeamBody(strings.NewReader(`{"profilePictureUrl":null}`))
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if !body.ProfilePictureUrlSet {
-		t.Fatalf("expected profilePictureUrl to be marked as set")
-	}
-	if body.ProfilePictureUrl != nil {
-		t.Fatalf("expected nil profilePictureUrl for explicit null")
-	}
-}
-
-func TestParseUpdateTeamBody_ProfilePictureOmittedIsNoop(t *testing.T) {
+func TestParseUpdateTeamBody_NameOnly(t *testing.T) {
 	t.Parallel()
 
 	body, err := parseUpdateTeamBody(strings.NewReader(`{"name":"team-a"}`))
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if body.ProfilePictureUrlSet {
-		t.Fatalf("expected profilePictureUrl to be unset when omitted")
+	if !body.NameSet || body.Name != "team-a" {
+		t.Fatalf("expected name to be set to team-a, got %+v", body)
+	}
+}
+
+func TestParseUpdateTeamBody_UnknownFieldRejected(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseUpdateTeamBody(strings.NewReader(`{"profilePictureUrl":"https://example.com/a.png"}`))
+	if err == nil {
+		t.Fatalf("expected error for unknown field")
 	}
 }
 

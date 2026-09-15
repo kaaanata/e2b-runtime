@@ -24,7 +24,6 @@ type Team struct {
 	SsoOrganizationID       *uuid.UUID
 	SsoAutoJoin             bool
 	Slug                    string
-	ProfilePictureUrl       *string
 }
 
 type TeamLimit struct {
