@@ -308,7 +308,8 @@ OpenAPI security scheme accepts only short-lived service JWTs verified against t
 `/.well-known/jwks.json` endpoint, with accepted signing methods derived from each JWK's required
 `alg` metadata. Issuers and audiences are configured through the JSON `ADMIN_AUTH_PROVIDER_CONFIG` value —
 the same config shape as `AUTH_PROVIDER_CONFIG`. Talks to Postgres and ClickHouse; never talks to
-orchestrators.
+orchestrators. The web dashboard itself is a separate repository (github.com/e2b-dev/dashboard)
+published as an image; E2B Embed runs it on port 3001 beside dashboard-api.
 
 An issuer normally configures at least one accepted audience, binding a JWT to its intended target.
 An issuer may omit `audiences` only with no `audienceMatchPolicy`; this deliberately disables
@@ -666,6 +667,9 @@ deletion owns a separate hold until artifact cleanup returns.
 
 The services are scheduler-agnostic binaries and containers; the supported way to run them is the
 Kubernetes-based distribution. The roles below hold regardless of how the nodes are provisioned.
+E2B Embed (`embed/`) runs the same containers on one machine, the web dashboard included, in three
+shapes (Compose, Terraform for GCP, Kubernetes); its ports, start order and images are in
+`embed/README.md`.
 
 ```mermaid
 flowchart TB
@@ -722,6 +726,7 @@ packages/
   local-dev/            docker-compose local stack + DB seeding
 spec/                   OpenAPI specs (public, edge, dashboard) — codegen sources
 tests/integration/      Integration tests against a live deployment
+embed/                  E2B Embed: the whole stack on one machine (Compose, Terraform, Kubernetes)
 ```
 
 Cross-service contracts are all generated: OpenAPI specs in `spec/`, gRPC protos in

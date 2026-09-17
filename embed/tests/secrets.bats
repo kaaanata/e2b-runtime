@@ -7,6 +7,9 @@
 # compose.yaml carries no value for either, and these tests hold that line: a
 # default that grew back would put every install on one shared admin token
 # again, and a broken entrypoint would silently drop the api's port argument.
+# dashboard-api reads the same file for the same admin token, so its wrapper
+# is held here too, beside the api's: tests/dashboard.bats reads none of it,
+# and the whole entrypoint could be deleted with every dashboard test green.
 #
 # Rendering needs Docker with the compose plugin and jq, as team-api-key.bats
 # does. The render runs with both variables unset, because a value exported in
@@ -73,6 +76,31 @@ unescaped() {
   [ "$output" = "--port 3000" ]
 }
 
+# The same wrapper as the api's, with one secret instead of two, so the two
+# processes hold the one admin token this install generated.
+@test "the dashboard-api entrypoint takes the admin token only when it is unset" {
+  local script
+  script="$(unescaped '.services["dashboard-api"].entrypoint[2]')"
+  [[ "$script" == *". /run/e2b/api.env"* ]]
+  # shellcheck disable=SC2016  # the expansion is dashboard-api's own shell
+  [[ "$script" == *'${ADMIN_TOKEN:-$GEN_ADMIN_TOKEN}'* ]]
+  # shellcheck disable=SC2016
+  [[ "$script" == *'[ -n "${GEN_ADMIN_TOKEN:-}" ]'* ]]
+  # One secret and not two: the sandbox seed is the api's alone, and a wrapper
+  # copied wholesale from the api would make this service refuse to start
+  # whenever that half of the file is missing.
+  [[ "$script" != *GEN_SANDBOX_ACCESS_TOKEN_HASH_SEED* ]]
+  # Relative, because the image's working directory is / and its own
+  # entrypoint is ./dashboard-api, exactly as the api's wrapper is.
+  # shellcheck disable=SC2016
+  [[ "$script" == *'exec ./dashboard-api "$@"'* ]]
+  # The $0 placeholder, as above. This service passes no `command:` today, so
+  # nothing is dropped yet; without the placeholder the first argument added
+  # later would vanish instead of reaching the binary.
+  run bash -c 'echo "$1" | jq -r ".services[\"dashboard-api\"].entrypoint | length, .[-1]"' _ "$RENDERED_JSON"
+  [ "$output" = $'4\ndashboard-api' ]
+}
+
 @test "api-secrets writes the pair into the shared volume, gated only on preflight" {
   run bash -c 'echo "$1" | jq -r ".services[\"api-secrets\"].volumes[] | select(.target == \"/run/e2b\") | \"\(.source) \(.read_only == true)\""' _ "$RENDERED_JSON"
   [ "$output" = "seed-state false" ]
@@ -106,15 +134,22 @@ unescaped() {
   [ -z "$output" ]
 }
 
-# The parity and content tests above read both snippets as text, so a syntax
-# error in either passes them. `/bin/sh` is what runs both; `-n` is that same
-# parser, stopped before it does anything.
-@test "both secret snippets parse" {
+# The parity and content tests above read each snippet as text, so a syntax
+# error in any of them passes them. `/bin/sh` is what runs all three; `-n` is
+# that same parser, stopped before it does anything.
+@test "every secret snippet parses" {
   unescaped '.services["api-secrets"].command[2]' > "$BATS_TEST_TMPDIR/api-secrets"
   unescaped '.services.api.entrypoint[2]' > "$BATS_TEST_TMPDIR/api-entrypoint"
+  unescaped '.services["dashboard-api"].entrypoint[2]' \
+    > "$BATS_TEST_TMPDIR/dashboard-api-entrypoint"
   local snippet
-  for snippet in api-secrets api-entrypoint; do
+  for snippet in api-secrets api-entrypoint dashboard-api-entrypoint; do
     [ -s "$BATS_TEST_TMPDIR/$snippet" ]
+    # jq -r prints "null" for a snippet that is not there at all, and `sh -n`
+    # reads that as a command name and exits 0. Without this line the loop
+    # would pass for a service whose entrypoint had been deleted outright.
+    [ "$(cat "$BATS_TEST_TMPDIR/$snippet")" != "null" ] || {
+      echo "the $snippet snippet is absent from the rendered file"; return 1; }
     run sh -n "$BATS_TEST_TMPDIR/$snippet"
     [ "$status" -eq 0 ] || { echo "the $snippet snippet does not parse:"; echo "$output"; return 1; }
   done

@@ -21,6 +21,12 @@ images:
   - name: E2B_CLICKHOUSE_MIGRATOR_IMAGE
     newName: us-docker.pkg.dev/e2b-artifacts/clickhouse-migrator/clickhouse-migrator
     newTag: v0.4.0
+  - name: E2B_DASHBOARD_API_IMAGE
+    newName: us-docker.pkg.dev/e2b-artifacts/dashboard-api/dashboard-api
+    newTag: v0.7.202610051633-d1cd3db3890 # x-release-please-version
+  - name: E2B_DASHBOARD_IMAGE
+    newName: us-docker.pkg.dev/e2b-artifacts/dashboard/dashboard
+    newTag: v0.2.1
   - name: E2B_TOOLS_IMAGE
     newName: us-docker.pkg.dev/e2b-artifacts/embed/tools
     newTag: v0.3.202609102141-4e83bd6ac4a

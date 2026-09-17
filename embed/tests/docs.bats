@@ -72,7 +72,7 @@ PY
   done <<<"$selectors"
 }
 
-# The hub README's port table and the overview diagram state the same eleven
+# The hub README's port table and the overview diagram state the same thirteen
 # ports in different notation (one row per port; a range in the picture). The
 # table is the one in README.md at the package root, the hub -- the three
 # install guides point at it rather than repeating it. Expand the ranges and

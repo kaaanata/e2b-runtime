@@ -29,16 +29,26 @@ https://e2b.dev/enterprise.
 Sandboxes are real Firecracker microVMs on the machine, and everything they
 need stays there: the databases, the templates you build and the logs all
 live on its disk. Each install gets its own team API key, generated on the
-first start. Eleven ports listen on every interface of the machine. The SDK
-needs the first two. The other nine must not be reachable on any address the
-machine holds: give it no public address of its own, or firewall those nine
-ports for that address as well, not only at the network edge.
+first start. Port 3001 serves the open-source E2B dashboard: paste the team
+API key into its key form to see the sandboxes and templates the SDK sees,
+with a terminal and a filesystem inspector on each one. Those reach the
+sandbox through client-proxy's header routing (below), at the address in
+`E2B_DASHBOARD_HOST` (default `localhost`); set it when a browser on another
+machine opens the dashboard without a tunnel.
+
+Thirteen ports listen on every interface of the machine. The SDK needs 3000
+and 3002; a browser needs 3001 for the dashboard. The other ten must not be
+reachable on any address the machine holds: give it no public address of its
+own, or firewall those ten ports for that address as well, not only at the
+network edge.
 
 | Port | Service | Reachable from | Purpose |
 |------|---------|----------------|---------|
 | 3000 | api | trusted clients | the REST API the SDK calls |
+| 3001 | dashboard | trusted clients | the web dashboard, for a browser |
 | 3002 | client-proxy | trusted clients | sandbox traffic (header routing) |
 | 3003 | client-proxy | the machine only | health |
+| 3010 | dashboard-api | the machine only | the dashboard's backend |
 | 5007 | orchestrator | the machine only | sandbox proxy |
 | 5008 | orchestrator | the machine only | **unauthenticated** gRPC control API |
 | 5009 | api | the machine only | internal gRPC |
@@ -63,7 +73,7 @@ shares the node's network), Vector's log listener on 30006 (20006 on
 Kubernetes, for the reason that guide gives) and its API on 44313 on
 Kubernetes only, and the two pprof endpoints, 6060 for api and 6061 for the
 orchestrator. `sudo ss -ltnp` on the machine confirms the
-split: the eleven ports above show a `*:` address, everything in this
+split: the thirteen ports above show a `*:` address, everything in this
 paragraph shows `127.0.0.1:`.
 
 ## Reference
@@ -103,7 +113,7 @@ is no Loki in this stack, and the api needs no `LOKI_URL`.
 The team API key is per install. The seed generates it on the first start and
 keeps it beside the databases, so a shape never has a key without its database
 or a database without its key, and every shape prints it with the two SDK
-URLs. Each guide's Secrets section says where its copy lives and how to pin or
+URLs and the dashboard URL. Each guide's Secrets section says where its copy lives and how to pin or
 rotate it. A rotation revokes the old key, which keeps working for up to five
 minutes, because the api caches team lookups in Redis for that long.
 
@@ -123,8 +133,9 @@ by anyone who reaches 3002.
 ### Images and pins
 
 [`compose/.env`](compose/.env) is the source of truth for every version the
-stack uses: the four released E2B service images (api, db-migrator,
-client-proxy, clickhouse-migrator), the three small stack images Embed builds
+stack uses: the five released E2B service images (api, db-migrator,
+dashboard-api, client-proxy, clickhouse-migrator), the dashboard image
+(its own release line, github.com/e2b-dev/dashboard), the three small stack images Embed builds
 itself, which carry everything that is not a released E2B service (the host
 scripts, the SDK scripts and the database seeder), and the five
 Firecracker binaries. Terraform ships that file to the instance, and
@@ -144,7 +155,7 @@ with each other.
 ![Layer map: source files, build definitions, images, services](docs/layer-map.svg)
 
 Top to bottom: the source files, the Dockerfiles that copy them, the images
-(three built here, eight pulled ready-made) and the compose services. Arrows
+(three built here, ten pulled ready-made) and the compose services. Arrows
 in the last band are `depends_on` gates, in start order; the stripe on each
 service says which image it runs. Two things the picture leaves out: the
 ClickHouse and Vector configs are inlined into `compose/compose.yaml` rather
@@ -248,5 +259,4 @@ machine.
 - macOS and Windows. The stack needs a Linux x86-64 machine with KVM.
 - Container-Optimized OS: the machine needs apt, a writable `/etc` and
   glibc 2.34 or newer.
-- No dashboard. Only the SDK and API paths are covered.
 - No wildcard DNS and no TLS.

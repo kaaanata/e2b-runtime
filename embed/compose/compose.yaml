@@ -5,13 +5,14 @@
 # variable. Without it Compose renders a blank image name or a blank kernel
 # version and only warns, and the operator meets either a confusing "neither
 # an image nor a build context" error or a fetch-artifacts failure after the
-# host has already been mutated. The six knobs that are genuinely optional
-# and are absent from .env (TEAM_API_KEY only as a commented line) keep the
-# ${VAR:-...} form: HUGEPAGES, PF_MIN_FREE_GIB and FORCE_REBUILD carry a
-# working default, while TEAM_API_KEY, ADMIN_TOKEN and
-# SANDBOX_ACCESS_TOKEN_HASH_SEED carry none — the stack generates all three
-# per install (seed for the key, api-secrets for the api's two), and a value
-# set in .env or the shell overrides the generated one.
+# host has already been mutated. The seven knobs that are genuinely optional
+# and are absent from .env (TEAM_API_KEY, ADMIN_TOKEN,
+# SANDBOX_ACCESS_TOKEN_HASH_SEED and E2B_DASHBOARD_HOST only as commented
+# lines) keep the ${VAR:-...} form: HUGEPAGES, PF_MIN_FREE_GIB, FORCE_REBUILD
+# and E2B_DASHBOARD_HOST carry a working default, while TEAM_API_KEY,
+# ADMIN_TOKEN and SANDBOX_ACCESS_TOKEN_HASH_SEED carry none — the stack
+# generates all three per install (seed for the key, api-secrets for the api's
+# two), and a value set in .env or the shell overrides the generated one.
 name: e2b
 
 x-tools: &tools
@@ -369,6 +370,96 @@ services:
       retries: 30
       start_period: 20s
 
+  # The dashboard's backend. It reads the same databases as the api and the
+  # same admin token: the wrapper below is the api's, reading GEN_ADMIN_TOKEN
+  # from the file api-secrets writes, so both processes hold the one token
+  # this install generated. It starts without an identity provider; the
+  # /v1/management routes then answer 401, and nothing here calls them.
+  dashboard-api:
+    image: ${E2B_DASHBOARD_API_IMAGE:?fetch the .env that ships beside compose.yaml (README, Install)}
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      PORT: "3010"
+      NODE_ID: dashboard-api
+      ENVIRONMENT: local
+      POSTGRES_CONNECTION_STRING: postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable
+      REDIS_URL: 127.0.0.1:6379
+      CLICKHOUSE_CONNECTION_STRING: clickhouse://clickhouse:clickhouse@127.0.0.1:9000/default
+      AUTH_PROVIDER_CONFIG: '{"jwt":[]}'
+    volumes:
+      - seed-state:/run/e2b:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        test -s /run/e2b/api.env || {
+          echo "dashboard-api: api-secrets left no /run/e2b/api.env" >&2
+          echo "FIX: run docker compose up api-secrets and read its output" >&2
+          exit 1
+        }
+        . /run/e2b/api.env
+        [ -n "$${GEN_ADMIN_TOKEN:-}" ] || {
+          echo "dashboard-api: /run/e2b/api.env is incomplete" >&2
+          echo "FIX: docker compose run --rm --no-deps --entrypoint rm api-secrets /run/e2b/api.env, then docker compose up -d" >&2
+          exit 1
+        }
+        export ADMIN_TOKEN="$${ADMIN_TOKEN:-$$GEN_ADMIN_TOKEN}"
+        exec ./dashboard-api "$$@"
+      - dashboard-api
+    depends_on:
+      api-secrets:
+        condition: service_completed_successfully
+      db-migrator:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3010/health >/dev/null"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+
+  # The web UI. A browser signs in with this install's team API key, which
+  # lands in an httpOnly cookie; DASHBOARD_COOKIE_SECURE=false keeps that
+  # cookie over plain http. The server reaches the two APIs on loopback; the
+  # browser reaches sandboxes at PUBLIC_SANDBOX_URL, so that address has to be
+  # one the browser can open, which is what the E2B_DASHBOARD_HOST knob sets.
+  # PUBLIC_E2B_DOMAIN is required by the image and only feeds SDK domain
+  # routing, which PUBLIC_SANDBOX_URL overrides here. The image refuses to
+  # start on E2B_SANDBOX_URL or any NEXT_PUBLIC_* variable, so none is set.
+  # /api/health is 503 until dashboard-api answers, which makes it the right
+  # readiness for `up --wait`; the image has node but no wget or curl.
+  dashboard:
+    image: ${E2B_DASHBOARD_IMAGE:?fetch the .env that ships beside compose.yaml (README, Install)}
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PORT: "3001"
+      HOSTNAME: 0.0.0.0
+      PUBLIC_E2B_DOMAIN: localhost
+      E2B_INFRA_API_URL: http://127.0.0.1:3000
+      E2B_DASHBOARD_API_URL: http://127.0.0.1:3010
+      PUBLIC_SANDBOX_URL: http://${E2B_DASHBOARD_HOST:-localhost}:3002
+      DASHBOARD_COOKIE_SECURE: "false"
+    depends_on:
+      api:
+        condition: service_healthy
+      dashboard-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
   client-proxy:
     image: ${E2B_CLIENT_PROXY_IMAGE:?fetch the .env that ships beside compose.yaml (README, Install)}
     restart: unless-stopped
@@ -405,9 +496,11 @@ services:
         condition: service_completed_successfully
       client-proxy:
         condition: service_healthy
+      dashboard:
+        condition: service_healthy
     volumes:
       - seed-state:/run/e2b
-    # /run/e2b/sdk.env holds the three exports for this install, so a shell
+    # /run/e2b/sdk.env holds the four exports for this install, so a shell
     # can take them with: eval "$(docker compose exec ready cat /run/e2b/sdk.env)"
     # It is re-rendered whenever the seed rotates the key (TEAM_API_KEY changed
     # or the key file removed, then `up`): `up` re-runs the seed but does not
@@ -435,9 +528,9 @@ services:
         while :; do
           key="$$(cat /run/e2b/team-api-key 2>/dev/null)"
           if [ -n "$$key" ] && [ "$$key" != "$$last" ]; then
-            printf 'export E2B_API_KEY=%s\nexport E2B_API_URL=http://%s:3000\nexport E2B_SANDBOX_URL=http://%s:3002\n' "$$key" "$$E2B_HOST" "$$E2B_HOST" > /run/e2b/sdk.env
+            printf 'export E2B_API_KEY=%s\nexport E2B_API_URL=http://%s:3000\nexport E2B_SANDBOX_URL=http://%s:3002\nexport E2B_DASHBOARD_URL=http://%s:3001\n' "$$key" "$$E2B_HOST" "$$E2B_HOST" "$$E2B_HOST" > /run/e2b/sdk.env
             if [ -z "$$last" ]; then
-              echo "E2B stack is up. Point the SDK at it (this install's own key):"
+              echo "E2B stack is up. Point the SDK at it (this install's own key). Open E2B_DASHBOARD_URL in a browser and paste E2B_API_KEY into its key form."
             else
               echo "Team API key rotated; the earlier key stops working within five minutes. The SDK variables are now:"
             fi

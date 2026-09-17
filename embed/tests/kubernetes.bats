@@ -103,7 +103,7 @@ compose_config_json_clean() {
 }
 
 @test "image tags equal the pins in compose/.env" {
-  for var in E2B_API_IMAGE E2B_DB_MIGRATOR_IMAGE E2B_CLIENT_PROXY_IMAGE E2B_CLICKHOUSE_MIGRATOR_IMAGE E2B_TOOLS_IMAGE E2B_NODE_E2B_IMAGE E2B_SEED_IMAGE; do
+  for var in E2B_API_IMAGE E2B_DB_MIGRATOR_IMAGE E2B_CLIENT_PROXY_IMAGE E2B_CLICKHOUSE_MIGRATOR_IMAGE E2B_DASHBOARD_API_IMAGE E2B_DASHBOARD_IMAGE E2B_TOOLS_IMAGE E2B_NODE_E2B_IMAGE E2B_SEED_IMAGE; do
     image="$(env_value "$var")"
     [ -n "$image" ]
     echo "$RENDERED" | grep -q "image: $image\$" || { echo "missing $image"; return 1; }
@@ -157,8 +157,14 @@ compose_config_json_clean() {
   echo "$RENDERED" | grep -q -- '- listen_addresses=127.0.0.1$'
   echo "$RENDERED" | grep -q -- '- --bind$'
   echo "$RENDERED" | grep -q 'docker_related_config.xml'
-  run grep -n '0.0.0.0' <<< "$RENDERED"
-  [ "$status" -eq 1 ]
+  # The dashboard is the one process in the pod meant to be reached from off
+  # the node: a browser opens it at the node's address, so its server binds
+  # every interface, the same HOSTNAME compose gives it. Nothing else may, and
+  # the env-parity test below is what ties that one line to that container.
+  run grep -n '0\.0\.0\.0' <<< "$RENDERED"
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ]
+  printf '%s\n' "$RENDERED" | grep -B1 '^ *value: 0\.0\.0\.0$' | grep -q '^ *- name: HOSTNAME$'
 }
 
 @test "the pod shares the host network and pid namespaces" {
@@ -183,9 +189,9 @@ compose_config_json_clean() {
 
 @test "every startup probe carries its compose healthcheck timings" {
   probes="$(startup_probes)"
-  [ "$(printf '%s\n' "$probes" | grep -c .)" -eq 7 ]
+  [ "$(printf '%s\n' "$probes" | grep -c .)" -eq 9 ]
   compose_json="$(docker compose --project-directory compose config --format json)"
-  for service in postgres redis clickhouse vector orchestrator api client-proxy; do
+  for service in postgres redis clickhouse vector orchestrator api client-proxy dashboard-api dashboard; do
     # A compose duration is "10s" here, but older plugins emit nanoseconds.
     want="$(printf '%s' "$compose_json" | jq -r --arg s "$service" '
       def secs: tostring
@@ -304,6 +310,20 @@ ALLOWED = {
         ("", "<secret:e2b-api/ADMIN_TOKEN>"),
     ("api", "SANDBOX_ACCESS_TOKEN_HASH_SEED"):
         ("", "<secret:e2b-api/SANDBOX_ACCESS_TOKEN_HASH_SEED>"),
+
+    # dashboard-api holds the same admin token as the api and takes it the
+    # same way each shape does for the api: the compose wrapper reads it from
+    # the seed-state file, the pod from the e2b-api Secret.
+    ("dashboard-api", "ADMIN_TOKEN"):
+        ("", "<secret:e2b-api/ADMIN_TOKEN>"),
+
+    # The browser has to reach client-proxy at an address it can open. Compose
+    # renders the E2B_DASHBOARD_HOST knob's default; the pod substitutes the
+    # node's own IP, the same address ready prints, through a fieldRef that
+    # compose has no counterpart for.
+    ("dashboard", "PUBLIC_SANDBOX_URL"):
+        ("http://localhost:3002", "http://$(NODE_IP):3002"),
+    ("dashboard", "NODE_IP"): ("<absent>", "<field:status.hostIP>"),
 
     # Vector's HTTP source listens on 30006 under compose and on 20006 in the
     # pod: 30006 is inside the default NodePort range, and a NodePort that
@@ -474,7 +494,7 @@ for name, key in sorted(set(ALLOWED) - used):
 
 # A parser that stopped matching would pass every container vacuously.
 for name in ("api", "orchestrator", "client-proxy", "postgres", "clickhouse",
-             "vector", "ready"):
+             "vector", "ready", "dashboard", "dashboard-api"):
     if name not in containers:
         problems.append("no %s container was parsed out of the manifest" % name)
 
@@ -482,4 +502,24 @@ if problems:
     sys.exit("\n".join(problems))
 PY
   [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
+# The dashboard pair has to be the last two init containers. A native sidecar
+# (an init container with restartPolicy: Always) gates the next init container
+# on its startup probe, so a dashboard that never turns healthy would stop the
+# base template from being built if it sat any earlier. On compose only `ready`
+# waits for the dashboard, and this is what keeps the two shapes agreeing.
+# Nothing else pins the order: kustomize renders the list either way.
+@test "the dashboard pair is the last two init containers" {
+  names="$(awk '/^      initContainers:$/ { f = 1; next }
+                /^      [a-zA-Z]/         { f = 0 }
+                f && /^        - name: /  { print $3 }' kubernetes/statefulset.yaml)"
+  # A parser that stopped matching would pass the test vacuously.
+  [ -n "$names" ]
+
+  diff <(printf '%s\n' "$names" | tail -3) \
+       <(printf '%s\n' base-template dashboard-api dashboard) || {
+    echo "the init containers now end (-) where they must end (+)"
+    return 1
+  }
 }

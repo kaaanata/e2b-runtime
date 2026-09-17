@@ -81,11 +81,15 @@ checkout: `kubectl apply -k embed/kubernetes`.
 
 ## Try it
 
-Put this install's three SDK variables in your shell:
+Put this install's three SDK variables and the dashboard URL in your shell:
 
 ```bash
 eval "$(kubectl -n e2b exec e2b-0 -c ready -- cat /run/e2b/sdk.env)"
 ```
+
+Open the dashboard at `$E2B_DASHBOARD_URL`, which is the node's IP on port
+3001, and paste `$E2B_API_KEY` into its key form. The browser also reaches
+sandbox traffic on the node's IP, port 3002, so both have to be open to it.
 
 Install the SDK in a virtual environment, which is what keeps it off the
 system Python that Ubuntu's `pip` refuses to write to. On Ubuntu `venv`
@@ -151,10 +155,12 @@ has no counterpart here.
 
 ### What runs where
 
-One pod on the labelled node. The stores, Vector, the orchestrator, api and
-client-proxy are sidecar init containers started in the compose order, host
-preparation first; the one-shots are ordinary init containers between them;
-`ready` turns the pod Ready once the `base` template exists.
+One pod on the labelled node. The stores, Vector, the orchestrator, api,
+client-proxy, dashboard-api and the dashboard are sidecar init containers
+started in the compose order, host preparation first and the dashboard pair
+last, so the `base` template never waits on the browser UI; the one-shots are
+ordinary init containers between them; `ready` turns the pod Ready once the
+`base` template exists and the dashboard answers.
 
 The pod uses the node's network and pid namespaces, runs three privileged
 containers (`preflight`, `host-setup` and the orchestrator launcher, which
@@ -171,17 +177,17 @@ stack.
 
 ### Ports
 
-The node exposes the same eleven ports as a compose host, and Postgres,
+The node exposes the same thirteen ports as a compose host, and Postgres,
 Redis, ClickHouse and Vector listen on loopback here too. The SDK variables
-`ready` prints use the node's IP: reach 3000 and 3002 on it and firewall the
-other nine (3003, 5007, 5008, 5009, 5109 and the sandbox egress proxies 5010,
-5016, 5017 and 5018), since 5008 is an unauthenticated control API and the
-egress proxies expect no external client.
+`ready` prints use the node's IP: reach 3000, 3001 and 3002 on it and firewall
+the other ten (3003, 3010, 5007, 5008, 5009, 5109 and the sandbox egress
+proxies 5010, 5016, 5017 and 5018), since 5008 is an unauthenticated control
+API and the egress proxies expect no external client.
 
-k3s adds two ports of its own on top of those eleven: `*:6443`, the
+k3s adds two ports of its own on top of those thirteen: `*:6443`, the
 Kubernetes API server, and `*:10250`, the kubelet. They belong to the
 cluster rather than to the stack, and they want the same firewall treatment
-as the nine, more urgently if anything: the install above writes the
+as the ten, more urgently if anything: the install above writes the
 cluster-admin kubeconfig mode 644, so 6443 is the port that hands out the
 node.
 
@@ -196,7 +202,8 @@ The api's two secrets, `ADMIN_TOKEN` and `SANDBOX_ACCESS_TOKEN_HASH_SEED`,
 come from the `e2b-api` Secret created during the install; nothing in the
 manifest carries them. The compose shape generates them per install in an
 `api-secrets` one-shot, which has no counterpart here: rotate them by
-replacing the Secret and restarting the pod.
+replacing the Secret and restarting the pod. dashboard-api takes `ADMIN_TOKEN`
+from the same Secret.
 
 The team API key is different: the seed generates it on the first start and
 keeps it in `/var/lib/e2b/data/seed-state/team-api-key` on the node, where
@@ -213,6 +220,10 @@ prints the new exports. To pin a key instead of generating one, patch the seed
 init container's `SEED_TEAM_API_KEY` with a kustomize patch; the value is
 `e2b_` followed by at least 32 hex characters, as compose's `TEAM_API_KEY`
 documents.
+
+The dashboard keeps the key you paste in an httpOnly browser cookie for a
+year, not marked Secure because the node serves plain http; sign-out
+clears it.
 
 ### Upgrading
 
@@ -246,6 +257,25 @@ when they disagree.
 - There is no `smoke` service. Try it above has the recipe that replaces it.
 - A node that carries a taint needs a toleration, added with a kustomize
   patch; a commented example is in [`statefulset.yaml`](statefulset.yaml).
+- To run without the dashboard, drop both of its containers with a
+  strategic-merge patch beside [`kustomization.yaml`](kustomization.yaml),
+  referenced from it as `patches: [{ path: no-dashboard.yaml }]`; the rest of
+  the stack runs.
+
+  ```yaml
+  apiVersion: apps/v1
+  kind: StatefulSet
+  metadata:
+    name: e2b
+  spec:
+    template:
+      spec:
+        initContainers:
+          - name: dashboard-api
+            $patch: delete
+          - name: dashboard
+            $patch: delete
+  ```
 
 ### Troubleshooting
 
