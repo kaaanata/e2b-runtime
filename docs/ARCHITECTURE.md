@@ -323,6 +323,12 @@ planes today.
 | **ClickHouse** | `packages/clickhouse` | Time-series/analytics: `metrics_gauge`/`metrics_sum` (written by the OTel collector), `sandbox_events`, `sandbox_host_stats` (written by orchestrator), team metrics, and optionally `sandbox_logs` during the log migration. Read by API and dashboard-api |
 | **Object storage** (GCS/S3/local, `packages/shared/pkg/storage`) | orchestrator, template-manager | Template & snapshot artifacts, keyed by build ID: `{buildID}/memfile`, `{buildID}/rootfs.ext4`, `{buildID}/snapfile`, `{buildID}/metadata.json` + `.header` index files |
 
+The same database holds River's job tables in the `river` schema, which a goose migration
+creates. The db-migrator applies the goose migrations and then River's own, under one advisory
+lock; `make migrate` runs it, because the goose CLI cannot apply River's. At startup the API and
+dashboard-api refuse a database whose goose version is older than the one they were built against,
+or whose River migrations are not current.
+
 A template and a paused-sandbox snapshot have the **same artifact shape** — a snapshot is just a
 new build whose memfile/rootfs are stored as diffs against the template it came from (diff chains
 are resolved through the `.header` files).
