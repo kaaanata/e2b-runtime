@@ -146,6 +146,25 @@ The control-plane entry point (Gin, OpenAPI-generated from `spec/openapi.yml`, p
   operation.
 - **Extra listeners**: internal gRPC :5009 and edge gRPC :5109 expose `ResumeSandbox` so
   client-proxy can wake paused sandboxes on incoming traffic.
+- **Outbox** (`internal/outbox`): a River client on the shared database's `river` schema
+  works jobs that other services enqueue there for work needing the orchestrator
+  connections. Its job arguments live in `packages/db/pkg/outbox`. The one kind today,
+  `teardown_team_resources`, stops a deleted team's workloads. A guard runs first on every
+  attempt: a team that exists and is not blocked fails the attempt, and the job retries rather
+  than kill a live team's sandboxes; a missing team row does not stop it. Then
+  `kill_sandboxes` kills the team's running sandboxes and succeeds only once the sandbox store
+  holds none of them in any state, so a sandbox still pausing or being killed makes the job
+  retry. A sandbox that is not running cannot be paused, so no new snapshot of the team
+  appears afterwards. Killing through the orchestrator is what removes the sandboxes' store
+  records, so the job deletes no Redis state itself, and every attempt is safe to run again.
+  Builds are not cancelled: they end on their own build timeout. An attempt is bounded at
+  30 minutes; retries back off from 30 seconds to a 15-minute cap, so the 100 attempts last
+  about a day before River discards the job and keeps it. Volumes, templates, snapshots and
+  the team row are left alone. Steps report
+  `api.outbox.steps.finished` and `api.outbox.step.duration`; finished jobs report
+  `outbox.jobs.finished`, and the backlog reports `outbox.jobs` and `outbox.oldest_*_age`.
+  `OUTBOX_MAX_WORKERS` (default 10) and `OUTBOX_BACKLOG_INTERVAL` (default 30s) configure it;
+  shutdown stops it after the sandbox-work drain, before the database and Redis clients close.
 - Reads ClickHouse for sandbox/team metrics endpoints. Sandbox and template-build logs default to
   Loki, with a LaunchDarkly-gated ClickHouse read path (`logs-read-config`) for local-cluster logs
   during the log storage migration. `LOKI_URL` is optional: without it the api has no Loki client
@@ -311,8 +330,9 @@ assignment, an inexact detach, or deletion of a referenced cluster returns a con
 `DELETE /v1/management/projects/{teamID}` is declared and answers 501. `envs`, `snapshots` and
 `volumes` reference `teams` with `ON DELETE NO ACTION` and templates are only soft-deleted, so a
 project that ever built one pins its team row — and releasing it needs the API service's
-orchestrator connections, which this service does not have. Projects are not deleted from control
-planes today.
+orchestrator connections, which this service does not have. The API's `teardown_team_resources`
+outbox job (see the API section) is the worker for that release; nothing enqueues it yet, and
+projects are not deleted from control planes today.
 
 ## Data stores
 
@@ -327,7 +347,7 @@ The same database holds River's job tables in the `river` schema, which a goose 
 creates. The db-migrator applies the goose migrations and then River's own, under one advisory
 lock; `make migrate` runs it, because the goose CLI cannot apply River's. At startup the API and
 dashboard-api refuse a database whose goose version is older than the one they were built against,
-or whose River migrations are not current.
+or whose River migrations are not current. The API works jobs from that schema (see its Outbox).
 
 A template and a paused-sandbox snapshot have the **same artifact shape** — a snapshot is just a
 new build whose memfile/rootfs are stored as diffs against the template it came from (diff chains

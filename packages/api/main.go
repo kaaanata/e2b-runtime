@@ -434,6 +434,13 @@ func run() int {
 	apiStore := handlers.NewAPIStore(ctx, tel, redisClient, featureFlags, config)
 	cleanupFns = append(cleanupFns, apiStore.Close)
 
+	riverOutbox, err := apiStore.NewOutbox(l)
+	if err != nil {
+		l.Error(ctx, "initializing the outbox", zap.Error(err))
+
+		return 1
+	}
+
 	adminJWTVerifier, err := auth.NewJWKSVerifier(ctx, config.AdminAuthProvider, http.DefaultClient)
 	if err != nil {
 		l.Error(ctx, "initializing admin JWT verifier", zap.Error(err))
@@ -471,6 +478,12 @@ func run() int {
 
 	// Pass ctx so in-flight requests survive the serve goroutines' exit during graceful shutdown.
 	s := NewGinServer(ctx, config, tel, l, apiStore, adminJWTVerifier, redisClient, featureFlags, swagger, port)
+
+	if err := riverOutbox.Start(ctx); err != nil {
+		l.Error(ctx, "starting the outbox", zap.Error(err))
+
+		return 1
+	}
 
 	// ////////////////////////
 	//
@@ -596,6 +609,14 @@ func run() int {
 			}
 		})
 		drainWG.Wait()
+
+		// Outbox jobs use the same clients. One still running at the deadline
+		// is rescued and retried by another replica; every step is idempotent.
+		outboxStopCtx, outboxStopCancel := context.WithTimeout(ctx, shutdownTimeout)
+		defer outboxStopCancel()
+		if err := riverOutbox.Stop(outboxStopCtx); err != nil {
+			l.Error(ctx, "outbox shutdown error", zap.Error(err))
+		}
 
 		// Drain pprof after, so that it is still available during the shutdown process for debugging if needed.
 		pprofShutdownCtx, pprofCancel := context.WithTimeout(ctx, pprofShutdownTimeout)

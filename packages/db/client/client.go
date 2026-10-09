@@ -40,6 +40,11 @@ func (db *Client) Close() error {
 	return nil
 }
 
+// Pool exposes the underlying pgx pool for the River outbox client.
+func (db *Client) Pool() *pgxpool.Pool {
+	return db.conn
+}
+
 // WithTx starts a read-write transaction and returns a transactional Client.
 func (db *Client) WithTx(ctx context.Context) (*Client, pgx.Tx, error) {
 	tx, err := db.conn.BeginTx(ctx, pgx.TxOptions{})

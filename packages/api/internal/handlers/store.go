@@ -26,6 +26,7 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/cfg"
 	"github.com/e2b-dev/infra/packages/api/internal/clusters"
 	"github.com/e2b-dev/infra/packages/api/internal/orchestrator"
+	"github.com/e2b-dev/infra/packages/api/internal/outbox"
 	"github.com/e2b-dev/infra/packages/api/internal/sandbox"
 	managementv1 "github.com/e2b-dev/infra/packages/api/internal/secretsstore/management/v1"
 	template_manager "github.com/e2b-dev/infra/packages/api/internal/template-manager"
@@ -420,6 +421,22 @@ func NewAPIStore(ctx context.Context, tel *telemetry.Client, redisClient redis.U
 	}()
 
 	return a
+}
+
+// NewOutbox builds the River client that works the API's outbox jobs on the
+// store's clients. Stop it before Close.
+func (a *APIStore) NewOutbox(l logger.Logger) (*outbox.River, error) {
+	return outbox.New(outbox.Dependencies{
+		Pool:      a.sqlcDB.Pool(),
+		Sandboxes: a.orchestrator,
+		Teams:     a.authDB,
+		Logger:    l,
+		Telemetry: a.Telemetry,
+		Config: outbox.Config{
+			MaxWorkers:      a.config.OutboxMaxWorkers,
+			BacklogInterval: a.config.OutboxBacklogInterval,
+		},
+	})
 }
 
 func (a *APIStore) Close(ctx context.Context) error {
