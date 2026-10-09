@@ -32,6 +32,8 @@ WORKDIR /build
 COPY ./auth/pkg ./auth/pkg
 COPY ./clickhouse/pkg ./clickhouse/pkg
 COPY ./shared/pkg ./shared/pkg
+COPY ./db/*.go ./db/
+COPY ./db/migrations ./db/migrations
 COPY ./db/client ./db/client
 COPY ./db/queries ./db/queries
 COPY ./db/pkg ./db/pkg
