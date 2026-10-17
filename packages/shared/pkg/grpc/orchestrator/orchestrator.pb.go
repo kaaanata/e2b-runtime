@@ -447,6 +447,11 @@ func (x *SandboxAutoResumeConfig) GetTimeoutSeconds() uint64 {
 	return 0
 }
 
+// SandboxVolumeMount is one shared (NFS) volume mount of a sandbox.
+// Field numbers: 1-4 predate per-volume consistency profiles, 5 is
+// consistency_profile.
+// Workspace block volumes are not carried here: they are bound to the
+// sandbox's workspace slots, not mounted over NFS. Allocate new fields from 6.
 type SandboxVolumeMount struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`

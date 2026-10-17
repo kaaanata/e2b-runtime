@@ -11,6 +11,9 @@ import (
 //
 // An empty profile sends no options at all, which makes envd use its built-in
 // set: byte-for-byte what every sandbox created before profiles existed gets.
+//
+// The API's copy of the profile names is types.VolumeConsistencyStrict/Cto in
+// packages/db/pkg/types/types.go; keep the two in sync.
 const (
 	// VolumeConsistencyStrict is envd's built-in option set plus nolock: every
 	// operation goes to the server, no attribute or name caching. For small

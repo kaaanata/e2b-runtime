@@ -113,6 +113,10 @@ func (c *SandboxNetworkConfig) HasEgressProxyAuth() bool {
 // name caching; "cto" is close-to-open (a writer's close makes its data visible
 // to a reader's next open). Empty means the mount options every sandbox had
 // before profiles existed.
+//
+// The orchestrator keeps its own copy of these values in
+// packages/orchestrator/pkg/sandbox/volume_mount_options.go (the two are released
+// separately and the profile crosses the wire as a plain string); keep them in sync.
 type VolumeConsistencyProfile = string
 
 const (

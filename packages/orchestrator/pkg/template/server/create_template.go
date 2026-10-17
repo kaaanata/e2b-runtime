@@ -154,6 +154,10 @@ func (s *ServerStore) TemplateCreate(ctx context.Context, templateRequest *templ
 		KernelVersion:        kernelVersion,
 		FirecrackerVersion:   firecrackerVersion,
 		CmdlineArgs:          cmdlineArgs,
+		// Layout and Workspace stay at metadata.LayoutLegacy/nil: readers that
+		// understand LayoutBlockV1 ship before any writer produces it. Setting them
+		// from the build request is the control-plane step that enables
+		// workspace block slots for a template.
 	}
 
 	logs := buildlogger.NewLogEntryLogger()

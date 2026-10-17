@@ -90,6 +90,11 @@ message SandboxAutoResumeConfig {
   uint64 timeout_seconds = 2;
 }
 
+// SandboxVolumeMount is one shared (NFS) volume mount of a sandbox.
+// Field numbers: 1-4 predate per-volume consistency profiles, 5 is
+// consistency_profile.
+// Workspace block volumes are not carried here: they are bound to the
+// sandbox's workspace slots, not mounted over NFS. Allocate new fields from 6.
 message SandboxVolumeMount {
   string id = 1;
   string path = 2;
