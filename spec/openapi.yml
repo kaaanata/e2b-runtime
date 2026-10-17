@@ -764,8 +764,8 @@ components:
         sandboxes are visible immediately. `cto` is close-to-open: a writer's
         changes are visible to a reader that opens the file after the writer
         closed it, at a fraction of the metadata cost. Omitted keeps the
-        sandbox's built-in options. Not accepted for block volumes, which have
-        a single writer.
+        sandbox's built-in options. Chosen per mount, not per volume. Rejected
+        with 400 for block volumes, which have a single writer.
       enum:
         - strict
         - cto
@@ -2252,6 +2252,8 @@ components:
             Machine-readable semantic error code. Not a closed set; initial values:
             sandbox_capacity_unavailable, sandbox_placement_timeout,
             sandbox_no_compatible_node, sandbox_create_failed, internal_server_error.
+            Block volume refusals (409): block_volume_shared_identity_required,
+            volume_attached, volume_referenced_by_snapshot, volume_creating.
         message:
           type: string
           description: Error
@@ -2293,12 +2295,16 @@ components:
       description: >
         `creating` until the volume's first image exists (block volumes only),
         `ready` once it can be mounted, `failed` if creation failed, `deleting`
-        while its images are being removed.
+        while its images are being removed. Once they are gone the volume is
+        `deleted`: `GET /volumes/{volumeID}` answers 404 from then on, and
+        `deleted` is only reported where a past request is replayed (an
+        `Idempotency-Key` repeat of the create or clone that made the volume).
       enum:
         - creating
         - ready
         - failed
         - deleting
+        - deleted
 
     Volume:
       type: object
@@ -2370,6 +2376,10 @@ components:
 
     NewVolume:
       type: object
+      description: >
+        A volume has no consistency profile of its own: `consistencyProfile`
+        is chosen per mount (`SandboxVolumeMount`) and only for shared (NFS)
+        volumes. Fields not listed here are ignored.
       properties:
         name:
           type: string
@@ -2743,7 +2753,13 @@ paths:
           $ref: "#/components/responses/500"
     post:
       summary: Create sandbox
-      description: Create a sandbox from the template
+      description: >
+        Create a sandbox from the template. Volume mounts are validated before
+        anything starts: an unknown volume, a bad or repeated path, a
+        `consistencyProfile` on a block volume, a block volume that is not
+        `ready`, block volumes on different nodes, or more than 4 block mounts
+        answer 400. A block volume that another sandbox already mounts
+        (`error_code` `volume_attached`) answers 409.
       tags: [sandboxes]
       security:
         - ApiKeyAuth: []
@@ -2770,6 +2786,8 @@ paths:
           $ref: "#/components/responses/401"
         "400":
           $ref: "#/components/responses/400"
+        "409":
+          $ref: "#/components/responses/409"
         "500":
           $ref: "#/components/responses/500"
         "503":
@@ -4526,7 +4544,9 @@ paths:
   /volumes/{volumeID}:
     get:
       summary: Team volume
-      description: Get team volume info
+      description: >
+        Get team volume info. A block volume being deleted is still returned
+        (`state: deleting`) until its images are removed; after that, 404.
       tags: [volumes]
       security:
         - ApiKeyAuth: []
@@ -4554,7 +4574,12 @@ paths:
 
     delete:
       summary: Delete team volume
-      description: Delete a team volume
+      description: >
+        Delete a team volume. A block volume is refused with 409 while a
+        sandbox mounts it (`error_code` `volume_attached`), while a paused
+        sandbox's snapshot references one of its revisions
+        (`volume_referenced_by_snapshot`; killing that sandbox releases the
+        reference) or while it is still being created (`volume_creating`).
       tags: [volumes]
       security:
         - ApiKeyAuth: []

@@ -79,7 +79,9 @@ type blockVolumeAttacher struct {
 	clones map[uuid.UUID]uuid.UUID
 }
 
-type attachConflictError struct{ msg string }
+// attachConflictError refuses an attach with 409; code, when set, is the
+// response's error_code.
+type attachConflictError struct{ msg, code string }
 
 func (e attachConflictError) Error() string { return e.msg }
 
@@ -135,7 +137,7 @@ func (b *blockVolumeAttacher) Attach(ctx context.Context, clusterID uuid.UUID, s
 	case errors.As(err, &conflict):
 		b.discardForkClones(context.WithoutCancel(ctx), sandboxID, clones)
 
-		return nil, &api.APIError{Code: http.StatusConflict, ClientMsg: conflict.msg, Err: err}
+		return nil, &api.APIError{Code: http.StatusConflict, ErrorCode: conflict.code, ClientMsg: conflict.msg, Err: err}
 	case err != nil:
 		b.discardForkClones(context.WithoutCancel(ctx), sandboxID, clones)
 
@@ -163,7 +165,7 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 	}
 
 	if vol.Lifecycle != volumeLifecycleReady || vol.DeletedAt.Valid {
-		return nil, attachConflictError{fmt.Sprintf("Volume '%s' is %s", vol.Name, vol.Lifecycle)}
+		return nil, attachConflictError{msg: fmt.Sprintf("Volume '%s' is %s", vol.Name, vol.Lifecycle)}
 	}
 
 	var incarnationID uuid.UUID
@@ -171,7 +173,7 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 	switch p.binding {
 	case bindHead:
 		if vol.HeadIncarnationID == nil {
-			return nil, attachConflictError{fmt.Sprintf("Volume '%s' has no image yet", vol.Name)}
+			return nil, attachConflictError{msg: fmt.Sprintf("Volume '%s' has no image yet", vol.Name)}
 		}
 
 		incarnationID = *vol.HeadIncarnationID
@@ -192,7 +194,7 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 		}
 
 		if advanced || latest.ID != p.revision.ID {
-			return nil, attachConflictError{fmt.Sprintf(
+			return nil, attachConflictError{msg: fmt.Sprintf(
 				"Volume '%s' was used by another sandbox after this snapshot was taken; fork the snapshot instead of resuming it", vol.Name)}
 		}
 	case bindClone:
@@ -205,7 +207,7 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 	}
 
 	if inc.State != volumeLifecycleReady {
-		return nil, attachConflictError{fmt.Sprintf("Volume '%s' image is %s", vol.Name, inc.State)}
+		return nil, attachConflictError{msg: fmt.Sprintf("Volume '%s' image is %s", vol.Name, inc.State)}
 	}
 
 	_, err = q.CreateVolumeAttachment(ctx, queries.CreateVolumeAttachmentParams{
@@ -219,7 +221,7 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 		GuestPath:     p.mount.GetPath(),
 	})
 	if dberrors.IsUniqueConstraintViolation(err) {
-		return nil, attachConflictError{fmt.Sprintf("Volume '%s' is mounted by another sandbox", vol.Name)}
+		return nil, attachConflictError{msg: fmt.Sprintf("Volume '%s' is mounted by another sandbox", vol.Name), code: errCodeVolumeAttached}
 	}
 
 	if err != nil {

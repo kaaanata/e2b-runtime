@@ -322,6 +322,7 @@ func (e VolumeRevisionConsistency) Valid() bool {
 // Defines values for VolumeState.
 const (
 	VolumeStateCreating VolumeState = "creating"
+	VolumeStateDeleted  VolumeState = "deleted"
 	VolumeStateDeleting VolumeState = "deleting"
 	VolumeStateFailed   VolumeState = "failed"
 	VolumeStateReady    VolumeState = "ready"
@@ -331,6 +332,8 @@ const (
 func (e VolumeState) Valid() bool {
 	switch e {
 	case VolumeStateCreating:
+		return true
+	case VolumeStateDeleted:
 		return true
 	case VolumeStateDeleting:
 		return true
@@ -529,7 +532,7 @@ type Error struct {
 	// Code Error code
 	Code int32 `json:"code"`
 
-	// ErrorCode Machine-readable semantic error code. Not a closed set; initial values: sandbox_capacity_unavailable, sandbox_placement_timeout, sandbox_no_compatible_node, sandbox_create_failed, internal_server_error.
+	// ErrorCode Machine-readable semantic error code. Not a closed set; initial values: sandbox_capacity_unavailable, sandbox_placement_timeout, sandbox_no_compatible_node, sandbox_create_failed, internal_server_error. Block volume refusals (409): block_volume_shared_identity_required, volume_attached, volume_referenced_by_snapshot, volume_creating.
 	ErrorCode *string `json:"error_code,omitempty"`
 
 	// Message Error
@@ -720,7 +723,7 @@ type NewTeamAPIKey struct {
 	Name string `json:"name"`
 }
 
-// NewVolume defines model for NewVolume.
+// NewVolume A volume has no consistency profile of its own: `consistencyProfile` is chosen per mount (`SandboxVolumeMount`) and only for shared (NFS) volumes. Fields not listed here are ignored.
 type NewVolume struct {
 	// Backend `nfs` volumes are shared directories any number of sandboxes can mount and write at once. `block` volumes are workspace disks: a fixed-size filesystem on one node with a single writing sandbox at a time, sealed into revisions together with paused sandboxes and cloneable from those revisions.
 	Backend *VolumeBackend `json:"backend,omitempty"`
@@ -1250,7 +1253,7 @@ type SandboxTimeoutRequest struct {
 
 // SandboxVolumeMount defines model for SandboxVolumeMount.
 type SandboxVolumeMount struct {
-	// ConsistencyProfile How a shared (NFS) volume is mounted. `strict` sends every operation to the server with no attribute or name caching, so changes from other sandboxes are visible immediately. `cto` is close-to-open: a writer's changes are visible to a reader that opens the file after the writer closed it, at a fraction of the metadata cost. Omitted keeps the sandbox's built-in options. Not accepted for block volumes, which have a single writer.
+	// ConsistencyProfile How a shared (NFS) volume is mounted. `strict` sends every operation to the server with no attribute or name caching, so changes from other sandboxes are visible immediately. `cto` is close-to-open: a writer's changes are visible to a reader that opens the file after the writer closed it, at a fraction of the metadata cost. Omitted keeps the sandbox's built-in options. Chosen per mount, not per volume. Rejected with 400 for block volumes, which have a single writer.
 	ConsistencyProfile *VolumeConsistencyProfile `json:"consistencyProfile,omitempty"`
 
 	// Name Name of the volume
@@ -1743,7 +1746,7 @@ type Volume struct {
 	// OwnerNode ID of the node holding a block volume; sandboxes mounting it run there
 	OwnerNode *string `json:"ownerNode,omitempty"`
 
-	// State `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed.
+	// State `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed. Once they are gone the volume is `deleted`: `GET /volumes/{volumeID}` answers 404 from then on, and `deleted` is only reported where a past request is replayed (an `Idempotency-Key` repeat of the create or clone that made the volume).
 	State *VolumeState `json:"state,omitempty"`
 
 	// VolumeID ID of the volume
@@ -1773,7 +1776,7 @@ type VolumeAndToken struct {
 	// OwnerNode ID of the node holding a block volume
 	OwnerNode *string `json:"ownerNode,omitempty"`
 
-	// State `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed.
+	// State `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed. Once they are gone the volume is `deleted`: `GET /volumes/{volumeID}` answers 404 from then on, and `deleted` is only reported where a past request is replayed (an `Idempotency-Key` repeat of the create or clone that made the volume).
 	State *VolumeState `json:"state,omitempty"`
 
 	// Token Auth token to use for interacting with volume content
@@ -1789,7 +1792,7 @@ type VolumeAndTokenContentApi string
 // VolumeBackend `nfs` volumes are shared directories any number of sandboxes can mount and write at once. `block` volumes are workspace disks: a fixed-size filesystem on one node with a single writing sandbox at a time, sealed into revisions together with paused sandboxes and cloneable from those revisions.
 type VolumeBackend string
 
-// VolumeConsistencyProfile How a shared (NFS) volume is mounted. `strict` sends every operation to the server with no attribute or name caching, so changes from other sandboxes are visible immediately. `cto` is close-to-open: a writer's changes are visible to a reader that opens the file after the writer closed it, at a fraction of the metadata cost. Omitted keeps the sandbox's built-in options. Not accepted for block volumes, which have a single writer.
+// VolumeConsistencyProfile How a shared (NFS) volume is mounted. `strict` sends every operation to the server with no attribute or name caching, so changes from other sandboxes are visible immediately. `cto` is close-to-open: a writer's changes are visible to a reader that opens the file after the writer closed it, at a fraction of the metadata cost. Omitted keeps the sandbox's built-in options. Chosen per mount, not per volume. Rejected with 400 for block volumes, which have a single writer.
 type VolumeConsistencyProfile string
 
 // VolumeOperation A block volume change carried out in the background. Poll it until `state` is `succeeded` or `failed`.
@@ -1833,7 +1836,7 @@ type VolumeRevision struct {
 // VolumeRevisionConsistency `filesystem-quiesced` revisions were sealed with the sandbox's filesystems frozen and can be cloned into new volumes; `paired-memory` revisions belong to a memory snapshot and are only usable by resuming or forking that snapshot.
 type VolumeRevisionConsistency string
 
-// VolumeState `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed.
+// VolumeState `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed. Once they are gone the volume is `deleted`: `GET /volumes/{volumeID}` answers 404 from then on, and `deleted` is only reported where a past request is replayed (an `Idempotency-Key` repeat of the create or clone that made the volume).
 type VolumeState string
 
 // ApiKeyID defines model for apiKeyID.
@@ -2609,7 +2612,7 @@ type ClientInterface interface {
 
 	// PostSandboxesWithBody Create sandbox
 	//
-	// Create a sandbox from the template.
+	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -2618,7 +2621,7 @@ type ClientInterface interface {
 
 	// PostSandboxes Create sandbox
 	//
-	// Create a sandbox from the template.
+	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -3184,14 +3187,14 @@ type ClientInterface interface {
 
 	// DeleteVolumesVolumeID Delete team volume
 	//
-	// Delete a team volume.
+	// Delete a team volume. A block volume is refused with 409 while a sandbox mounts it (`error_code` `volume_attached`), while a paused sandbox's snapshot references one of its revisions (`volume_referenced_by_snapshot`; killing that sandbox releases the reference) or while it is still being created (`volume_creating`).
 	//
 	// Corresponds with DELETE /volumes/{volumeID} (the `DeleteVolumesVolumeID` operationId).
 	DeleteVolumesVolumeID(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetVolumesVolumeID Team volume
 	//
-	// Get team volume info.
+	// Get team volume info. A block volume being deleted is still returned (`state: deleting`) until its images are removed; after that, 404.
 	//
 	// Corresponds with GET /volumes/{volumeID} (the `GetVolumesVolumeID` operationId).
 	GetVolumesVolumeID(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -3669,7 +3672,7 @@ func (c *Client) GetSandboxes(ctx context.Context, params *GetSandboxesParams, r
 
 // PostSandboxesWithBody Create sandbox
 //
-// Create a sandbox from the template.
+// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
 //
 // Takes any type of body and a specified content type.
 //
@@ -3688,7 +3691,7 @@ func (c *Client) PostSandboxesWithBody(ctx context.Context, contentType string, 
 
 // PostSandboxes Create sandbox
 //
-// Create a sandbox from the template.
+// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -4901,7 +4904,7 @@ func (c *Client) PostVolumes(ctx context.Context, params *PostVolumesParams, bod
 
 // DeleteVolumesVolumeID Delete team volume
 //
-// Delete a team volume.
+// Delete a team volume. A block volume is refused with 409 while a sandbox mounts it (`error_code` `volume_attached`), while a paused sandbox's snapshot references one of its revisions (`volume_referenced_by_snapshot`; killing that sandbox releases the reference) or while it is still being created (`volume_creating`).
 //
 // Corresponds with DELETE /volumes/{volumeID} (the `DeleteVolumesVolumeID` operationId).
 func (c *Client) DeleteVolumesVolumeID(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -4918,7 +4921,7 @@ func (c *Client) DeleteVolumesVolumeID(ctx context.Context, volumeID VolumeID, r
 
 // GetVolumesVolumeID Team volume
 //
-// Get team volume info.
+// Get team volume info. A block volume being deleted is still returned (`state: deleting`) until its images are removed; after that, 404.
 //
 // Corresponds with GET /volumes/{volumeID} (the `GetVolumesVolumeID` operationId).
 func (c *Client) GetVolumesVolumeID(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -8778,7 +8781,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostSandboxesWithBodyWithResponse Create sandbox
 	//
-	// Create a sandbox from the template.
+	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -8787,7 +8790,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostSandboxesWithResponse Create sandbox
 	//
-	// Create a sandbox from the template.
+	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -9403,7 +9406,7 @@ type ClientWithResponsesInterface interface {
 
 	// DeleteVolumesVolumeIDWithResponse Delete team volume
 	//
-	// Delete a team volume.
+	// Delete a team volume. A block volume is refused with 409 while a sandbox mounts it (`error_code` `volume_attached`), while a paused sandbox's snapshot references one of its revisions (`volume_referenced_by_snapshot`; killing that sandbox releases the reference) or while it is still being created (`volume_creating`).
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -9412,7 +9415,7 @@ type ClientWithResponsesInterface interface {
 
 	// GetVolumesVolumeIDWithResponse Team volume
 	//
-	// Get team volume info.
+	// Get team volume info. A block volume being deleted is still returned (`state: deleting`) until its images are removed; after that, 404.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -10717,6 +10720,8 @@ type PostSandboxesResponse struct {
 	JSON400 *N400
 	// JSON401 the response for an HTTP 401 `application/json` response
 	JSON401 *N401
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *N409
 	// JSON500 the response for an HTTP 500 `application/json` response
 	JSON500 *N500
 	// JSON503 the response for an HTTP 503 `application/json` response
@@ -10738,6 +10743,11 @@ func (r PostSandboxesResponse) GetJSON400() *N400 {
 // GetJSON401 returns the response for an HTTP 401 `application/json` response
 func (r PostSandboxesResponse) GetJSON401() *N401 {
 	return r.JSON401
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r PostSandboxesResponse) GetJSON409() *N409 {
+	return r.JSON409
 }
 
 // GetJSON500 returns the response for an HTTP 500 `application/json` response
@@ -14565,7 +14575,7 @@ func (c *ClientWithResponses) GetSandboxesWithResponse(ctx context.Context, para
 
 // PostSandboxesWithBodyWithResponse Create sandbox
 //
-// Create a sandbox from the template.
+// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -14580,7 +14590,7 @@ func (c *ClientWithResponses) PostSandboxesWithBodyWithResponse(ctx context.Cont
 
 // PostSandboxesWithResponse Create sandbox
 //
-// Create a sandbox from the template.
+// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -15587,7 +15597,7 @@ func (c *ClientWithResponses) PostVolumesWithResponse(ctx context.Context, param
 
 // DeleteVolumesVolumeIDWithResponse Delete team volume
 //
-// Delete a team volume.
+// Delete a team volume. A block volume is refused with 409 while a sandbox mounts it (`error_code` `volume_attached`), while a paused sandbox's snapshot references one of its revisions (`volume_referenced_by_snapshot`; killing that sandbox releases the reference) or while it is still being created (`volume_creating`).
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -15602,7 +15612,7 @@ func (c *ClientWithResponses) DeleteVolumesVolumeIDWithResponse(ctx context.Cont
 
 // GetVolumesVolumeIDWithResponse Team volume
 //
-// Get team volume info.
+// Get team volume info. A block volume being deleted is still returned (`state: deleting`) until its images are removed; after that, 404.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -16676,6 +16686,13 @@ func ParsePostSandboxesResponse(rsp *http.Response) (*PostSandboxesResponse, err
 			return nil, err
 		}
 		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest N409
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest N500
