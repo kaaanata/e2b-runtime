@@ -25,8 +25,8 @@ func TestCreateVolumeMountModelsFromAPI_Backends(t *testing.T) {
 	assert.Equal(t, "cto", mounts[1].ConsistencyProfile)
 
 	_, err = createVolumeMountModelsFromAPI([]*orchestrator.SandboxVolumeMount{
-		{Id: id, Path: "/workspace", Type: "block", Name: "ws", Backend: "block", IncarnationId: id, FsUuid: id, CapacityBytes: 1 << 30},
+		{Id: id, Path: "/workspace", Type: "block", Name: "ws", Backend: "block"},
 	})
 	require.Error(t, err)
-	assert.Equal(t, codes.Unimplemented, status.Code(err), "a block mount is refused, never mounted as NFS")
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "a block mount in volume_mounts is refused, never mounted as NFS")
 }

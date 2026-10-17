@@ -225,6 +225,10 @@ func (e *VolumeExecutor) call(ctx context.Context, client orchestrator.BlockVolu
 		}, nil
 
 	case outbox.VolumeOperationDelete:
+		if p.Delete.Scoped() {
+			return e.deleteIncarnations(ctx, client, op, p, ref)
+		}
+
 		incs, revs, err := e.liveImages(ctx, p.VolumeID)
 		if err != nil {
 			return nil, nil, status.Error(codes.Unavailable, err.Error())
@@ -278,6 +282,60 @@ func (e *VolumeExecutor) call(ctx context.Context, client orchestrator.BlockVolu
 	default:
 		return nil, nil, status.Errorf(codes.InvalidArgument, "unknown volume operation kind %q", op.Kind)
 	}
+}
+
+// deleteIncarnations removes only the incarnations a scoped delete names
+// (VolumeDeleteParams), skipping any already gone or still attached: an
+// attached incarnation is in use by an execution again and is not an orphan.
+// The volume, its revisions and its other incarnations are untouched.
+func (e *VolumeExecutor) deleteIncarnations(ctx context.Context, client orchestrator.BlockVolumeServiceClient, op queries.VolumeOperation, p outbox.VolumeOperationParams, ref *orchestrator.BlockVolumeRef) (proto.Message, effectsFunc, error) {
+	live, err := e.db.ListLiveVolumeIncarnations(ctx, p.VolumeID)
+	if err != nil {
+		return nil, nil, status.Error(codes.Unavailable, fmt.Sprintf("list incarnations: %v", err))
+	}
+
+	wanted := make(map[uuid.UUID]bool, len(p.Delete.IncarnationIDs))
+	for _, id := range p.Delete.IncarnationIDs {
+		wanted[id] = true
+	}
+
+	req := &orchestrator.DeleteBlockVolumeRequest{OperationId: op.ID.String(), Volume: ref}
+
+	var targets []uuid.UUID
+
+	for _, inc := range live {
+		if !wanted[inc.ID] {
+			continue
+		}
+
+		if _, err := e.db.GetActiveIncarnationWriter(ctx, inc.ID); err == nil {
+			continue
+		} else if !dberrors.IsNotFoundError(err) {
+			return nil, nil, status.Error(codes.Unavailable, fmt.Sprintf("read writer: %v", err))
+		}
+
+		targets = append(targets, inc.ID)
+		req.IncarnationIds = append(req.IncarnationIds, inc.ID.String())
+	}
+
+	if len(targets) == 0 {
+		return &orchestrator.DeleteBlockVolumeResponse{}, func(context.Context, *sqlcdb.Client) error { return nil }, nil
+	}
+
+	resp, err := client.DeleteBlockVolume(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return resp, func(ctx context.Context, q *sqlcdb.Client) error {
+		for _, id := range targets {
+			if err := q.MarkVolumeIncarnationDeleted(ctx, queries.MarkVolumeIncarnationDeletedParams{ID: id, VolumeID: p.VolumeID}); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}, nil
 }
 
 func (e *VolumeExecutor) liveImages(ctx context.Context, volumeID uuid.UUID) ([]queries.VolumeIncarnation, []queries.VolumeRevision, error) {
@@ -635,6 +693,106 @@ func addVolumeWorkers(workers *river.Workers, exec *VolumeExecutor, steps *share
 	river.AddWorker(workers, &volumeWorker[outbox.VolumeSeal]{exec: exec, steps: steps.Job(outbox.VolumeSeal{}.Kind())})
 	river.AddWorker(workers, &volumeWorker[outbox.VolumeDelete]{exec: exec, steps: steps.Job(outbox.VolumeDelete{}.Kind())})
 	river.AddWorker(workers, &volumeWorker[outbox.VolumeReconcile]{exec: exec, steps: steps.Job(outbox.VolumeReconcile{}.Kind())})
+}
+
+// DeleteTeamBlockVolumes starts the delete of every block volume of a team
+// being torn down: one "delete" operation per volume, keyed by the volume so
+// a retried teardown replays it, and its volume.delete job, committed with
+// the volume's move to "deleting" in one transaction. The River client comes
+// from the running job's context. The volume's snapshots do not keep it: the
+// team and its snapshots are going. A volume still being created is left
+// for the next attempt (errBlockVolumesQueued), once its create finished.
+func (e *VolumeExecutor) DeleteTeamBlockVolumes(ctx context.Context, teamID, clusterID uuid.UUID) error {
+	riverClient, err := river.ClientFromContextSafely[pgx.Tx](ctx)
+	if err != nil {
+		return fmt.Errorf("river client: %w", err)
+	}
+
+	volumes, err := e.db.ListTeamBlockVolumesToDelete(ctx, teamID)
+	if err != nil {
+		return fmt.Errorf("list team block volumes: %w", err)
+	}
+
+	creating := 0
+
+	for _, vol := range volumes {
+		if vol.Lifecycle == "creating" {
+			creating++
+
+			continue
+		}
+
+		if err := e.startTeardownDelete(ctx, riverClient, teamID, clusterID, vol.ID); err != nil {
+			return fmt.Errorf("delete block volume %s: %w", vol.ID, err)
+		}
+	}
+
+	if creating > 0 {
+		return fmt.Errorf("%w: %d", errBlockVolumesQueued, creating)
+	}
+
+	return nil
+}
+
+func (e *VolumeExecutor) startTeardownDelete(ctx context.Context, riverClient *river.Client[pgx.Tx], teamID, clusterID, volumeID uuid.UUID) error {
+	q, tx, err := e.db.WithTx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	vol, err := q.GetBlockVolumeForUpdate(ctx, volumeID)
+	if err != nil {
+		return err
+	}
+
+	if vol.DeletedAt.Valid || vol.Lifecycle == "deleting" || vol.Lifecycle == "deleted" || vol.OwnerNodeID == nil {
+		return nil
+	}
+
+	params, err := json.Marshal(outbox.VolumeOperationParams{
+		ClusterID: clusterID,
+		NodeID:    *vol.OwnerNodeID,
+		TeamID:    teamID,
+		VolumeID:  vol.ID,
+	})
+	if err != nil {
+		return err
+	}
+
+	key := "team-teardown:" + vol.ID.String()
+
+	op, err := q.CreateVolumeOperation(ctx, queries.CreateVolumeOperationParams{
+		ID:             uuid.New(),
+		TeamID:         teamID,
+		VolumeID:       &vol.ID,
+		Kind:           outbox.VolumeOperationDelete,
+		IdempotencyKey: key,
+		ParamsHash:     key,
+		Params:         params,
+	})
+	switch {
+	case dberrors.IsNotFoundError(err):
+		// The key is taken: the operation and its job were committed together
+		// before, so only the volume's state is left to (re)apply.
+	case err != nil:
+		return fmt.Errorf("record delete operation: %w", err)
+	default:
+		args, err := outbox.VolumeJobArgs(op.Kind, op.ID)
+		if err != nil {
+			return err
+		}
+
+		if _, err := riverClient.InsertTx(ctx, tx, args, nil); err != nil {
+			return fmt.Errorf("enqueue %s: %w", args.Kind(), err)
+		}
+	}
+
+	if _, err := q.MarkBlockVolumeDeleting(ctx, queries.MarkBlockVolumeDeletingParams{VolumeID: vol.ID, TeamID: teamID}); err != nil {
+		return fmt.Errorf("mark volume deleting: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
 // EnqueueVolumeOperation inserts the River job working an operation in the

@@ -452,8 +452,8 @@ func (q *Queries) IncarnationAttachedSince(ctx context.Context, arg IncarnationA
 }
 
 const insertSnapshotVolumeRef = `-- name: InsertSnapshotVolumeRef :exec
-INSERT INTO snapshot_volume_refs (snapshot_build_id, revision_id, volume_id, mount_path)
-VALUES ($1, $2, $3, $4)
+INSERT INTO snapshot_volume_refs (snapshot_build_id, revision_id, volume_id, mount_path, slot)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (snapshot_build_id, revision_id) DO NOTHING
 `
 
@@ -462,6 +462,7 @@ type InsertSnapshotVolumeRefParams struct {
 	RevisionID      uuid.UUID
 	VolumeID        uuid.UUID
 	MountPath       string
+	Slot            int16
 }
 
 func (q *Queries) InsertSnapshotVolumeRef(ctx context.Context, arg InsertSnapshotVolumeRefParams) error {
@@ -470,6 +471,7 @@ func (q *Queries) InsertSnapshotVolumeRef(ctx context.Context, arg InsertSnapsho
 		arg.RevisionID,
 		arg.VolumeID,
 		arg.MountPath,
+		arg.Slot,
 	)
 	return err
 }
@@ -690,18 +692,20 @@ const listSnapshotVolumeRefs = `-- name: ListSnapshotVolumeRefs :many
 SELECT
     r.snapshot_build_id,
     r.mount_path,
+    r.slot,
     rev.id, rev.volume_id, rev.incarnation_id, rev.parent_id, rev.subvol_uuid, rev.fs_uuid, rev.size_bytes, rev.consistency, rev.state, rev.created_at, rev.deleted_at, rev.operation_id,
     v.id, v.team_id, v.name, v.volume_type, v.created_at, v.backend, v.owner_node_id, v.capacity_bytes, v.lifecycle, v.head_incarnation_id, v.deleted_at
 FROM snapshot_volume_refs r
 JOIN volume_revisions rev ON rev.id = r.revision_id
 JOIN volumes v ON v.id = r.volume_id
 WHERE r.snapshot_build_id = $1
-ORDER BY r.mount_path
+ORDER BY r.slot
 `
 
 type ListSnapshotVolumeRefsRow struct {
 	SnapshotBuildID uuid.UUID
 	MountPath       string
+	Slot            int16
 	VolumeRevision  VolumeRevision
 	Volume          Volume
 }
@@ -718,6 +722,7 @@ func (q *Queries) ListSnapshotVolumeRefs(ctx context.Context, snapshotBuildID uu
 		if err := rows.Scan(
 			&i.SnapshotBuildID,
 			&i.MountPath,
+			&i.Slot,
 			&i.VolumeRevision.ID,
 			&i.VolumeRevision.VolumeID,
 			&i.VolumeRevision.IncarnationID,
@@ -741,6 +746,47 @@ func (q *Queries) ListSnapshotVolumeRefs(ctx context.Context, snapshotBuildID uu
 			&i.Volume.Lifecycle,
 			&i.Volume.HeadIncarnationID,
 			&i.Volume.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTeamBlockVolumesToDelete = `-- name: ListTeamBlockVolumesToDelete :many
+SELECT id, team_id, name, volume_type, created_at, backend, owner_node_id, capacity_bytes, lifecycle, head_incarnation_id, deleted_at FROM volumes
+WHERE team_id = $1 AND backend = 'block' AND deleted_at IS NULL
+  AND lifecycle NOT IN ('deleting', 'deleted')
+ORDER BY id
+`
+
+// ListTeamBlockVolumesToDelete lists a team's block volumes that a teardown
+// still has to delete (not yet deleting or deleted).
+func (q *Queries) ListTeamBlockVolumesToDelete(ctx context.Context, teamID uuid.UUID) ([]Volume, error) {
+	rows, err := q.db.Query(ctx, listTeamBlockVolumesToDelete, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Volume
+	for rows.Next() {
+		var i Volume
+		if err := rows.Scan(
+			&i.ID,
+			&i.TeamID,
+			&i.Name,
+			&i.VolumeType,
+			&i.CreatedAt,
+			&i.Backend,
+			&i.OwnerNodeID,
+			&i.CapacityBytes,
+			&i.Lifecycle,
+			&i.HeadIncarnationID,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}

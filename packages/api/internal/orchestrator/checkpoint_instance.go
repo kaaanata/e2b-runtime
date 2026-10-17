@@ -71,7 +71,7 @@ func (o *Orchestrator) CheckpointSandbox(ctx context.Context, teamID uuid.UUID, 
 	// orchestrator stops the old sandbox itself on error; RemoveSandbox is
 	// still needed to clean up API-side state (store, routing, analytics).
 	client, childCtx := node.GetClient(ctx)
-	_, err = client.Sandbox.Checkpoint(childCtx, &orchestrator.SandboxCheckpointRequest{
+	res, err := client.Sandbox.Checkpoint(childCtx, &orchestrator.SandboxCheckpointRequest{
 		SandboxId: sbx.SandboxID,
 		BuildId:   upsertResult.BuildID.String(),
 		Metadata:  map[string]string{storageopts.ObjectMetadataTemplateID: upsertResult.TemplateID},
@@ -124,6 +124,16 @@ func (o *Orchestrator) CheckpointSandbox(ctx context.Context, teamID uuid.UUID, 
 		if killErr := o.RemoveSandbox(cleanupCtx, teamID, sandboxID, sandbox.RemoveOpts{Action: sandbox.StateActionKill}); killErr != nil {
 			telemetry.ReportError(cleanupCtx, "error killing sandbox after failed checkpoint", killErr)
 		}
+
+		return fmt.Errorf("checkpoint failed: %w", err)
+	}
+
+	// The node sealed the workspace volumes before it resumed the VM in place;
+	// the snapshot is resumable (and forkable) only once those revisions are
+	// recorded. If recording fails the sandbox keeps running untouched and
+	// only this checkpoint is lost.
+	if err := o.recordPauseRevisions(ctx, sbx, upsertResult.BuildID, res.GetWorkspaceRevisions()); err != nil {
+		o.failSnapshotBuild(context.WithoutCancel(ctx), upsertResult.BuildID, err)
 
 		return fmt.Errorf("checkpoint failed: %w", err)
 	}

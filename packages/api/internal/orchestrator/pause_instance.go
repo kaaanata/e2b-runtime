@@ -52,7 +52,7 @@ func (o *Orchestrator) pauseSandbox(ctx context.Context, node *nodemanager.Node,
 		zap.String("source_build_id", sbx.BuildID.String()),
 	)
 
-	err = snapshotInstance(ctx, node, sbx, result.TemplateID, result.BuildID.String(), filesystemOnly, restoreOnRefusal)
+	revisions, err := snapshotInstance(ctx, node, sbx, result.TemplateID, result.BuildID.String(), filesystemOnly, restoreOnRefusal)
 	if err != nil {
 		// The build is already committed, and nothing reaps one left non-terminal.
 		o.failSnapshotBuild(ctx, result.BuildID, err)
@@ -68,6 +68,18 @@ func (o *Orchestrator) pauseSandbox(ctx context.Context, node *nodemanager.Node,
 		return fmt.Errorf("error pausing sandbox: %w", err)
 	}
 
+	// The node sealed the workspace volumes before it let go of the VM. The
+	// snapshot is resumable only once those revisions are recorded, so they
+	// are written before the build becomes successful. If that fails the VM is
+	// already gone: fail the build and still end the execution's attachments.
+	if err := o.recordPauseRevisions(ctx, sbx, result.BuildID, revisions); err != nil {
+		telemetry.ReportCriticalError(ctx, "error recording workspace revisions of a pause", err)
+		o.failSnapshotBuild(ctx, result.BuildID, err)
+		o.releaseBlockVolumeAttachments(ctx, sbx)
+
+		return fmt.Errorf("error pausing sandbox: %w", err)
+	}
+
 	if err := o.finishSnapshotBuild(ctx, result.BuildID, types.BuildStatusSuccess); err != nil {
 		telemetry.ReportCriticalError(ctx, "error pausing sandbox", err)
 
@@ -79,12 +91,14 @@ func (o *Orchestrator) pauseSandbox(ctx context.Context, node *nodemanager.Node,
 	return nil
 }
 
-func snapshotInstance(ctx context.Context, node *nodemanager.Node, sbx sandbox.Sandbox, templateID, buildID string, filesystemOnly bool, restoreOnRefusal bool) error {
+// snapshotInstance pauses sbx on its node into buildID and returns the
+// workspace revisions the node sealed (one per bound block volume slot).
+func snapshotInstance(ctx context.Context, node *nodemanager.Node, sbx sandbox.Sandbox, templateID, buildID string, filesystemOnly bool, restoreOnRefusal bool) ([]*orchestrator.SandboxWorkspaceRevision, error) {
 	childCtx, childSpan := tracer.Start(ctx, "snapshot-instance")
 	defer childSpan.End()
 
 	client, childCtx := node.GetSandboxDeleteCtx(childCtx, sbx.SandboxID, sbx.ExecutionID, restoreOnRefusal)
-	_, err := client.Sandbox.Pause(
+	res, err := client.Sandbox.Pause(
 		childCtx, &orchestrator.SandboxPauseRequest{
 			SandboxId:      sbx.SandboxID,
 			TemplateId:     templateID,
@@ -96,18 +110,18 @@ func snapshotInstance(ctx context.Context, node *nodemanager.Node, sbx sandbox.S
 	if err == nil {
 		telemetry.ReportEvent(ctx, "Paused sandbox")
 
-		return nil
+		return res.GetWorkspaceRevisions(), nil
 	}
 
 	st, ok := status.FromError(err)
 	if !ok {
-		return err
+		return nil, err
 	}
 
 	if st.Code() == codes.ResourceExhausted {
 		logger.L().Warn(ctx, "Pause refused by the node", logger.WithSandboxID(sbx.SandboxID), zap.String("node_message", st.Message()))
 
-		return PauseQueueExhaustedError{}
+		return nil, PauseQueueExhaustedError{}
 	}
 
 	// Only the edge answers a pause with Aborted: the node refused and the
@@ -115,10 +129,10 @@ func snapshotInstance(ctx context.Context, node *nodemanager.Node, sbx sandbox.S
 	if st.Code() == codes.Aborted {
 		logger.L().Warn(ctx, "Pause refused by the node but its route was lost", logger.WithSandboxID(sbx.SandboxID), zap.String("edge_message", st.Message()))
 
-		return ErrRefusedRouteLost
+		return nil, ErrRefusedRouteLost
 	}
 
-	return fmt.Errorf("failed to pause sandbox '%s': %w", sbx.SandboxID, err)
+	return nil, fmt.Errorf("failed to pause sandbox '%s': %w", sbx.SandboxID, err)
 }
 
 func (o *Orchestrator) WaitForStateChange(ctx context.Context, teamID uuid.UUID, sandboxID string) error {

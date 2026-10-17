@@ -63,6 +63,7 @@ func New(deps Dependencies) (*River, error) {
 	river.AddWorker(workers, &teamResourcesTeardownWorker{
 		sandboxes: deps.Sandboxes,
 		teams:     deps.Teams,
+		volumes:   deps.Volumes,
 		steps:     steps.Job(outbox.TeardownTeamResources{}.Kind()),
 	})
 	if deps.Volumes != nil {

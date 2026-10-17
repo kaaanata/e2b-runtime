@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/trace"
@@ -15,6 +16,7 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/sandbox"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
 	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
+	"github.com/e2b-dev/infra/packages/db/pkg/types"
 	"github.com/e2b-dev/infra/packages/shared/pkg/ginutils"
 	"github.com/e2b-dev/infra/packages/shared/pkg/id"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
@@ -114,6 +116,15 @@ func (a *APIStore) PostSandboxesSandboxIDSnapshots(c *gin.Context, sandboxID api
 
 	if err := sharedUtils.CheckEnvdVersionForSnapshot(sbx.EnvdVersion); err != nil {
 		a.sendAPIStoreError(c, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	// A snapshot template is started by sandboxes that do not carry the
+	// source's volumes, while its memory has them mounted: such a template
+	// could never be restored. Pause/resume or fork the sandbox instead.
+	if slices.ContainsFunc(sbx.VolumeMounts, (*types.SandboxVolumeMountConfig).IsBlock) {
+		a.sendAPIStoreError(c, http.StatusConflict, fmt.Sprintf("Sandbox '%s' mounts block volumes and cannot be saved as a snapshot template; pause and fork it instead", sandboxID))
 
 		return
 	}

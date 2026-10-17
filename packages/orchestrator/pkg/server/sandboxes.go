@@ -445,14 +445,14 @@ func createVolumeMountModelsFromAPI(volumeMounts []*orchestrator.SandboxVolumeMo
 	results := make([]sandbox.VolumeMountConfig, 0, len(volumeMounts))
 
 	for _, v := range volumeMounts {
-		// A block mount must never be treated as NFS. Binding workspace block
-		// volumes into the VM is not wired into sandbox create yet, so every
-		// node refuses them, which the API reports instead of starting a
-		// sandbox without its volume.
+		// Only NFS volumes travel in volume_mounts; block volumes are bound
+		// per start through SandboxCreateRequest.workspace_slots (see
+		// workspaceVolumesFromRequest). Anything else is a malformed request
+		// and must never be mounted as NFS.
 		switch v.GetBackend() {
 		case "", volumeBackendNFS:
 		default:
-			return nil, status.Errorf(codes.Unimplemented, "volume %q: backend %q is not supported by this node", v.GetId(), v.GetBackend())
+			return nil, status.Errorf(codes.InvalidArgument, "volume %q: backend %q does not belong in volume_mounts; block volumes are bound through workspace_slots", v.GetId(), v.GetBackend())
 		}
 
 		volumeID, err := uuid.Parse(v.GetId())

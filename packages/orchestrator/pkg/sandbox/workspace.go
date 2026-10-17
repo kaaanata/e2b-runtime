@@ -178,7 +178,7 @@ func planWorkspace(
 	}
 
 	if backend == nil {
-		return nil, fmt.Errorf("%w: this node has no workspace block volume backend (set %s)", ErrCapabilityUnsupported, blockvol.RootEnv)
+		return nil, fmt.Errorf("%w: this node has no workspace block volume backend (BLOCK_VOLUME_ENABLED is off)", ErrCapabilityUnsupported)
 	}
 
 	layout := *meta.Workspace

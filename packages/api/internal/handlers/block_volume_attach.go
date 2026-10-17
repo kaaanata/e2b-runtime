@@ -52,10 +52,15 @@ const (
 )
 
 type blockMountPlan struct {
-	// mount is the request's mount; Attach fills in the binding.
+	// mount is the sandbox's mount (name, path) of the volume.
 	mount   *orchestrator.SandboxVolumeMount
 	volume  queries.Volume
 	binding blockMountBinding
+	// slot is the template workspace slot the volume is bound to: its
+	// position among the sandbox's block mounts for a new sandbox, the slot
+	// the snapshot recorded for a resume or fork (a memory restore must see
+	// every volume in the slot it was sealed in).
+	slot int
 	// revision is the snapshot's revision (bindExact, bindClone).
 	revision queries.VolumeRevision
 	// cloneMode is the dboutbox clone mode (bindClone).
@@ -68,8 +73,10 @@ type blockVolumeAttacher struct {
 	teamID    uuid.UUID
 	clusterID uuid.UUID
 	ownerNode string
-	mounts    []*orchestrator.SandboxVolumeMount
 	plans     []blockMountPlan
+	// clones are the incarnations Attach cloned for a fork (volume ->
+	// incarnation), deleted again by Release.
+	clones map[uuid.UUID]uuid.UUID
 }
 
 type attachConflictError struct{ msg string }
@@ -77,9 +84,12 @@ type attachConflictError struct{ msg string }
 func (e attachConflictError) Error() string { return e.msg }
 
 // Attach records one RW attachment per block mount, in one transaction that
-// locks the volumes (in id order) against deletion and against each other.
-// A fork's clones run first, synchronously, through the operation ledger.
-func (b *blockVolumeAttacher) Attach(ctx context.Context, clusterID uuid.UUID, sandboxID, executionID string) ([]*orchestrator.SandboxVolumeMount, *api.APIError) {
+// locks the volumes (in id order) against deletion and against each other,
+// and returns the workspace slot bindings the node needs, in slot order.
+// A fork's clones run first, synchronously, through the operation ledger;
+// if the start does not get as far as its attachments, the clones are
+// deleted again (see discardForkClones).
+func (b *blockVolumeAttacher) Attach(ctx context.Context, clusterID uuid.UUID, sandboxID, executionID string) ([]*orchestrator.SandboxWorkspaceSlot, *api.APIError) {
 	b.clusterID = clusterID
 
 	clones := map[uuid.UUID]uuid.UUID{} // volume -> cloned incarnation
@@ -91,20 +101,29 @@ func (b *blockVolumeAttacher) Attach(ctx context.Context, clusterID uuid.UUID, s
 
 		inc, apiErr := b.clone(ctx, sandboxID, p)
 		if apiErr != nil {
+			b.discardForkClones(context.WithoutCancel(ctx), sandboxID, clones)
+
 			return nil, apiErr
 		}
 
 		clones[p.volume.ID] = inc
 	}
 
+	b.clones = clones
+
 	plans := slices.Clone(b.plans)
 	slices.SortFunc(plans, func(x, y blockMountPlan) int { return strings.Compare(x.volume.ID.String(), y.volume.ID.String()) })
 
+	bound := make(map[uuid.UUID]*orchestrator.SandboxWorkspaceSlot, len(plans))
+
 	err := b.a.inTx(ctx, func(q *sqlcdb.Client, _ pgx.Tx) error {
 		for _, p := range plans {
-			if err := b.attachOne(ctx, q, sandboxID, executionID, p, clones[p.volume.ID]); err != nil {
+			slot, err := b.attachOne(ctx, q, sandboxID, executionID, p, clones[p.volume.ID])
+			if err != nil {
 				return err
 			}
+
+			bound[p.volume.ID] = slot
 		}
 
 		return nil
@@ -114,22 +133,37 @@ func (b *blockVolumeAttacher) Attach(ctx context.Context, clusterID uuid.UUID, s
 
 	switch {
 	case errors.As(err, &conflict):
+		b.discardForkClones(context.WithoutCancel(ctx), sandboxID, clones)
+
 		return nil, &api.APIError{Code: http.StatusConflict, ClientMsg: conflict.msg, Err: err}
 	case err != nil:
+		b.discardForkClones(context.WithoutCancel(ctx), sandboxID, clones)
+
 		return nil, &api.APIError{Code: http.StatusInternalServerError, ClientMsg: "Error when attaching block volumes", Err: err}
 	}
 
-	return b.mounts, nil
+	slots := make([]*orchestrator.SandboxWorkspaceSlot, 0, len(b.plans))
+	for _, p := range b.plans {
+		slots = append(slots, bound[p.volume.ID])
+	}
+
+	slices.SortFunc(slots, func(x, y *orchestrator.SandboxWorkspaceSlot) int { return int(x.GetSlot()) - int(y.GetSlot()) })
+
+	return slots, nil
 }
 
-func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, sandboxID, executionID string, p blockMountPlan, cloned uuid.UUID) error {
+func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, sandboxID, executionID string, p blockMountPlan, cloned uuid.UUID) (*orchestrator.SandboxWorkspaceSlot, error) {
+	if p.slot < 0 || p.slot >= maxBlockVolumeMounts {
+		return nil, fmt.Errorf("volume %s: workspace slot %d outside 0..%d", p.volume.ID, p.slot, maxBlockVolumeMounts-1)
+	}
+
 	vol, err := q.GetBlockVolumeForUpdate(ctx, p.volume.ID)
 	if err != nil {
-		return fmt.Errorf("lock volume %s: %w", p.volume.ID, err)
+		return nil, fmt.Errorf("lock volume %s: %w", p.volume.ID, err)
 	}
 
 	if vol.Lifecycle != volumeLifecycleReady || vol.DeletedAt.Valid {
-		return attachConflictError{fmt.Sprintf("Volume '%s' is %s", vol.Name, vol.Lifecycle)}
+		return nil, attachConflictError{fmt.Sprintf("Volume '%s' is %s", vol.Name, vol.Lifecycle)}
 	}
 
 	var incarnationID uuid.UUID
@@ -137,7 +171,7 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 	switch p.binding {
 	case bindHead:
 		if vol.HeadIncarnationID == nil {
-			return attachConflictError{fmt.Sprintf("Volume '%s' has no image yet", vol.Name)}
+			return nil, attachConflictError{fmt.Sprintf("Volume '%s' has no image yet", vol.Name)}
 		}
 
 		incarnationID = *vol.HeadIncarnationID
@@ -146,7 +180,7 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 
 		latest, err := q.GetLatestIncarnationRevision(ctx, incarnationID)
 		if err != nil && !dberrors.IsNotFoundError(err) {
-			return fmt.Errorf("read latest revision: %w", err)
+			return nil, fmt.Errorf("read latest revision: %w", err)
 		}
 
 		advanced, err := q.IncarnationAttachedSince(ctx, queries.IncarnationAttachedSinceParams{
@@ -154,11 +188,11 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 			Since:         p.revision.CreatedAt,
 		})
 		if err != nil {
-			return fmt.Errorf("read attachments: %w", err)
+			return nil, fmt.Errorf("read attachments: %w", err)
 		}
 
 		if advanced || latest.ID != p.revision.ID {
-			return attachConflictError{fmt.Sprintf(
+			return nil, attachConflictError{fmt.Sprintf(
 				"Volume '%s' was used by another sandbox after this snapshot was taken; fork the snapshot instead of resuming it", vol.Name)}
 		}
 	case bindClone:
@@ -167,11 +201,11 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 
 	inc, err := q.GetVolumeIncarnation(ctx, queries.GetVolumeIncarnationParams{ID: incarnationID, VolumeID: vol.ID})
 	if err != nil {
-		return fmt.Errorf("read incarnation %s: %w", incarnationID, err)
+		return nil, fmt.Errorf("read incarnation %s: %w", incarnationID, err)
 	}
 
 	if inc.State != volumeLifecycleReady {
-		return attachConflictError{fmt.Sprintf("Volume '%s' image is %s", vol.Name, inc.State)}
+		return nil, attachConflictError{fmt.Sprintf("Volume '%s' image is %s", vol.Name, inc.State)}
 	}
 
 	_, err = q.CreateVolumeAttachment(ctx, queries.CreateVolumeAttachmentParams{
@@ -185,18 +219,21 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 		GuestPath:     p.mount.GetPath(),
 	})
 	if dberrors.IsUniqueConstraintViolation(err) {
-		return attachConflictError{fmt.Sprintf("Volume '%s' is mounted by another sandbox", vol.Name)}
+		return nil, attachConflictError{fmt.Sprintf("Volume '%s' is mounted by another sandbox", vol.Name)}
 	}
 
 	if err != nil {
-		return fmt.Errorf("record attachment: %w", err)
+		return nil, fmt.Errorf("record attachment: %w", err)
 	}
 
-	p.mount.IncarnationId = inc.ID.String()
-	p.mount.FsUuid = inc.FsUuid.String()
-	p.mount.CapacityBytes = uint64(inc.CapacityBytes)
-
-	return nil
+	return &orchestrator.SandboxWorkspaceSlot{
+		Slot:          uint32(p.slot), //nolint:gosec // checked against maxBlockVolumeMounts above
+		VolumeId:      vol.ID.String(),
+		IncarnationId: inc.ID.String(),
+		MountPath:     p.mount.GetPath(),
+		FsUuid:        inc.FsUuid.String(),
+		CapacityBytes: uint64(inc.CapacityBytes), //nolint:gosec // a positive tier size (CHECK constraint)
+	}, nil
 }
 
 // clone runs a fork's volume.clone inline: the operation and its River job
@@ -266,10 +303,51 @@ func (b *blockVolumeAttacher) clone(ctx context.Context, sandboxID string, p blo
 }
 
 // Release ends the execution's attachments after a start that did not
-// happen.
+// happen, and deletes the incarnations a fork cloned for it: nothing else
+// will ever bind them.
 func (b *blockVolumeAttacher) Release(ctx context.Context, sandboxID, executionID string) {
 	if _, err := b.a.sqlcDB.ReleaseSandboxAttachments(ctx, queries.ReleaseSandboxAttachmentsParams{SandboxID: sandboxID, ExecutionID: executionID}); err != nil {
 		logger.L().Error(ctx, "failed to release block volume attachments after a failed start", zap.Error(err), logger.WithSandboxID(sandboxID))
+
+		// The attachments still reserve the clones; deleting them now would
+		// only be refused. The volume's reconcile reports them as held.
+		return
+	}
+
+	b.discardForkClones(ctx, sandboxID, b.clones)
+}
+
+// discardForkClones schedules the deletion of incarnations cloned for a fork
+// whose start failed. It reuses the volume.delete job, scoped to those
+// incarnations (VolumeDeleteParams), so it retries like any other volume
+// operation, and the node refuses it while a holder still has the image.
+// Failing to record it is logged: the incarnation is then an orphan that the
+// volume's reconcile lists and its eventual delete removes.
+func (b *blockVolumeAttacher) discardForkClones(ctx context.Context, sandboxID string, clones map[uuid.UUID]uuid.UUID) {
+	for volumeID, incarnationID := range clones {
+		key := fmt.Sprintf("fork-discard:%s:incarnation:%s", sandboxID, incarnationID)
+
+		err := b.a.inTx(ctx, func(q *sqlcdb.Client, tx pgx.Tx) error {
+			_, _, err := b.a.recordVolumeOperation(ctx, q, tx, newVolumeOperation{
+				kind:     dboutbox.VolumeOperationDelete,
+				key:      key,
+				hash:     key,
+				volumeID: volumeID,
+				params: dboutbox.VolumeOperationParams{
+					ClusterID: b.clusterID,
+					NodeID:    b.ownerNode,
+					TeamID:    b.teamID,
+					VolumeID:  volumeID,
+					Delete:    &dboutbox.VolumeDeleteParams{IncarnationIDs: []uuid.UUID{incarnationID}},
+				},
+			})
+
+			return err
+		})
+		if err != nil {
+			logger.L().Error(ctx, "failed to schedule deletion of a fork's cloned block volume incarnation",
+				zap.Error(err), logger.WithSandboxID(sandboxID), zap.Stringer("volume_id", volumeID), zap.Stringer("incarnation_id", incarnationID))
+		}
 	}
 }
 
@@ -320,7 +398,7 @@ func (a *APIStore) planResumeBlockVolumes(
 		cloneMode = dboutbox.VolumeCloneMemoryRestore
 	}
 
-	attacher := &blockVolumeAttacher{a: a, teamID: teamID, mounts: mounts}
+	attacher := &blockVolumeAttacher{a: a, teamID: teamID}
 
 	for _, m := range blockMounts {
 		ref, ok := byPath[m.GetPath()]
@@ -366,6 +444,7 @@ func (a *APIStore) planResumeBlockVolumes(
 			mount:     m,
 			volume:    ref.Volume,
 			binding:   binding,
+			slot:      int(ref.Slot),
 			revision:  ref.VolumeRevision,
 			cloneMode: cloneMode,
 		})

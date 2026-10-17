@@ -168,9 +168,13 @@ CREATE TABLE snapshot_volume_refs (
     revision_id       UUID                      NOT NULL REFERENCES volume_revisions (id),
     volume_id         UUID                      NOT NULL REFERENCES volumes (id),
     mount_path        TEXT                      NOT NULL,
+    -- slot is the template workspace slot the volume occupied when the
+    -- revision was sealed; a memory restore must bind it to the same slot.
+    slot              SMALLINT                  NOT NULL CHECK (slot >= 0),
     created_at        TIMESTAMP WITH TIME ZONE  NOT NULL DEFAULT now(),
 
-    PRIMARY KEY (snapshot_build_id, revision_id)
+    PRIMARY KEY (snapshot_build_id, revision_id),
+    UNIQUE (snapshot_build_id, slot)
 );
 CREATE INDEX snapshot_volume_refs_revision_idx ON snapshot_volume_refs (revision_id);
 CREATE INDEX snapshot_volume_refs_volume_idx ON snapshot_volume_refs (volume_id);

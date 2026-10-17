@@ -326,7 +326,6 @@ func (a *APIStore) PostSandboxes(c *gin.Context) {
 			a:         a,
 			teamID:    teamInfo.ID,
 			ownerNode: blockMounts.ownerNode,
-			mounts:    sbxVolumeMounts,
 			plans:     blockMounts.plans,
 		}
 	}
@@ -621,8 +620,9 @@ func convertAPIVolumesToOrchestratorVolumes(ctx context.Context, sqlClient *sqlc
 			blocks = &blockVolumeMounts{ownerNode: *actualVolume.OwnerNodeID}
 		}
 
+		// A new sandbox takes the template's workspace slots in mount order.
 		mount.Backend = volumeBackendBlock
-		blocks.plans = append(blocks.plans, blockMountPlan{mount: mount, volume: actualVolume, binding: bindHead})
+		blocks.plans = append(blocks.plans, blockMountPlan{mount: mount, volume: actualVolume, binding: bindHead, slot: len(blocks.plans)})
 		results = append(results, mount)
 	}
 

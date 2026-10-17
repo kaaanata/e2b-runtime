@@ -198,7 +198,8 @@ gRPC services on :5008 (`pkg/server/`, `pkg/service/`, `pkg/template/server/`, `
 - **BlockVolumeService** (`pkg/blockvol/`, only with `BLOCK_VOLUME_ENABLED`) — create, clone,
   seal, delete and reconcile workspace block volumes under `BLOCK_VOLUME_ROOT`, idempotent by
   operation id. An enabled node advertises the `volume-backend=block` label; the API only places
-  block volumes on such nodes.
+  block volumes on such nodes. The same `blockvol.Service` instance is the sandbox factory's
+  workspace backend (bind on start, seal on pause, release after the VM exits).
 
 Process shutdown, triggered by `SIGINT`, `SIGTERM`, `SIGUSR1`, or a service failure, moves
 the node to `ShuttingDown` before draining builds and sandboxes. Like `Draining`, this excludes new
@@ -526,6 +527,16 @@ The orchestrator passes each sandbox's volumes to envd in `/init` (`VolumeMount`
   a new incarnation, keeping the filesystem identity from a memory snapshot only with
   `allowSharedIdentity`. `POST /volumes/{id}/clone` makes a new volume from a
   `filesystem-quiesced` revision. A deleted block volume stays as a tombstone (`deleted_at`).
+  Block volumes reach the node only as `SandboxCreateRequest.workspace_slots` (slot, volume,
+  incarnation, mount path, expected ext4 UUID and capacity): a new sandbox takes the template's
+  slots in mount order, a resume or fork the slot recorded in `snapshot_volume_refs.slot`.
+  `volume_mounts` carries NFS volumes only and a node refuses a block entry there. A pause or
+  checkpoint returns one `SandboxWorkspaceRevision` per bound slot (response field 20), sealed
+  after `CreateSnapshot` and before any resume; the API records them (revision rows, finished
+  seal operations, `snapshot_volume_refs`) before it marks the snapshot build successful. A
+  failed fork start schedules a `volume.delete` scoped to the incarnations it cloned; a team
+  teardown moves the team's block volumes to `deleting` and enqueues their deletes. Templates
+  opt in with `layout: block-v1` and `workspaceSlotCapacityGiB` on the v2 build request.
 - **Checkpoint freeze.** `/fsfreeze-set` freezes the mount set envd derives from its own mount
   ledger (block volumes deepest first, then `/`) under a caller-chosen operation token, rolling back
   on partial failure; `GET /fsfreeze-set` reports a recorded outcome whose response was lost and

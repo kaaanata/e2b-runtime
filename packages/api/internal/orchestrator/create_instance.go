@@ -82,14 +82,21 @@ type SandboxMetadata struct {
 	// start with 503.
 	RequiredNodeID *string
 	// VolumeAttacher, when set, records the execution's block volume
-	// attachments once the execution ID is known and returns the mounts to
-	// send; it is released again when the start fails.
+	// attachments once the execution ID is known and returns the workspace
+	// slot bindings to send; it is released again when the start fails.
 	VolumeAttacher VolumeAttacher
+	// WorkspaceSlots are the block volume bindings of this start, filled by
+	// VolumeAttacher. They are the only way block volumes reach the node:
+	// VolumeMounts keeps the sandbox's block mounts for the API's own records,
+	// but only its NFS entries are sent as volume_mounts.
+	WorkspaceSlots []*orchestrator.SandboxWorkspaceSlot
 }
 
 // VolumeAttacher binds a starting sandbox execution to its block volumes.
 type VolumeAttacher interface {
-	Attach(ctx context.Context, clusterID uuid.UUID, sandboxID, executionID string) ([]*orchestrator.SandboxVolumeMount, *api.APIError)
+	// Attach records the attachments and returns one workspace slot binding
+	// per block mount, in slot order.
+	Attach(ctx context.Context, clusterID uuid.UUID, sandboxID, executionID string) ([]*orchestrator.SandboxWorkspaceSlot, *api.APIError)
 	Release(ctx context.Context, sandboxID, executionID string)
 }
 
@@ -299,12 +306,12 @@ func (o *Orchestrator) CreateSandbox(
 	}
 
 	if sbxData.VolumeAttacher != nil {
-		mounts, attachErr := sbxData.VolumeAttacher.Attach(ctx, clusters.WithClusterFallback(team.ClusterID), sandboxID, executionID)
+		slots, attachErr := sbxData.VolumeAttacher.Attach(ctx, clusters.WithClusterFallback(team.ClusterID), sandboxID, executionID)
 		if attachErr != nil {
 			return sandbox.Sandbox{}, attachErr
 		}
 
-		sbxData.VolumeMounts = mounts
+		sbxData.WorkspaceSlots = slots
 		attacher := sbxData.VolumeAttacher
 
 		defer func() {
@@ -394,11 +401,12 @@ func (o *Orchestrator) CreateSandbox(
 			AllowInternetAccess:     sbxData.AllowInternetAccess,
 			Network:                 sbxNetwork,
 			TotalDiskSizeMb:         ut.FromPtr(sbxData.Build.TotalDiskSizeMb),
-			VolumeMounts:            sbxData.VolumeMounts,
+			VolumeMounts:            nfsVolumeMounts(sbxData.VolumeMounts),
 			Iam:                     iamToProto(sbxData.Iam),
 		},
-		StartTime: timestamppb.New(startTime),
-		EndTime:   timestamppb.New(endTime),
+		StartTime:      timestamppb.New(startTime),
+		EndTime:        timestamppb.New(endTime),
+		WorkspaceSlots: sbxData.WorkspaceSlots,
 	}
 	if sbxData.FilesystemBoot {
 		// Left absent otherwise, so requests without the rescue are
@@ -506,7 +514,7 @@ func (o *Orchestrator) CreateSandbox(
 		sbxDomain,
 		sbxData.Network,
 		trafficAccessToken,
-		nodemanager.ConvertOrchestratorMountsToDatabaseMounts(sbxData.VolumeMounts),
+		sandboxMountConfigs(sbxData.VolumeMounts, sbxData.WorkspaceSlots),
 		sbxData.Iam,
 	)
 	sbx.FirecrackerVersionResolved = resolvedFCVersion

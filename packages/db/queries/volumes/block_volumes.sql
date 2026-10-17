@@ -25,6 +25,14 @@ WHERE id = @volume_id AND team_id = @team_id AND backend = 'block'
   AND lifecycle IN ('ready', 'failed') AND deleted_at IS NULL
 RETURNING *;
 
+-- ListTeamBlockVolumesToDelete lists a team's block volumes that a teardown
+-- still has to delete (not yet deleting or deleted).
+-- name: ListTeamBlockVolumesToDelete :many
+SELECT * FROM volumes
+WHERE team_id = @team_id AND backend = 'block' AND deleted_at IS NULL
+  AND lifecycle NOT IN ('deleting', 'deleted')
+ORDER BY id;
+
 -- TombstoneBlockVolume runs once every image of the volume is physically gone.
 -- name: TombstoneBlockVolume :exec
 UPDATE volumes SET lifecycle = 'deleted', deleted_at = now()
@@ -151,8 +159,8 @@ WHERE id = @id AND released_at IS NULL;
 SELECT count(*) FROM volume_attachments WHERE volume_id = @volume_id AND released_at IS NULL;
 
 -- name: InsertSnapshotVolumeRef :exec
-INSERT INTO snapshot_volume_refs (snapshot_build_id, revision_id, volume_id, mount_path)
-VALUES (@snapshot_build_id, @revision_id, @volume_id, @mount_path)
+INSERT INTO snapshot_volume_refs (snapshot_build_id, revision_id, volume_id, mount_path, slot)
+VALUES (@snapshot_build_id, @revision_id, @volume_id, @mount_path, @slot)
 ON CONFLICT (snapshot_build_id, revision_id) DO NOTHING;
 
 -- name: CountVolumeSnapshotRefs :one
@@ -162,10 +170,11 @@ SELECT count(*) FROM snapshot_volume_refs WHERE volume_id = @volume_id;
 SELECT
     r.snapshot_build_id,
     r.mount_path,
+    r.slot,
     sqlc.embed(rev),
     sqlc.embed(v)
 FROM snapshot_volume_refs r
 JOIN volume_revisions rev ON rev.id = r.revision_id
 JOIN volumes v ON v.id = r.volume_id
 WHERE r.snapshot_build_id = @snapshot_build_id
-ORDER BY r.mount_path;
+ORDER BY r.slot;

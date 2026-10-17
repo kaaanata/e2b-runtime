@@ -872,34 +872,7 @@ func run(config cfg.Config, opts Options) (success bool) {
 		return datapathRegistration.Unregister()
 	}})
 
-	// sandbox factory
-	networkAssignHook := egressSetup.NetworkAssignHook
-	if networkAssignHook == nil {
-		networkAssignHook = sandbox.NoopNetworkAssignHook{}
-	}
-	sandboxFactory := sandbox.NewFactory(ctx, config.BuilderConfig, networkPool, devicePool, featureFlags, hostStatsDelivery, cgroupManager, egressSetup.Proxy, networkAssignHook, sandboxes)
-
-	// Workspace block volumes are opt-in per node: only a node whose
-	// BLOCK_VOLUME_ROOT names its Btrfs volume tree can host sandboxes that bind
-	// them. Without it, sandboxes of block-layout templates are refused with
-	// ErrCapabilityUnsupported rather than started without their volumes.
-	if os.Getenv(blockvol.RootEnv) != "" {
-		workspaceBackend, err := blockvol.New(blockvol.Config{})
-		if err != nil {
-			logger.L().Fatal(ctx, "workspace block volume backend", zap.Error(err))
-		}
-
-		sandboxFactory.SetWorkspaceBackend(workspaceBackend)
-	}
-
-	// confined volume filesystems (for the volume service and nfs proxy)
-	if err := chrooted.CheckSupport(); err != nil {
-		logger.L().Fatal(ctx, "volume confinement prerequisites not met", zap.Error(err))
-	}
-	builder := chrooted.NewBuilder(config)
-	volumeService := volumes.New(config, builder)
-
-	// workspace block volumes
+	// workspace block volumes (see SetWorkspaceBackend below)
 	var blockVolumes *blockvol.Service
 	if config.BlockVolumeEnabled {
 		watermarks := blockvol.DefaultWatermarks
@@ -915,6 +888,30 @@ func run(config cfg.Config, opts Options) (success bool) {
 			logger.L().Fatal(ctx, "failed to initialize block volumes", zap.Error(err))
 		}
 	}
+
+	// sandbox factory
+	networkAssignHook := egressSetup.NetworkAssignHook
+	if networkAssignHook == nil {
+		networkAssignHook = sandbox.NoopNetworkAssignHook{}
+	}
+	sandboxFactory := sandbox.NewFactory(ctx, config.BuilderConfig, networkPool, devicePool, featureFlags, hostStatsDelivery, cgroupManager, egressSetup.Proxy, networkAssignHook, sandboxes)
+
+	// Workspace block volumes are opt-in per node (BLOCK_VOLUME_ENABLED). One
+	// blockvol.Service backs both the BlockVolumeService the control plane
+	// drives (create/clone/seal/delete) and the sandbox lifecycle (bind, seal
+	// on pause, release), so both see the same holder gate and layout.
+	// Without it, block-layout sandboxes are refused with
+	// ErrCapabilityUnsupported rather than started without their volumes.
+	if blockVolumes != nil {
+		sandboxFactory.SetWorkspaceBackend(blockVolumes)
+	}
+
+	// confined volume filesystems (for the volume service and nfs proxy)
+	if err := chrooted.CheckSupport(); err != nil {
+		logger.L().Fatal(ctx, "volume confinement prerequisites not met", zap.Error(err))
+	}
+	builder := chrooted.NewBuilder(config)
+	volumeService := volumes.New(config, builder)
 
 	uploads := sandbox.NewUploads(templateCache, persistence, peerResolver, redisClient)
 	closers = append(closers, closer{"pending uploads", func(context.Context) error {

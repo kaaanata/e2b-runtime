@@ -205,6 +205,7 @@ type SnapshotVolumeRef struct {
 	RevisionID      uuid.UUID
 	VolumeID        uuid.UUID
 	MountPath       string
+	Slot            int16
 	CreatedAt       pgtype.Timestamptz
 }
 

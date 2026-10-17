@@ -223,9 +223,6 @@ func convertDatabaseMountsToOrchestratorMounts(volumes []*types.SandboxVolumeMou
 			Path:               item.Path,
 			ConsistencyProfile: item.ConsistencyProfile,
 			Backend:            item.Backend,
-			IncarnationId:      item.IncarnationID,
-			FsUuid:             item.FsUUID,
-			CapacityBytes:      item.CapacityBytes,
 		})
 	}
 

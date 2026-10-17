@@ -423,9 +423,13 @@ func TestBlockVolumeAttach(t *testing.T) {
 		require.Len(t, mounts, 1)
 		assert.Equal(t, volumeBackendBlock, mounts[0].GetBackend())
 
-		attacher := &blockVolumeAttacher{a: f.store, teamID: f.team.ID, ownerNode: blocks.ownerNode, mounts: mounts, plans: blocks.plans}
+		attacher := &blockVolumeAttacher{a: f.store, teamID: f.team.ID, ownerNode: blocks.ownerNode, plans: blocks.plans}
 		bound, apiErr := attacher.Attach(ctx, uuid.New(), "sbx-1", "exec-1")
 		require.Nil(t, apiErr)
+		require.Len(t, bound, 1)
+		assert.EqualValues(t, 0, bound[0].GetSlot(), "a new sandbox takes the slots in mount order")
+		assert.Equal(t, inc.VolumeID.String(), bound[0].GetVolumeId())
+		assert.Equal(t, "/workspace", bound[0].GetMountPath())
 		assert.Equal(t, inc.ID.String(), bound[0].GetIncarnationId())
 		assert.Equal(t, inc.FsUuid.String(), bound[0].GetFsUuid())
 		assert.EqualValues(t, 10<<30, bound[0].GetCapacityBytes())
@@ -434,7 +438,7 @@ func TestBlockVolumeAttach(t *testing.T) {
 			[]api.SandboxVolumeMount{{Name: "ws", Path: "/workspace"}}, newEnvd)
 		require.NoError(t, err)
 
-		other := &blockVolumeAttacher{a: f.store, teamID: f.team.ID, ownerNode: "node-a", mounts: second, plans: []blockMountPlan{{mount: second[0], volume: attacher.plans[0].volume, binding: bindHead}}}
+		other := &blockVolumeAttacher{a: f.store, teamID: f.team.ID, ownerNode: "node-a", plans: []blockMountPlan{{mount: second[0], volume: attacher.plans[0].volume, binding: bindHead}}}
 		_, apiErr = other.Attach(ctx, uuid.New(), "sbx-2", "exec-2")
 		require.NotNil(t, apiErr)
 		assert.Equal(t, http.StatusConflict, apiErr.Code)
@@ -539,7 +543,9 @@ func TestBlockVolumeAttach(t *testing.T) {
 
 		bound, apiErr := resume.Attach(ctx, uuid.New(), "sbx", "e2")
 		require.Nil(t, apiErr)
+		require.Len(t, bound, 1)
 		assert.Equal(t, inc.ID.String(), bound[0].GetIncarnationId())
+		assert.EqualValues(t, sealedSlot, bound[0].GetSlot(), "a resume binds the slot the snapshot recorded, not the mount position")
 	})
 }
 
@@ -566,8 +572,12 @@ func sealRevision(t *testing.T, f blockAPIFixture, vol queries.Volume, inc queri
 	})
 	require.NoError(t, err)
 	require.NoError(t, q.InsertSnapshotVolumeRef(ctx, queries.InsertSnapshotVolumeRefParams{
-		SnapshotBuildID: buildID, RevisionID: rev.ID, VolumeID: vol.ID, MountPath: "/w",
+		SnapshotBuildID: buildID, RevisionID: rev.ID, VolumeID: vol.ID, MountPath: "/w", Slot: sealedSlot,
 	}))
 
 	return rev
 }
+
+// sealedSlot is the workspace slot sealRevision records; deliberately not 0
+// so a test can tell the recorded slot from the mount position.
+const sealedSlot = 2

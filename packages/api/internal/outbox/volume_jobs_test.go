@@ -457,6 +457,54 @@ func TestVolumeExecutor(t *testing.T) {
 		assert.Empty(t, live)
 	})
 
+	t.Run("a scoped delete removes only a failed fork's clone and keeps the volume", func(t *testing.T) {
+		t.Parallel()
+
+		f := newVolumeFixture(t, db)
+		ctx := t.Context()
+		vol, rev := f.ready(t)
+		orphan, inUse := uuid.New(), uuid.New()
+
+		for _, inc := range []uuid.UUID{orphan, inUse} {
+			clone := f.operation(t, outbox.VolumeOperationClone, vol, outbox.VolumeOperationParams{Clone: &outbox.VolumeCloneParams{
+				SourceVolumeID: vol.ID, SourceRevisionID: rev.ID, SourceConsistency: "paired-memory",
+				Mode: outbox.VolumeCloneMemoryRestore, IncarnationID: inc, CapacityBytes: 1 << 30,
+			}})
+			require.NoError(t, f.exec.Execute(ctx, clone.ID, false))
+		}
+
+		// inUse was bound again by some execution: it is no orphan.
+		_, err := f.q.CreateVolumeAttachment(ctx, queries.CreateVolumeAttachmentParams{
+			ID: uuid.New(), VolumeID: vol.ID, IncarnationID: inUse, SandboxID: "sbx", ExecutionID: "e",
+			NodeID: "node-a", Mode: "rw", GuestPath: "/w",
+		})
+		require.NoError(t, err)
+
+		op := f.operation(t, outbox.VolumeOperationDelete, vol, outbox.VolumeOperationParams{
+			Delete: &outbox.VolumeDeleteParams{IncarnationIDs: []uuid.UUID{orphan, inUse, uuid.New()}},
+		})
+		require.NoError(t, f.exec.Execute(ctx, op.ID, false))
+
+		req := f.node.last["delete"].(*orchestrator.DeleteBlockVolumeRequest)
+		assert.Equal(t, []string{orphan.String()}, req.GetIncarnationIds())
+		assert.Empty(t, req.GetRevisionIds(), "a scoped delete keeps every revision")
+
+		got, err := f.q.GetBlockVolumeForUpdate(ctx, vol.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "ready", got.Lifecycle, "the volume stays")
+		assert.False(t, got.DeletedAt.Valid)
+
+		live, err := f.q.ListLiveVolumeIncarnations(ctx, vol.ID)
+		require.NoError(t, err)
+
+		ids := make([]uuid.UUID, 0, len(live))
+		for _, i := range live {
+			ids = append(ids, i.ID)
+		}
+		assert.ElementsMatch(t, []uuid.UUID{*vol.HeadIncarnationID, inUse}, ids)
+		assert.Equal(t, outbox.VolumeOperationSucceeded, f.state(t, op).State)
+	})
+
 	t.Run("reconcile reports what the database expects", func(t *testing.T) {
 		t.Parallel()
 

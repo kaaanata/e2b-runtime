@@ -47,6 +47,20 @@ type VolumeOperationParams struct {
 	Create *VolumeCreateParams `json:"create,omitempty"`
 	Clone  *VolumeCloneParams  `json:"clone,omitempty"`
 	Seal   *VolumeSealParams   `json:"seal,omitempty"`
+	// Delete scopes a "delete" operation. Absent deletes the whole volume.
+	Delete *VolumeDeleteParams `json:"delete,omitempty"`
+}
+
+// VolumeDeleteParams narrows a "delete" operation to some incarnations of a
+// volume that stays: the images a failed fork cloned and nothing will bind.
+// The volume itself, its other incarnations and its revisions are kept.
+type VolumeDeleteParams struct {
+	IncarnationIDs []uuid.UUID `json:"incarnation_ids,omitempty"`
+}
+
+// Scoped reports whether the delete removes only some incarnations.
+func (p *VolumeDeleteParams) Scoped() bool {
+	return p != nil && len(p.IncarnationIDs) > 0
 }
 
 // VolumeCreateParams creates a volume's head incarnation and revision 0.
