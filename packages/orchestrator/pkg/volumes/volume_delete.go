@@ -5,7 +5,6 @@ package volumes
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -32,7 +31,9 @@ func (s *Service) DeleteVolume(
 		attribute.String("path", fullPath),
 	))
 
-	if err := os.RemoveAll(fullPath); err != nil {
+	// A volume created as a Btrfs subvolume is deleted as one whatever the flag
+	// says now: the layout on disk, not the current config, decides.
+	if err := deleteVolumePath(ctx, fullPath); err != nil {
 		return nil, fmt.Errorf("failed to delete volume: %w", err)
 	}
 

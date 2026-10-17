@@ -35,6 +35,24 @@ const (
 
 var tracer = otel.Tracer("github.com/e2b-dev/infra/packages/orchestrator/pkg/volumes")
 
+// blockVolumeType is the volume_type of a workspace block volume. Its data is an
+// ext4 image attached to the VM as a drive, not a directory the NFS proxy
+// exports, so none of this directory service applies to it: no root path, no
+// chroot, no dir_*/file_*/path_* RPC. The type travels in the same string field
+// as the directory-backed types (VolumeInfo.volume_type is a free string, so no
+// proto change is needed), and is refused before the type lookup so the answer is
+// FailedPrecondition rather than "unknown volume type".
+const blockVolumeType = "block"
+
+func blockVolumeError(ctx context.Context, volume *orchestrator.VolumeInfo) *status.Status {
+	return newAPIError(ctx,
+		codes.FailedPrecondition,
+		http.StatusPreconditionFailed,
+		orchestrator.UserErrorCode_NOT_SUPPORTED,
+		"volume %q is a block volume; it has no host directory and cannot be browsed or mounted over NFS", volume.GetVolumeId(),
+	)
+}
+
 type Service struct {
 	orchestrator.UnimplementedVolumeServiceServer
 
@@ -55,6 +73,9 @@ type volumePathRequest interface {
 
 func (s *Service) getVolumeRootPath(ctx context.Context, volume *orchestrator.VolumeInfo) (string, error) {
 	volumeType := volume.GetVolumeType()
+	if volumeType == blockVolumeType {
+		return "", blockVolumeError(ctx, volume).Err()
+	}
 
 	teamID, ok := pkg.TryParseUUID(volume.GetTeamId())
 	if !ok {
@@ -81,6 +102,9 @@ func (s *Service) getVolumeRootPath(ctx context.Context, volume *orchestrator.Vo
 func (s *Service) getFilesystemAndPath(ctx context.Context, request volumePathRequest) (*chrooted.Chrooted, string, *status.Status) {
 	volume := request.GetVolume()
 	volumeType := volume.GetVolumeType()
+	if volumeType == blockVolumeType {
+		return nil, "", blockVolumeError(ctx, volume)
+	}
 
 	teamID, ok := pkg.TryParseUUID(volume.GetTeamId())
 	if !ok {

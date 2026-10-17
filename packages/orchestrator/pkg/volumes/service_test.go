@@ -97,6 +97,15 @@ func TestGetVolumeRootPath(t *testing.T) {
 					userError: orchestrator.UserErrorCode_INVALID_REQUEST,
 				},
 			},
+			"block volume": {
+				volumeType: blockVolumeType,
+				teamID:     teamID,
+				volumeID:   volumeID,
+				expected: expected{
+					grpcCode:  codes.FailedPrecondition,
+					userError: orchestrator.UserErrorCode_NOT_SUPPORTED,
+				},
+			},
 			"volume type not found": {
 				volumeType: "non-existent",
 				teamID:     teamID,
@@ -123,6 +132,25 @@ func TestGetVolumeRootPath(t *testing.T) {
 			})
 		}
 	})
+}
+
+// TestBlockVolumeRefusedEvenWhenConfigured pins that the block backend never gets
+// a directory, even if an operator mapped a "block" entry in
+// PERSISTENT_VOLUME_MOUNTS: every dir_/file_/path_ RPC goes through
+// getFilesystemAndPath and must answer FailedPrecondition.
+func TestBlockVolumeRefusedEvenWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	config := cfg.Config{PersistentVolumeMounts: map[string]string{blockVolumeType: t.TempDir()}}
+	v := Service{builder: chrooted.NewBuilder(config), config: config}
+	info := &orchestrator.VolumeInfo{VolumeType: blockVolumeType, TeamId: uuid.NewString(), VolumeId: uuid.NewString()}
+
+	_, err := v.getVolumeRootPath(t.Context(), info)
+	requireGRPCError(t, err, codes.FailedPrecondition, orchestrator.UserErrorCode_NOT_SUPPORTED)
+
+	_, _, st := v.getFilesystemAndPath(t.Context(), &orchestrator.StatPathRequest{Volume: info, Path: "/"})
+	require.NotNil(t, st)
+	requireGRPCError(t, st.Err(), codes.FailedPrecondition, orchestrator.UserErrorCode_NOT_SUPPORTED)
 }
 
 func TestRelPath(t *testing.T) {
