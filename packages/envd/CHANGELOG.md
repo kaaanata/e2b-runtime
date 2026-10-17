@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0 (volumes fork, unreleased)
+
+
+### Features
+
+* **envd:** typed volume mounts (NFS with per-mount consistency profile, or ext4 workspace block volumes), `/volumes/resize`, and the token-based mount-set freeze `/fsfreeze-set` / `/fsthaw-set`. The API requires this version for block volumes and explicit NFS profiles; templates built with an older envd must be rebuilt (`FORCE_REBUILD`).
+
 ## 0.9.0 (2026-09-10)
 
 
