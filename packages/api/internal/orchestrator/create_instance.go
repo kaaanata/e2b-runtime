@@ -97,7 +97,12 @@ type VolumeAttacher interface {
 	// Attach records the attachments and returns one workspace slot binding
 	// per block mount, in slot order.
 	Attach(ctx context.Context, clusterID uuid.UUID, sandboxID, executionID string) ([]*orchestrator.SandboxWorkspaceSlot, *api.APIError)
+	// Release ends the attachments of a start that failed.
 	Release(ctx context.Context, sandboxID, executionID string)
+	// Started records what a successful start changed on the volumes (the
+	// capacity of volumes it grew). Its failures are logged, not returned:
+	// the sandbox is already running.
+	Started(ctx context.Context, sandboxID, executionID string)
 }
 
 // iamToProto maps the sandbox workload identity configuration into the
@@ -579,6 +584,10 @@ func (o *Orchestrator) CreateSandbox(
 			ClientMsg: "Failed to create sandbox",
 			Err:       fmt.Errorf("failed to add sandbox to store: %w", err),
 		}
+	}
+
+	if sbxData.VolumeAttacher != nil {
+		sbxData.VolumeAttacher.Started(context.WithoutCancel(ctx), sandboxID, executionID)
 	}
 
 	return sbx, nil

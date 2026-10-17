@@ -310,7 +310,11 @@ func (b *boundWorkspace) check(mode workspaceMode, recorded uint64) error {
 		return fmt.Errorf("%w: slot %d incarnation has ext4 UUID %s, the control plane recorded %s", ErrWorkspaceRestore, b.Slot, b.fsUUID, b.ExpectedFsUUID)
 	}
 
-	if b.ExpectedCapacityBytes != 0 && b.ExpectedCapacityBytes != b.imageBytes {
+	// A resume that grew the image but failed before the control plane
+	// recorded the new size finds the image already at the target: the retry
+	// of the same resize is accepted (every grow step is idempotent).
+	retriedResize := b.ResizeToBytes != 0 && b.imageBytes == b.ResizeToBytes
+	if b.ExpectedCapacityBytes != 0 && b.ExpectedCapacityBytes != b.imageBytes && !retriedResize {
 		return fmt.Errorf("%w: slot %d incarnation is %d bytes, the control plane recorded %d", ErrWorkspaceRestore, b.Slot, b.imageBytes, b.ExpectedCapacityBytes)
 	}
 
@@ -378,7 +382,9 @@ func (w *workspaceSet) prepareColdBoot(ctx context.Context) error {
 	}
 
 	for _, b := range w.bound {
-		if b.sizeBytes == b.imageBytes {
+		// A requested resize always runs: a retried one may find the image
+		// grown but not yet its filesystem (both steps are idempotent).
+		if b.sizeBytes == b.imageBytes && b.ResizeToBytes == 0 {
 			continue
 		}
 

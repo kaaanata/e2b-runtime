@@ -82,6 +82,13 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 		return
 	}
 
+	resize, apiErr := a.volumeResizes(body.VolumeMounts)
+	if apiErr != nil {
+		apierrors.SendAPIError(c, apiErr)
+
+		return
+	}
+
 	teamID := teamInfo.Team.ID
 	backend := a.resumeBackend()
 
@@ -129,6 +136,12 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 
 			return
 		case sandbox.StateRunning:
+			if resize != nil {
+				apierrors.SendAPIError(c, errResizeRunning(sandboxID))
+
+				return
+			}
+
 			a.sendAPIStoreError(c, http.StatusConflict, fmt.Sprintf("Sandbox %s is already running", sandboxID))
 
 			logger.L().Debug(ctx, "Sandbox is already running",
@@ -196,7 +209,7 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 		sandboxID,
 		timeout,
 		teamInfo,
-		a.buildResumeSandboxData(sandboxID, body.AutoPause, body.Memory),
+		a.buildResumeSandboxData(sandboxID, body.AutoPause, body.Memory, resize),
 		&c.Request.Header,
 		true,
 		demandsFilesystemBoot(body.Memory, lastSnapshot.Snapshot),
@@ -232,8 +245,9 @@ func convertDatabaseMountsToOrchestratorMounts(volumes []*types.SandboxVolumeMou
 // buildResumeSandboxData returns a SandboxDataFetcher for resuming a sandbox
 // from its own snapshot. memory is the request's optional memory field; nil
 // (the implicit paths: auto-resume, fork) means a plain resume.
-func (a *APIStore) buildResumeSandboxData(sandboxID string, autoPauseOverride, memory *bool) orchestrator.SandboxDataFetcher {
-	return a.buildResumeSandboxDataFromSnapshot(sandboxID, sandboxID, autoPauseOverride, memory, false)
+// resize is the request's validated volumeMounts (nil: no resize).
+func (a *APIStore) buildResumeSandboxData(sandboxID string, autoPauseOverride, memory *bool, resize map[string]int64) orchestrator.SandboxDataFetcher {
+	return a.buildResumeSandboxDataFromSnapshot(sandboxID, sandboxID, autoPauseOverride, memory, false, resize)
 }
 
 const errCodeMemoryOverrideDisabled = "sandbox_memory_override_disabled"
@@ -313,7 +327,7 @@ func resolveFilesystemBoot(ctx context.Context, flags featureFlagsClient, memory
 // for resume operations. sandboxID is the ID the sandbox will run under — it
 // differs from snapshotSandboxID when forking — and scopes the envd access token.
 // The returned callback is called inside the sandbox lock to prevent race conditions.
-func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandboxID string, autoPauseOverride, memory *bool, allowSharedIdentity bool) orchestrator.SandboxDataFetcher {
+func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandboxID string, autoPauseOverride, memory *bool, allowSharedIdentity bool, resize map[string]int64) orchestrator.SandboxDataFetcher {
 	return func(ctx context.Context) (orchestrator.SandboxMetadata, *api.APIError) {
 		lastSnapshot, err := a.snapshotCache.Get(ctx, snapshotSandboxID)
 		if err != nil {
@@ -381,7 +395,7 @@ func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandbox
 		// Block volumes bind to the revisions recorded with this snapshot
 		// build; resume and fork differ in which incarnation they write.
 		attacher, apiErr := a.planResumeBlockVolumes(ctx, snap.TeamID, build.ID, volumeMounts,
-			snapshotSandboxID != sandboxID, !snapshotIsFilesystemOnly(snap), filesystemBoot, allowSharedIdentity)
+			snapshotSandboxID != sandboxID, !snapshotIsFilesystemOnly(snap), filesystemBoot, allowSharedIdentity, resize)
 		if apiErr != nil {
 			return orchestrator.SandboxMetadata{}, apiErr
 		}

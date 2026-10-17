@@ -429,6 +429,44 @@ func (q *Queries) GetVolumeRevision(ctx context.Context, arg GetVolumeRevisionPa
 	return i, err
 }
 
+const growBlockVolumeCapacity = `-- name: GrowBlockVolumeCapacity :exec
+UPDATE volumes SET capacity_bytes = $1
+WHERE id = $2 AND backend = 'block' AND head_incarnation_id = $3
+  AND capacity_bytes < $1
+`
+
+type GrowBlockVolumeCapacityParams struct {
+	CapacityBytes *int64
+	VolumeID      uuid.UUID
+	IncarnationID *uuid.UUID
+}
+
+// GrowBlockVolumeCapacity records a grown head incarnation's capacity as the
+// volume's. A grown incarnation that is not the head (none today) leaves the
+// volume's capacity as it is.
+func (q *Queries) GrowBlockVolumeCapacity(ctx context.Context, arg GrowBlockVolumeCapacityParams) error {
+	_, err := q.db.Exec(ctx, growBlockVolumeCapacity, arg.CapacityBytes, arg.VolumeID, arg.IncarnationID)
+	return err
+}
+
+const growVolumeIncarnationCapacity = `-- name: GrowVolumeIncarnationCapacity :exec
+UPDATE volume_incarnations SET capacity_bytes = $1
+WHERE id = $2 AND volume_id = $3 AND capacity_bytes < $1
+`
+
+type GrowVolumeIncarnationCapacityParams struct {
+	CapacityBytes int64
+	ID            uuid.UUID
+	VolumeID      uuid.UUID
+}
+
+// GrowVolumeIncarnationCapacity records that a resume grew an incarnation's
+// image. Capacities only grow, so a smaller value is a no-op.
+func (q *Queries) GrowVolumeIncarnationCapacity(ctx context.Context, arg GrowVolumeIncarnationCapacityParams) error {
+	_, err := q.db.Exec(ctx, growVolumeIncarnationCapacity, arg.CapacityBytes, arg.ID, arg.VolumeID)
+	return err
+}
+
 const incarnationAttachedSince = `-- name: IncarnationAttachedSince :one
 SELECT EXISTS (
     SELECT 1 FROM volume_attachments

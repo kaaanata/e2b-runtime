@@ -487,6 +487,9 @@ type ConnectSandbox struct {
 
 	// Timeout Timeout in seconds from the current time after which the sandbox should expire
 	Timeout int32 `json:"timeout"`
+
+	// VolumeMounts Grow block volumes of a paused sandbox before it is resumed; refused with 409 (`error_code` `volume_resize_invalid`) when the sandbox is running, one entry per volume (by name; at most one entry per volume). Omitted volumes keep their capacity. See `ResumeVolumeMount`.
+	VolumeMounts *[]ResumeVolumeMount `json:"volumeMounts,omitempty"`
 }
 
 // CreatedTeamAPIKey defines model for CreatedTeamAPIKey.
@@ -550,7 +553,7 @@ type Error struct {
 	// Code Error code
 	Code int32 `json:"code"`
 
-	// ErrorCode Machine-readable semantic error code. Not a closed set; initial values: sandbox_capacity_unavailable, sandbox_placement_timeout, sandbox_no_compatible_node, sandbox_create_failed, internal_server_error. Block volume refusals (409): block_volume_shared_identity_required, volume_attached, volume_referenced_by_snapshot, volume_creating.
+	// ErrorCode Machine-readable semantic error code. Not a closed set; initial values: sandbox_capacity_unavailable, sandbox_placement_timeout, sandbox_no_compatible_node, sandbox_create_failed, internal_server_error. Block volume refusals (409): block_volume_shared_identity_required, volume_attached, volume_referenced_by_snapshot, volume_creating, template_layout_mismatch, volume_resize_invalid.
 	ErrorCode *string `json:"error_code,omitempty"`
 
 	// Message Error
@@ -891,6 +894,15 @@ type NodeStatusChange struct {
 // OrderDirection Sort direction
 type OrderDirection string
 
+// ResumeVolumeMount A new capacity for one block volume of a paused sandbox, applied when the sandbox resumes. `capacityGiB` must be one of the deployment's capacity tiers (400 otherwise) and at least the volume's current capacity (409 `volume_resize_invalid` when smaller; equal is a no-op). Volumes only grow. Resuming a memory snapshot grows the disk device and the guest grows the mounted filesystem online; resuming a filesystem-only snapshot grows the filesystem before boot. The new capacity is recorded on the volume once the sandbox runs, and the next pause seals revisions of that size. If the resume fails, retry it with the same capacity. Shared (NFS) volumes and names the snapshot does not mount as block volumes are refused with 400.
+type ResumeVolumeMount struct {
+	// CapacityGiB New capacity of the volume in GiB
+	CapacityGiB int64 `json:"capacityGiB"`
+
+	// Name Name of a block volume the sandbox mounts
+	Name string `json:"name"`
+}
+
 // ResumedSandbox defines model for ResumedSandbox.
 type ResumedSandbox struct {
 	// AutoPause Automatically pauses the sandbox after the timeout
@@ -902,6 +914,9 @@ type ResumedSandbox struct {
 
 	// Timeout Time to live for the sandbox in seconds.
 	Timeout *int32 `json:"timeout,omitempty"`
+
+	// VolumeMounts Grow block volumes of a paused sandbox before it runs again, one entry per volume (by name; at most one entry per volume). Omitted volumes keep their capacity. See `ResumeVolumeMount`.
+	VolumeMounts *[]ResumeVolumeMount `json:"volumeMounts,omitempty"`
 }
 
 // Rig An orchestrator node pool backed by one cloud scaling group
@@ -2645,7 +2660,7 @@ type ClientInterface interface {
 
 	// PostSandboxesWithBody Create sandbox
 	//
-	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
+	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -2654,7 +2669,7 @@ type ClientInterface interface {
 
 	// PostSandboxes Create sandbox
 	//
-	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
+	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -3705,7 +3720,7 @@ func (c *Client) GetSandboxes(ctx context.Context, params *GetSandboxesParams, r
 
 // PostSandboxesWithBody Create sandbox
 //
-// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
+// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 //
 // Takes any type of body and a specified content type.
 //
@@ -3724,7 +3739,7 @@ func (c *Client) PostSandboxesWithBody(ctx context.Context, contentType string, 
 
 // PostSandboxes Create sandbox
 //
-// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
+// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 //
 // Takes a body of the `application/json` content type.
 //
@@ -8814,7 +8829,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostSandboxesWithBodyWithResponse Create sandbox
 	//
-	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
+	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -8823,7 +8838,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostSandboxesWithResponse Create sandbox
 	//
-	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
+	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -14608,7 +14623,7 @@ func (c *ClientWithResponses) GetSandboxesWithResponse(ctx context.Context, para
 
 // PostSandboxesWithBodyWithResponse Create sandbox
 //
-// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
+// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -14623,7 +14638,7 @@ func (c *ClientWithResponses) PostSandboxesWithBodyWithResponse(ctx context.Cont
 
 // PostSandboxesWithResponse Create sandbox
 //
-// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. A block volume that another sandbox already mounts (`error_code` `volume_attached`) answers 409.
+// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //

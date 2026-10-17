@@ -19,6 +19,9 @@ const (
 	// errCodeTemplateLayoutMismatch: the template build has no workspace slot
 	// that can hold a block mount (409 on sandbox create).
 	errCodeTemplateLayoutMismatch = "template_layout_mismatch"
+	// errCodeVolumeResizeInvalid: a resume asked to shrink a block volume, or
+	// to resize the volumes of a sandbox that is running (409).
+	errCodeVolumeResizeInvalid = "volume_resize_invalid"
 )
 
 const errMsgSharedIdentityRequired = "Forking a sandbox with block volumes resumes the same memory and filesystem identity in every fork; " +

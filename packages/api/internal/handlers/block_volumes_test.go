@@ -589,27 +589,27 @@ func TestBlockVolumeAttach(t *testing.T) {
 
 		mounts := []*orchestrator.SandboxVolumeMount{{Id: vol.ID.String(), Name: "ws", Path: "/w", Backend: volumeBackendBlock}}
 
-		_, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, true, true, false)
+		_, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, true, true, false, nil)
 		require.NotNil(t, apiErr)
 		assert.Equal(t, http.StatusConflict, apiErr.Code, "resume without memory is refused")
 
-		_, apiErr = f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, false, false, false)
+		_, apiErr = f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, false, false, false, nil)
 		require.NotNil(t, apiErr, "a filesystem-only snapshot needs a quiesced revision")
 
-		_, apiErr = f.store.planResumeBlockVolumes(ctx, f.team.ID, uuid.New(), mounts, false, true, false, false)
+		_, apiErr = f.store.planResumeBlockVolumes(ctx, f.team.ID, uuid.New(), mounts, false, true, false, false, nil)
 		require.NotNil(t, apiErr, "a snapshot without recorded revisions is refused")
 
-		_, apiErr = f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, true, true, false, false)
+		_, apiErr = f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, true, true, false, false, nil)
 		require.NotNil(t, apiErr)
 		assert.Contains(t, apiErr.ClientMsg, "allowSharedIdentity")
 
-		fork, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, true, true, false, true)
+		fork, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, true, true, false, true, nil)
 		require.Nil(t, apiErr)
 		assert.Equal(t, bindClone, fork.plans[0].binding)
 		assert.Equal(t, dboutbox.VolumeCloneMemoryRestore, fork.plans[0].cloneMode)
 		assert.Equal(t, sealed.ID, fork.plans[0].revision.ID)
 
-		resume, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, true, false, false)
+		resume, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, true, false, false, nil)
 		require.Nil(t, apiErr)
 		require.Equal(t, bindExact, resume.plans[0].binding)
 
@@ -637,7 +637,7 @@ func TestBlockVolumeAttach(t *testing.T) {
 		sealRevision(t, f, vol, inc, consistencyPairedMemory, buildID)
 
 		mounts := []*orchestrator.SandboxVolumeMount{{Id: vol.ID.String(), Name: "ws", Path: "/w", Backend: volumeBackendBlock}}
-		resume, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, true, false, false)
+		resume, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, true, false, false, nil)
 		require.Nil(t, apiErr)
 
 		bound, apiErr := resume.Attach(ctx, uuid.New(), "sbx", "e2")

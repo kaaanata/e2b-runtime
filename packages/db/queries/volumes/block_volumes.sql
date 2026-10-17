@@ -191,3 +191,17 @@ WHERE snapshot_build_id IN (
     UNION
     SELECT eb.id FROM env_builds eb WHERE eb.env_id = @template_id
 );
+
+-- GrowVolumeIncarnationCapacity records that a resume grew an incarnation's
+-- image. Capacities only grow, so a smaller value is a no-op.
+-- name: GrowVolumeIncarnationCapacity :exec
+UPDATE volume_incarnations SET capacity_bytes = @capacity_bytes
+WHERE id = @id AND volume_id = @volume_id AND capacity_bytes < @capacity_bytes;
+
+-- GrowBlockVolumeCapacity records a grown head incarnation's capacity as the
+-- volume's. A grown incarnation that is not the head (none today) leaves the
+-- volume's capacity as it is.
+-- name: GrowBlockVolumeCapacity :exec
+UPDATE volumes SET capacity_bytes = @capacity_bytes
+WHERE id = @volume_id AND backend = 'block' AND head_incarnation_id = @incarnation_id
+  AND capacity_bytes < @capacity_bytes;

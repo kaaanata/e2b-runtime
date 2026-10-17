@@ -93,13 +93,27 @@ func TestResume_CompletedRestoreIsCaughtByTheReRead(t *testing.T) {
 // connectStub answers "pausing" until the wait reports the restore, then
 // answers with the running sandbox.
 type connectStub struct {
-	sbx      sandbox.Sandbox
-	waited   bool
-	waitErr  error
-	waitCall int
+	sbx        sandbox.Sandbox
+	waited     bool
+	waitErr    error
+	waitCall   int
+	keepAlives int
+}
+
+func (s *connectStub) GetSandbox(context.Context, uuid.UUID, string) (sandbox.Sandbox, error) {
+	if !s.waited {
+		pausing := s.sbx
+		pausing.State = sandbox.StatePausing
+
+		return pausing, nil
+	}
+
+	return s.sbx, nil
 }
 
 func (s *connectStub) KeepAliveFor(_ context.Context, _ uuid.UUID, sandboxID string, _ time.Duration, _ bool) (*sandbox.Sandbox, *api.APIError) {
+	s.keepAlives++
+
 	if !s.waited {
 		return nil, &api.APIError{Code: http.StatusConflict, Err: &sandbox.NotRunningError{SandboxID: sandboxID, State: sandbox.StatePausing}, ClientMsg: "pausing"}
 	}
