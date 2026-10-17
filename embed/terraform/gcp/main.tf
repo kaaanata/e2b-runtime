@@ -8,6 +8,7 @@ locals {
     sandbox_access_token_hash_seed = random_bytes.sandbox_access_token_hash_seed.hex
     team_api_key                   = local.team_api_key
     hugepages                      = var.hugepages
+    dashboard_host                 = google_compute_address.this.address
   })
 }
 

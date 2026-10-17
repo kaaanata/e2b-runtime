@@ -36,7 +36,7 @@ setup() {
   [ "$status" -eq 1 ]
 }
 
-# The startup script deletes four keys from the shipped .env and appends its
+# The startup script deletes five keys from the shipped .env and appends its
 # own, which is what puts a Terraform install on the secrets in its state and
 # the sizing its variables ask for. compose.yaml reads each of them as
 # ${KEY:-...}, so renaming one there and not here would silently drop the
@@ -69,4 +69,30 @@ setup() {
       return 1
     }
   done <<<"$keys"
+}
+
+# The comment at the top of firewall.tf is the whole reasoning for the one rule
+# an operator's CIDRs reach: it lists every port the stack binds and then names
+# the few that are opened. Nothing else ties that prose to the HCL under it, so
+# a port added to the rule and not the sentence -- or dropped from the sentence
+# and left in the rule -- leaves the file arguing with itself, and the next
+# reader deciding what the module exposes believes the sentence.
+@test "the firewall header names the ports the clients rule opens" {
+  header="$(sed -e '/^[^#]/,$d' -e 's/^#[[:space:]]*//' firewall.tf | tr '\n' ' ')"
+  documented="$(printf '%s\n' "$header" |
+    sed -n 's/.*[[:space:]]only \(.*\) are opened.*/\1/p' |
+    grep -oE '[0-9]+' | sort -n)"
+  # An anchor that stopped matching would pass the test vacuously.
+  [ -n "$documented" ]
+
+  # The clients rule's own allow block, the first one in the file.
+  opened="$(awk '/"google_compute_firewall" "clients"/ { f = 1 }
+                 f && /ports +=/ { print; exit }' firewall.tf |
+    grep -oE '[0-9]+' | sort -n)"
+  [ -n "$opened" ]
+
+  diff <(printf '%s\n' "$documented") <(printf '%s\n' "$opened") || {
+    echo "the header comment (-) and the clients rule (+) name different ports"
+    return 1
+  }
 }

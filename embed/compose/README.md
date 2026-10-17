@@ -60,12 +60,20 @@ longer. Nothing is rolled back if it fails, and nothing needs to be: see
 
 ## Try it
 
-Put this install's three SDK variables, its own team API key included, in
-your shell:
+Put this install's three SDK variables and the dashboard URL, its own team
+API key included, in your shell:
 
 ```bash
 eval "$(docker compose exec ready cat /run/e2b/sdk.env)"
 ```
+
+Open the dashboard at `$E2B_DASHBOARD_URL` (http://localhost:3001) and paste
+`$E2B_API_KEY` into its key form. On the machine itself, or through the
+tunnel in [Ports](#ports), that is all. From another machine without a
+tunnel, the browser also has to reach sandbox traffic on port 3002 at an
+address it can open: set `E2B_DASHBOARD_HOST=<this host's address>` in
+`.env` and run `docker compose up -d --wait` again, which recreates only the
+`dashboard` service.
 
 Install the SDK in a virtual environment, which is what keeps it off the
 system Python that Ubuntu's `pip` refuses to write to. On Ubuntu `venv`
@@ -115,10 +123,14 @@ whose files the purge removed.
 | `docker compose up -d --wait` | start (or reconcile) everything and wait until the `base` template exists |
 | `docker compose ps` | service status; `ready` running means the stack is usable |
 | `docker compose logs -f api orchestrator` | follow logs |
-| `docker compose logs ready` | the three SDK `export` lines, this install's team API key included |
+| `docker compose logs ready` | the four `export` lines, this install's team API key and dashboard URL included |
 | `docker compose --profile test run --rm smoke` | run the SDK smoke test in a container |
 
-One stack per host; there are no VM-name, port or sizing knobs. `HUGEPAGES`
+One stack per host; there are no VM-name, port or sizing knobs.
+`E2B_DASHBOARD_HOST` (default `localhost`) is the address a browser uses for
+sandbox traffic on port 3002 from the dashboard; set it in `.env` to this
+host's address when you open the dashboard from another machine without a
+tunnel. `HUGEPAGES`
 (default 2048) and `PF_MIN_FREE_GIB` (default 20) can be lowered in `.env` or
 the environment for small hosts and CI. `FORCE_REBUILD=1`, settable in the
 same two places, forces `base-template` to rebuild even when a `base` row
@@ -188,19 +200,19 @@ docker compose down -v && docker compose --profile purge run --rm host-teardown
 
 ### Ports
 
-The eleven ports and what each is for are in the hub. Compose binds them on
-every host interface: let trusted clients reach 3000 and 3002, and make sure
-the other nine are reachable on no address the host holds, its own public one
-included, not only from the network edge.
+The thirteen ports and what each is for are in the hub. Compose binds them on
+every host interface: let trusted clients reach 3000, 3001 and 3002, and make
+sure the other ten are reachable on no address the host holds, its own public
+one included, not only from the network edge.
 
-From another machine, tunnel rather than open, and use the same three
+From another machine, tunnel rather than open, and use the same four
 variables with `127.0.0.1` in place of `localhost`. Template builds with
 `copy()` steps upload through the orchestrator's port 5008, which stays closed
 to the network, so tunnel that too; the upload URL the stack hands out
 (`http://127.0.0.1:5008/...`) is then valid unchanged.
 
 ```bash
-ssh -N -L 3000:127.0.0.1:3000 -L 3002:127.0.0.1:3002 -L 5008:127.0.0.1:5008 <user>@<host>
+ssh -N -L 3000:127.0.0.1:3000 -L 3001:127.0.0.1:3001 -L 3002:127.0.0.1:3002 -L 5008:127.0.0.1:5008 <user>@<host>
 ```
 
 ### Secrets
@@ -231,13 +243,17 @@ not recreate `ready`, so `ready` watches the key file instead. Keys created
 any other way are never touched, and nothing in the two shipped files carries
 a key ([`../tests/team-api-key.bats`](../tests/team-api-key.bats)).
 
+The dashboard keeps the key you paste in an httpOnly browser cookie for a
+year, not marked Secure because the dashboard is served over plain http;
+sign-out clears it, and rotating the key signs every browser out.
+
 The api's own two secrets, `ADMIN_TOKEN` and
 `SANDBOX_ACCESS_TOKEN_HASH_SEED`, are this install's own in the same way. The
 `api-secrets` one-shot generates both on the first `up` and keeps them in the
 `seed-state` volume as `/run/e2b/api.env`, a file only root can read, as
 `GEN_ADMIN_TOKEN` and `GEN_SANDBOX_ACCESS_TOKEN_HASH_SEED`; a later run finds
-them again and the api's entrypoint reads them; nothing prints them, and
-`down -v` drops them with the databases. The hub's
+them again and the entrypoints of the api and dashboard-api read them;
+nothing prints them, and `down -v` drops them with the databases. The hub's
 [Secrets](../README.md#secrets) says what the two are for.
 
 To choose your own instead, put them in `.env` before the first `up`. A value
@@ -254,7 +270,7 @@ the api on it:
 ```bash
 docker compose run --rm --no-deps --entrypoint rm api-secrets /run/e2b/api.env
 docker compose run --rm --no-deps api-secrets
-docker compose up -d --no-deps --force-recreate api
+docker compose up -d --no-deps --force-recreate api dashboard-api
 ```
 
 `--no-deps` throughout: the two one-shot runs need no other service, and
@@ -262,9 +278,10 @@ recreating the api's dependencies would restart the orchestrator and end every
 running sandbox. The new hash seed invalidates the traffic and envd tokens of
 the `secure` sandboxes that survive the api's restart, and the new admin token
 invalidates every admin client. A value pinned in `.env` is not rotated by
-this: change the line and recreate the api. `docker compose exec api env` shows
-both empty: the entrypoint fills them in for the api process only. Read them
-from the volume instead: `docker compose run --rm --no-deps --entrypoint cat
+this: change the line and recreate the api and dashboard-api.
+`docker compose exec api env` shows both empty: the entrypoint fills them in
+for the api process only. Read them from the volume instead:
+`docker compose run --rm --no-deps --entrypoint cat
 api-secrets /run/e2b/api.env`.
 
 ### Upgrading
@@ -283,10 +300,10 @@ restarts; a single machine has nowhere to drain them to.
 ### Known limitations
 
 - Nothing on this stack authenticates a network peer except api's own API key
-  and admin token check. Eleven ports bind every host interface, and the
+  and admin token check. Thirteen ports bind every host interface, and the
   orchestrator's 5008 in particular is an unauthenticated control API that
-  creates and kills sandboxes. Expose 3000 and 3002 to trusted clients if you
-  must, and keep the other nine unreachable on every address the host holds,
+  creates and kills sandboxes. Expose 3000, 3001 and 3002 to trusted clients if
+  you must, and keep the other ten unreachable on every address the host holds,
   its own public one included.
 - The team API key rotates only through the seed (set `TEAM_API_KEY`, or
   remove the key file, then `up`), not through an API call, and the old key
@@ -295,6 +312,11 @@ restarts; a single machine has nowhere to drain them to.
   because no identity provider is configured, and, every ten seconds from both
   api and the orchestrator, `failed to upload metrics: exporter export
   timeout`, because no OTEL collector is configured and the endpoint is empty.
+  dashboard-api also logs `ADMIN_AUTH_PROVIDER_CONFIG is not configured` once
+  at startup; the management endpoints it guards are not used here.
+- To run without the dashboard, remove the `dashboard` and `dashboard-api`
+  services from your copy of `compose.yaml`, and `dashboard` from `ready`'s
+  `depends_on`; the rest of the stack runs.
 
 ### Troubleshooting
 

@@ -1,5 +1,5 @@
 variable "project_id" {
-  description = "GCP project that hosts the stack. Compute Engine API must be enabled."
+  description = "GCP project that hosts the stack. The Compute Engine and Cloud Resource Manager APIs must be enabled."
   type        = string
 }
 
@@ -48,7 +48,7 @@ variable "image" {
 }
 
 variable "client_cidrs" {
-  description = "CIDRs allowed to reach the API (3000) and sandbox proxy (3002). Nothing else is reachable from outside."
+  description = "CIDRs allowed to reach the API (3000), the dashboard (3001) and sandbox proxy (3002). Nothing else is reachable from outside."
   type        = list(string)
   validation {
     condition     = length(var.client_cidrs) > 0

@@ -39,9 +39,10 @@ setup() {
 # The three stack-image variables, in the order the two install files list them.
 STACK_VARS=(E2B_TOOLS_IMAGE E2B_NODE_E2B_IMAGE E2B_SEED_IMAGE)
 
-# env_pin <variable>: the value compose/.env assigns it.
+# env_pin <variable>: the value compose/.env assigns it, without a trailing
+# comment such as the release marker on the dashboard-api line.
 env_pin() {
-  sed -n "s|^$1=||p" compose/.env
+  sed -n "s|^$1=\([^ #]*\).*|\1|p" compose/.env
 }
 
 # k8s_pin <variable>: the newName:newTag the kustomization gives that image
@@ -115,4 +116,39 @@ bake_repository() {
       return 1
     fi
   done
+}
+
+# The dashboard is two more pins. dashboard-api is a platform image released
+# with the group, so its line carries the release marker and must be built
+# from the same source commit as the api it serves (the auto-deploy tag ends
+# in that commit). The dashboard image has its own release line outside the
+# group, so its line carries no marker and is bumped by hand.
+DASHBOARD_VARS=(E2B_DASHBOARD_API_IMAGE E2B_DASHBOARD_IMAGE)
+
+@test "the two dashboard pins are in both install files and equal" {
+  local var env k8s
+  for var in "${DASHBOARD_VARS[@]}"; do
+    env="$(env_pin "$var")"
+    k8s="$(k8s_pin "$var")"
+    [ -n "$env" ] || { echo "compose/.env has no $var" >&2; return 1; }
+    [ -n "$k8s" ] || { echo "kubernetes/kustomization.yaml has no $var entry" >&2; return 1; }
+    [ "$env" = "$k8s" ] || { echo "$var is $env in compose/.env and $k8s in kubernetes/kustomization.yaml" >&2; return 1; }
+  done
+}
+
+@test "dashboard-api is built from the api's source commit" {
+  api_tag="$(sed -n 's/^E2B_API_IMAGE=.*:\(v[^ #]*\).*/\1/p' compose/.env)"
+  dash_tag="$(sed -n 's/^E2B_DASHBOARD_API_IMAGE=.*:\(v[^ #]*\).*/\1/p' compose/.env)"
+  [ -n "$api_tag" ] && [ -n "$dash_tag" ]
+  [ "${api_tag##*-}" = "${dash_tag##*-}" ] || {
+    echo "api is built from ${api_tag##*-} and dashboard-api from ${dash_tag##*-}; dashboard-api checks the schema level its api's migrator applied, so the two move together" >&2
+    return 1
+  }
+}
+
+@test "the dashboard-api pin carries the release marker and the dashboard pin does not" {
+  grep -qE '^E2B_DASHBOARD_API_IMAGE=.* # x-release-please-version$' compose/.env
+  grep -qE '^E2B_DASHBOARD_IMAGE=us-docker\.pkg\.dev/e2b-artifacts/dashboard/dashboard:v[0-9]+\.[0-9]+\.[0-9]+$' compose/.env
+  grep -A2 '^  - name: E2B_DASHBOARD_API_IMAGE$' kubernetes/kustomization.yaml | grep -qE 'newTag: .* # x-release-please-version$'
+  grep -A2 '^  - name: E2B_DASHBOARD_IMAGE$' kubernetes/kustomization.yaml | grep -qE 'newTag: v[0-9]+\.[0-9]+\.[0-9]+$'
 }
