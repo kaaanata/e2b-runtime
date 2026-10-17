@@ -5,6 +5,7 @@
 package queries
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/e2b-dev/infra/packages/db/pkg/types"
@@ -100,9 +101,78 @@ type UsersTeam struct {
 }
 
 type Volume struct {
-	ID         uuid.UUID
-	TeamID     uuid.UUID
-	Name       string
-	VolumeType string
-	CreatedAt  pgtype.Timestamptz
+	ID                uuid.UUID
+	TeamID            uuid.UUID
+	Name              string
+	VolumeType        string
+	CreatedAt         pgtype.Timestamptz
+	Backend           string
+	OwnerNodeID       *string
+	CapacityBytes     *int64
+	Lifecycle         string
+	HeadIncarnationID *uuid.UUID
+	DeletedAt         pgtype.Timestamptz
+}
+
+type VolumeAttachment struct {
+	ID            uuid.UUID
+	VolumeID      uuid.UUID
+	IncarnationID uuid.UUID
+	SandboxID     string
+	ExecutionID   string
+	NodeID        string
+	Mode          string
+	DesiredState  string
+	ObservedState string
+	DriveID       string
+	GuestPath     string
+	CreatedAt     pgtype.Timestamptz
+	ReleasedAt    pgtype.Timestamptz
+}
+
+type VolumeIncarnation struct {
+	ID               uuid.UUID
+	VolumeID         uuid.UUID
+	ParentRevisionID *uuid.UUID
+	NodeID           string
+	SubvolPath       string
+	SubvolUuid       uuid.UUID
+	FsUuid           uuid.UUID
+	CapacityBytes    int64
+	State            string
+	CreatedAt        pgtype.Timestamptz
+	DeletedAt        pgtype.Timestamptz
+	OperationID      uuid.UUID
+}
+
+type VolumeOperation struct {
+	ID             uuid.UUID
+	TeamID         uuid.UUID
+	VolumeID       *uuid.UUID
+	Kind           string
+	IdempotencyKey string
+	ParamsHash     string
+	Params         json.RawMessage
+	State          string
+	Result         json.RawMessage
+	Error          *string
+	Attempts       int32
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	FinishedAt     pgtype.Timestamptz
+}
+
+type VolumeRevision struct {
+	ID            uuid.UUID
+	VolumeID      uuid.UUID
+	IncarnationID uuid.UUID
+	ParentID      *uuid.UUID
+	SubvolUuid    uuid.UUID
+	FsUuid        uuid.UUID
+	SizeBytes     int64
+	Consistency   string
+	State         string
+	CreatedAt     pgtype.Timestamptz
+	DeletedAt     pgtype.Timestamptz
+	OperationID   uuid.UUID
 }
