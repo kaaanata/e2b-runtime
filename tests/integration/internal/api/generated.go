@@ -232,6 +232,102 @@ func (e TemplateBuildStatus) Valid() bool {
 	}
 }
 
+// Defines values for VolumeAndTokenContentApi.
+const (
+	Supported   VolumeAndTokenContentApi = "supported"
+	Unsupported VolumeAndTokenContentApi = "unsupported"
+)
+
+// Valid indicates whether the value is a known member of the VolumeAndTokenContentApi enum.
+func (e VolumeAndTokenContentApi) Valid() bool {
+	switch e {
+	case Supported:
+		return true
+	case Unsupported:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VolumeBackend.
+const (
+	Block VolumeBackend = "block"
+	Nfs   VolumeBackend = "nfs"
+)
+
+// Valid indicates whether the value is a known member of the VolumeBackend enum.
+func (e VolumeBackend) Valid() bool {
+	switch e {
+	case Block:
+		return true
+	case Nfs:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VolumeConsistencyProfile.
+const (
+	Cto    VolumeConsistencyProfile = "cto"
+	Strict VolumeConsistencyProfile = "strict"
+)
+
+// Valid indicates whether the value is a known member of the VolumeConsistencyProfile enum.
+func (e VolumeConsistencyProfile) Valid() bool {
+	switch e {
+	case Cto:
+		return true
+	case Strict:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VolumeRevisionConsistency.
+const (
+	FilesystemQuiesced VolumeRevisionConsistency = "filesystem-quiesced"
+	PairedMemory       VolumeRevisionConsistency = "paired-memory"
+)
+
+// Valid indicates whether the value is a known member of the VolumeRevisionConsistency enum.
+func (e VolumeRevisionConsistency) Valid() bool {
+	switch e {
+	case FilesystemQuiesced:
+		return true
+	case PairedMemory:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VolumeState.
+const (
+	VolumeStateCreating VolumeState = "creating"
+	VolumeStateDeleting VolumeState = "deleting"
+	VolumeStateFailed   VolumeState = "failed"
+	VolumeStateReady    VolumeState = "ready"
+)
+
+// Valid indicates whether the value is a known member of the VolumeState enum.
+func (e VolumeState) Valid() bool {
+	switch e {
+	case VolumeStateCreating:
+		return true
+	case VolumeStateDeleting:
+		return true
+	case VolumeStateFailed:
+		return true
+	case VolumeStateReady:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GetTeamsTeamIDMetricsMaxParamsMetric.
 const (
 	ConcurrentSandboxes GetTeamsTeamIDMetricsMaxParamsMetric = "concurrent_sandboxes"
@@ -338,6 +434,15 @@ type BuildStatusReason struct {
 
 // CPUCount CPU cores for the sandbox
 type CPUCount = int32
+
+// CloneVolume defines model for CloneVolume.
+type CloneVolume struct {
+	// Name Name of the new volume
+	Name string `json:"name"`
+
+	// RevisionID Revision to clone. Defaults to the source volume's newest revision that can be booted without its paired memory snapshot (`filesystem-quiesced`).
+	RevisionID *string `json:"revisionID,omitempty"`
+}
 
 // ConnectSandbox defines model for ConnectSandbox.
 type ConnectSandbox struct {
@@ -602,6 +707,12 @@ type NewTeamAPIKey struct {
 
 // NewVolume defines model for NewVolume.
 type NewVolume struct {
+	// Backend `nfs` volumes are shared directories any number of sandboxes can mount and write at once. `block` volumes are workspace disks: a fixed-size filesystem on one node with a single writing sandbox at a time, sealed into revisions together with paused sandboxes and cloneable from those revisions.
+	Backend *VolumeBackend `json:"backend,omitempty"`
+
+	// CapacityGiB Capacity of a block volume in GiB; must be one of the deployment's capacity tiers. Required for block volumes.
+	CapacityGiB *int64 `json:"capacityGiB,omitempty"`
+
 	// Name Name of the volume
 	Name string `json:"name"`
 }
@@ -923,6 +1034,9 @@ type SandboxEgressProxyConfig struct {
 
 // SandboxForkRequest defines model for SandboxForkRequest.
 type SandboxForkRequest struct {
+	// AllowSharedIdentity Required to fork a sandbox that mounts block volumes. Every fork resumes the same memory snapshot and a copy of each block volume taken at that instant, so the forks share everything that was in memory: tokens, sessions, open connections and filesystem identities. Upstream services see the forks as the same client. Without it such a fork is rejected with 409.
+	AllowSharedIdentity *bool `json:"allowSharedIdentity,omitempty"`
+
 	// Count Number of forked sandboxes to create. All forks boot from the same snapshot, so the snapshot is captured once regardless of count. Each fork succeeds or fails independently; the outcome of each is reported in its entry of the response list.
 	Count *int32 `json:"count,omitempty"`
 
@@ -1121,6 +1235,9 @@ type SandboxTimeoutRequest struct {
 
 // SandboxVolumeMount defines model for SandboxVolumeMount.
 type SandboxVolumeMount struct {
+	// ConsistencyProfile How a shared (NFS) volume is mounted. `strict` sends every operation to the server with no attribute or name caching, so changes from other sandboxes are visible immediately. `cto` is close-to-open: a writer's changes are visible to a reader that opens the file after the writer closed it, at a fraction of the metadata cost. Omitted keeps the sandbox's built-in options. Not accepted for block volumes, which have a single writer.
+	ConsistencyProfile *VolumeConsistencyProfile `json:"consistencyProfile,omitempty"`
+
 	// Name Name of the volume
 	Name string `json:"name"`
 
@@ -1590,8 +1707,20 @@ type UpdateTeamAPIKey struct {
 
 // Volume defines model for Volume.
 type Volume struct {
+	// Backend `nfs` volumes are shared directories any number of sandboxes can mount and write at once. `block` volumes are workspace disks: a fixed-size filesystem on one node with a single writing sandbox at a time, sealed into revisions together with paused sandboxes and cloneable from those revisions.
+	Backend *VolumeBackend `json:"backend,omitempty"`
+
+	// CapacityGiB Fixed capacity of a block volume in GiB
+	CapacityGiB *int64 `json:"capacityGiB,omitempty"`
+
 	// Name Name of the volume
 	Name string `json:"name"`
+
+	// OwnerNode ID of the node holding a block volume; sandboxes mounting it run there
+	OwnerNode *string `json:"ownerNode,omitempty"`
+
+	// State `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed.
+	State *VolumeState `json:"state,omitempty"`
 
 	// VolumeID ID of the volume
 	VolumeID string `json:"volumeID"`
@@ -1599,6 +1728,15 @@ type Volume struct {
 
 // VolumeAndToken defines model for VolumeAndToken.
 type VolumeAndToken struct {
+	// Backend `nfs` volumes are shared directories any number of sandboxes can mount and write at once. `block` volumes are workspace disks: a fixed-size filesystem on one node with a single writing sandbox at a time, sealed into revisions together with paused sandboxes and cloneable from those revisions.
+	Backend *VolumeBackend `json:"backend,omitempty"`
+
+	// CapacityGiB Fixed capacity of a block volume in GiB
+	CapacityGiB *int64 `json:"capacityGiB,omitempty"`
+
+	// ContentApi Whether the volume content API accepts `token`. Block volumes have no content API (their files are reached through a sandbox that mounts them) and return an empty token.
+	ContentApi *VolumeAndTokenContentApi `json:"contentApi,omitempty"`
+
 	// Domain Domain to use as the destination for volume content requests,
 	// replacing the default `api.<E2B_DOMAIN>`. Only returned when the
 	// team is connected to a custom (BYOC) cluster; absent otherwise, in
@@ -1608,12 +1746,71 @@ type VolumeAndToken struct {
 	// Name Name of the volume
 	Name string `json:"name"`
 
+	// OwnerNode ID of the node holding a block volume
+	OwnerNode *string `json:"ownerNode,omitempty"`
+
+	// State `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed.
+	State *VolumeState `json:"state,omitempty"`
+
 	// Token Auth token to use for interacting with volume content
 	Token string `json:"token"`
 
 	// VolumeID ID of the volume
 	VolumeID string `json:"volumeID"`
 }
+
+// VolumeAndTokenContentApi Whether the volume content API accepts `token`. Block volumes have no content API (their files are reached through a sandbox that mounts them) and return an empty token.
+type VolumeAndTokenContentApi string
+
+// VolumeBackend `nfs` volumes are shared directories any number of sandboxes can mount and write at once. `block` volumes are workspace disks: a fixed-size filesystem on one node with a single writing sandbox at a time, sealed into revisions together with paused sandboxes and cloneable from those revisions.
+type VolumeBackend string
+
+// VolumeConsistencyProfile How a shared (NFS) volume is mounted. `strict` sends every operation to the server with no attribute or name caching, so changes from other sandboxes are visible immediately. `cto` is close-to-open: a writer's changes are visible to a reader that opens the file after the writer closed it, at a fraction of the metadata cost. Omitted keeps the sandbox's built-in options. Not accepted for block volumes, which have a single writer.
+type VolumeConsistencyProfile string
+
+// VolumeOperation A block volume change carried out in the background. Poll it until `state` is `succeeded` or `failed`.
+type VolumeOperation struct {
+	Attempts   int32      `json:"attempts"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	Error      *string    `json:"error,omitempty"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+
+	// Kind One of `create`, `clone`, `seal`, `delete`, `reconcile`.
+	Kind        string `json:"kind"`
+	OperationID string `json:"operationID"`
+
+	// State One of `pending`, `running`, `unknown`, `succeeded`, `failed`. `unknown` means the last attempt ended without a definite answer and will be reconciled and retried; `succeeded` and `failed` are final.
+	State     string    `json:"state"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	VolumeID  *string   `json:"volumeID,omitempty"`
+}
+
+// VolumeOperationAccepted defines model for VolumeOperationAccepted.
+type VolumeOperationAccepted struct {
+	// Operation A block volume change carried out in the background. Poll it until `state` is `succeeded` or `failed`.
+	Operation VolumeOperation `json:"operation"`
+	Volume    Volume          `json:"volume"`
+}
+
+// VolumeRevision defines model for VolumeRevision.
+type VolumeRevision struct {
+	// Consistency `filesystem-quiesced` revisions were sealed with the sandbox's filesystems frozen and can be cloned into new volumes; `paired-memory` revisions belong to a memory snapshot and are only usable by resuming or forking that snapshot.
+	Consistency VolumeRevisionConsistency `json:"consistency"`
+	CreatedAt   time.Time                 `json:"createdAt"`
+
+	// IncarnationID Writable image the revision was sealed from
+	IncarnationID    string  `json:"incarnationID"`
+	ParentRevisionID *string `json:"parentRevisionID,omitempty"`
+	RevisionID       string  `json:"revisionID"`
+	SizeBytes        int64   `json:"sizeBytes"`
+	VolumeID         string  `json:"volumeID"`
+}
+
+// VolumeRevisionConsistency `filesystem-quiesced` revisions were sealed with the sandbox's filesystems frozen and can be cloned into new volumes; `paired-memory` revisions belong to a memory snapshot and are only usable by resuming or forking that snapshot.
+type VolumeRevisionConsistency string
+
+// VolumeState `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed.
+type VolumeState string
 
 // ApiKeyID defines model for apiKeyID.
 type ApiKeyID = string
@@ -1624,8 +1821,14 @@ type BuildID = string
 // ClusterID defines model for clusterID.
 type ClusterID = openapi_types.UUID
 
+// IdempotencyKey defines model for idempotencyKey.
+type IdempotencyKey = string
+
 // NodeID defines model for nodeID.
 type NodeID = string
+
+// OperationID defines model for operationID.
+type OperationID = string
 
 // PaginationLimit defines model for paginationLimit.
 type PaginationLimit = int32
@@ -1870,6 +2073,18 @@ type GetV2TemplatesParams struct {
 	Limit *PaginationLimit `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// PostVolumesParams defines parameters for PostVolumes.
+type PostVolumesParams struct {
+	// IdempotencyKey Makes a block volume request safe to retry: a repeat with the same key and the same body returns the original operation instead of starting a new one, and a repeat with a different body is rejected with 409.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// PostVolumesVolumeIDCloneParams defines parameters for PostVolumesVolumeIDClone.
+type PostVolumesVolumeIDCloneParams struct {
+	// IdempotencyKey Makes a block volume request safe to retry: a repeat with the same key and the same body returns the original operation instead of starting a new one, and a repeat with a different body is rejected with 409.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
 // PostAdminTeamsTeamIDApiKeysJSONRequestBody defines body for PostAdminTeamsTeamIDApiKeys for application/json ContentType.
 type PostAdminTeamsTeamIDApiKeysJSONRequestBody = NewTeamAPIKey
 
@@ -1957,6 +2172,9 @@ type PostV3TemplatesJSONRequestBody = TemplateBuildRequestV3
 
 // PostVolumesJSONRequestBody defines body for PostVolumes for application/json ContentType.
 type PostVolumesJSONRequestBody = NewVolume
+
+// PostVolumesVolumeIDCloneJSONRequestBody defines body for PostVolumesVolumeIDClone for application/json ContentType.
+type PostVolumesVolumeIDCloneJSONRequestBody = CloneVolume
 
 // AsAWSRegistry returns the union data inside the FromImageRegistry as a AWSRegistry
 func (t FromImageRegistry) AsAWSRegistry() (AWSRegistry, error) {
@@ -2348,6 +2566,13 @@ type ClientInterface interface {
 	//
 	// Corresponds with POST /nodes/{nodeID} (the `PostNodesNodeID` operationId).
 	PostNodesNodeID(ctx context.Context, nodeID NodeID, body PostNodesNodeIDJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetOperationsOperationID Volume operation
+	//
+	// Get the state of a background block volume operation.
+	//
+	// Corresponds with GET /operations/{operationID} (the `GetOperationsOperationID` operationId).
+	GetOperationsOperationID(ctx context.Context, operationID OperationID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetSandboxes List running sandboxes
 	//
@@ -2922,7 +3147,7 @@ type ClientInterface interface {
 	// Takes any type of body and a specified content type.
 	//
 	// Corresponds with POST /volumes (the `PostVolumes` operationId).
-	PostVolumesWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	PostVolumesWithBody(ctx context.Context, params *PostVolumesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// PostVolumes Create team volume
 	//
@@ -2931,7 +3156,7 @@ type ClientInterface interface {
 	// Takes a body of the `application/json` content type.
 	//
 	// Corresponds with POST /volumes (the `PostVolumes` operationId).
-	PostVolumes(ctx context.Context, body PostVolumesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	PostVolumes(ctx context.Context, params *PostVolumesParams, body PostVolumesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// DeleteVolumesVolumeID Delete team volume
 	//
@@ -2946,6 +3171,31 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /volumes/{volumeID} (the `GetVolumesVolumeID` operationId).
 	GetVolumesVolumeID(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PostVolumesVolumeIDCloneWithBody Clone a block volume
+	//
+	// Create a new block volume from a revision of an existing one, on the same node. The new volume starts with a fresh filesystem identity.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /volumes/{volumeID}/clone (the `PostVolumesVolumeIDClone` operationId).
+	PostVolumesVolumeIDCloneWithBody(ctx context.Context, volumeID VolumeID, params *PostVolumesVolumeIDCloneParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PostVolumesVolumeIDClone Clone a block volume
+	//
+	// Create a new block volume from a revision of an existing one, on the same node. The new volume starts with a fresh filesystem identity.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /volumes/{volumeID}/clone (the `PostVolumesVolumeIDClone` operationId).
+	PostVolumesVolumeIDClone(ctx context.Context, volumeID VolumeID, params *PostVolumesVolumeIDCloneParams, body PostVolumesVolumeIDCloneJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetVolumesVolumeIDRevisions List block volume revisions
+	//
+	// List the sealed revisions of a block volume, newest first
+	//
+	// Corresponds with GET /volumes/{volumeID}/revisions (the `GetVolumesVolumeIDRevisions` operationId).
+	GetVolumesVolumeIDRevisions(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 // GetAdminSandboxesRunningCounts Count running sandboxes by team
@@ -3348,6 +3598,23 @@ func (c *Client) PostNodesNodeIDWithBody(ctx context.Context, nodeID NodeID, con
 // Corresponds with POST /nodes/{nodeID} (the `PostNodesNodeID` operationId).
 func (c *Client) PostNodesNodeID(ctx context.Context, nodeID NodeID, body PostNodesNodeIDJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPostNodesNodeIDRequest(c.Server, nodeID, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetOperationsOperationID Volume operation
+//
+// Get the state of a background block volume operation.
+//
+// Corresponds with GET /operations/{operationID} (the `GetOperationsOperationID` operationId).
+func (c *Client) GetOperationsOperationID(ctx context.Context, operationID OperationID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetOperationsOperationIDRequest(c.Server, operationID)
 	if err != nil {
 		return nil, err
 	}
@@ -4577,8 +4844,8 @@ func (c *Client) GetVolumes(ctx context.Context, reqEditors ...RequestEditorFn) 
 // Takes any type of body and a specified content type.
 //
 // Corresponds with POST /volumes (the `PostVolumes` operationId).
-func (c *Client) PostVolumesWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostVolumesRequestWithBody(c.Server, contentType, body)
+func (c *Client) PostVolumesWithBody(ctx context.Context, params *PostVolumesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostVolumesRequestWithBody(c.Server, params, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -4596,8 +4863,8 @@ func (c *Client) PostVolumesWithBody(ctx context.Context, contentType string, bo
 // Takes a body of the `application/json` content type.
 //
 // Corresponds with POST /volumes (the `PostVolumes` operationId).
-func (c *Client) PostVolumes(ctx context.Context, body PostVolumesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPostVolumesRequest(c.Server, body)
+func (c *Client) PostVolumes(ctx context.Context, params *PostVolumesParams, body PostVolumesJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostVolumesRequest(c.Server, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -4632,6 +4899,61 @@ func (c *Client) DeleteVolumesVolumeID(ctx context.Context, volumeID VolumeID, r
 // Corresponds with GET /volumes/{volumeID} (the `GetVolumesVolumeID` operationId).
 func (c *Client) GetVolumesVolumeID(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetVolumesVolumeIDRequest(c.Server, volumeID)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PostVolumesVolumeIDCloneWithBody Clone a block volume
+//
+// Create a new block volume from a revision of an existing one, on the same node. The new volume starts with a fresh filesystem identity.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /volumes/{volumeID}/clone (the `PostVolumesVolumeIDClone` operationId).
+func (c *Client) PostVolumesVolumeIDCloneWithBody(ctx context.Context, volumeID VolumeID, params *PostVolumesVolumeIDCloneParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostVolumesVolumeIDCloneRequestWithBody(c.Server, volumeID, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PostVolumesVolumeIDClone Clone a block volume
+//
+// Create a new block volume from a revision of an existing one, on the same node. The new volume starts with a fresh filesystem identity.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /volumes/{volumeID}/clone (the `PostVolumesVolumeIDClone` operationId).
+func (c *Client) PostVolumesVolumeIDClone(ctx context.Context, volumeID VolumeID, params *PostVolumesVolumeIDCloneParams, body PostVolumesVolumeIDCloneJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostVolumesVolumeIDCloneRequest(c.Server, volumeID, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetVolumesVolumeIDRevisions List block volume revisions
+//
+// # List the sealed revisions of a block volume, newest first
+//
+// Corresponds with GET /volumes/{volumeID}/revisions (the `GetVolumesVolumeIDRevisions` operationId).
+func (c *Client) GetVolumesVolumeIDRevisions(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetVolumesVolumeIDRevisionsRequest(c.Server, volumeID)
 	if err != nil {
 		return nil, err
 	}
@@ -5419,6 +5741,40 @@ func NewPostNodesNodeIDRequestWithBody(server string, nodeID NodeID, contentType
 	}
 
 	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetOperationsOperationIDRequest constructs an http.Request for the GetOperationsOperationID method
+func NewGetOperationsOperationIDRequest(server string, operationID OperationID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "operationID", operationID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/operations/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
 
 	return req, nil
 }
@@ -7908,18 +8264,18 @@ func NewGetVolumesRequest(server string) (*http.Request, error) {
 }
 
 // NewPostVolumesRequest calls the generic PostVolumes builder with application/json body
-func NewPostVolumesRequest(server string, body PostVolumesJSONRequestBody) (*http.Request, error) {
+func NewPostVolumesRequest(server string, params *PostVolumesParams, body PostVolumesJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewPostVolumesRequestWithBody(server, "application/json", bodyReader)
+	return NewPostVolumesRequestWithBody(server, params, "application/json", bodyReader)
 }
 
 // NewPostVolumesRequestWithBody constructs an http.Request for the PostVolumes method, with any body, and a specified content type
-func NewPostVolumesRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+func NewPostVolumesRequestWithBody(server string, params *PostVolumesParams, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -7943,6 +8299,21 @@ func NewPostVolumesRequestWithBody(server string, contentType string, body io.Re
 	}
 
 	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		if params.IdempotencyKey != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "Idempotency-Key", *params.IdempotencyKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Idempotency-Key", headerParam0)
+		}
+
+	}
 
 	return req, nil
 }
@@ -7998,6 +8369,102 @@ func NewGetVolumesVolumeIDRequest(server string, volumeID VolumeID) (*http.Reque
 	}
 
 	operationPath := fmt.Sprintf("/volumes/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPostVolumesVolumeIDCloneRequest calls the generic PostVolumesVolumeIDClone builder with application/json body
+func NewPostVolumesVolumeIDCloneRequest(server string, volumeID VolumeID, params *PostVolumesVolumeIDCloneParams, body PostVolumesVolumeIDCloneJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostVolumesVolumeIDCloneRequestWithBody(server, volumeID, params, "application/json", bodyReader)
+}
+
+// NewPostVolumesVolumeIDCloneRequestWithBody constructs an http.Request for the PostVolumesVolumeIDClone method, with any body, and a specified content type
+func NewPostVolumesVolumeIDCloneRequestWithBody(server string, volumeID VolumeID, params *PostVolumesVolumeIDCloneParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "volumeID", volumeID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/volumes/%s/clone", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		if params.IdempotencyKey != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "Idempotency-Key", *params.IdempotencyKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Idempotency-Key", headerParam0)
+		}
+
+	}
+
+	return req, nil
+}
+
+// NewGetVolumesVolumeIDRevisionsRequest constructs an http.Request for the GetVolumesVolumeIDRevisions method
+func NewGetVolumesVolumeIDRevisionsRequest(server string, volumeID VolumeID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "volumeID", volumeID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/volumes/%s/revisions", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -8264,6 +8731,15 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with POST /nodes/{nodeID} (the `PostNodesNodeID` operationId).
 	PostNodesNodeIDWithResponse(ctx context.Context, nodeID NodeID, body PostNodesNodeIDJSONRequestBody, reqEditors ...RequestEditorFn) (*PostNodesNodeIDResponse, error)
+
+	// GetOperationsOperationIDWithResponse Volume operation
+	//
+	// Get the state of a background block volume operation.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /operations/{operationID} (the `GetOperationsOperationID` operationId).
+	GetOperationsOperationIDWithResponse(ctx context.Context, operationID OperationID, reqEditors ...RequestEditorFn) (*GetOperationsOperationIDResponse, error)
 
 	// GetSandboxesWithResponse List running sandboxes
 	//
@@ -8890,7 +9366,7 @@ type ClientWithResponsesInterface interface {
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with POST /volumes (the `PostVolumes` operationId).
-	PostVolumesWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostVolumesResponse, error)
+	PostVolumesWithBodyWithResponse(ctx context.Context, params *PostVolumesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostVolumesResponse, error)
 
 	// PostVolumesWithResponse Create team volume
 	//
@@ -8899,7 +9375,7 @@ type ClientWithResponsesInterface interface {
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with POST /volumes (the `PostVolumes` operationId).
-	PostVolumesWithResponse(ctx context.Context, body PostVolumesJSONRequestBody, reqEditors ...RequestEditorFn) (*PostVolumesResponse, error)
+	PostVolumesWithResponse(ctx context.Context, params *PostVolumesParams, body PostVolumesJSONRequestBody, reqEditors ...RequestEditorFn) (*PostVolumesResponse, error)
 
 	// DeleteVolumesVolumeIDWithResponse Delete team volume
 	//
@@ -8918,6 +9394,33 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /volumes/{volumeID} (the `GetVolumesVolumeID` operationId).
 	GetVolumesVolumeIDWithResponse(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*GetVolumesVolumeIDResponse, error)
+
+	// PostVolumesVolumeIDCloneWithBodyWithResponse Clone a block volume
+	//
+	// Create a new block volume from a revision of an existing one, on the same node. The new volume starts with a fresh filesystem identity.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /volumes/{volumeID}/clone (the `PostVolumesVolumeIDClone` operationId).
+	PostVolumesVolumeIDCloneWithBodyWithResponse(ctx context.Context, volumeID VolumeID, params *PostVolumesVolumeIDCloneParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostVolumesVolumeIDCloneResponse, error)
+
+	// PostVolumesVolumeIDCloneWithResponse Clone a block volume
+	//
+	// Create a new block volume from a revision of an existing one, on the same node. The new volume starts with a fresh filesystem identity.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /volumes/{volumeID}/clone (the `PostVolumesVolumeIDClone` operationId).
+	PostVolumesVolumeIDCloneWithResponse(ctx context.Context, volumeID VolumeID, params *PostVolumesVolumeIDCloneParams, body PostVolumesVolumeIDCloneJSONRequestBody, reqEditors ...RequestEditorFn) (*PostVolumesVolumeIDCloneResponse, error)
+
+	// GetVolumesVolumeIDRevisionsWithResponse List block volume revisions
+	//
+	// List the sealed revisions of a block volume, newest first
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /volumes/{volumeID}/revisions (the `GetVolumesVolumeIDRevisions` operationId).
+	GetVolumesVolumeIDRevisionsWithResponse(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*GetVolumesVolumeIDRevisionsResponse, error)
 }
 
 type GetAdminSandboxesRunningCountsResponse struct {
@@ -10044,6 +10547,75 @@ func (r PostNodesNodeIDResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r PostNodesNodeIDResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetOperationsOperationIDResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *VolumeOperation
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *N400
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *N401
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *N404
+	// JSON500 the response for an HTTP 500 `application/json` response
+	JSON500 *N500
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetOperationsOperationIDResponse) GetJSON200() *VolumeOperation {
+	return r.JSON200
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r GetOperationsOperationIDResponse) GetJSON400() *N400 {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r GetOperationsOperationIDResponse) GetJSON401() *N401 {
+	return r.JSON401
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r GetOperationsOperationIDResponse) GetJSON404() *N404 {
+	return r.JSON404
+}
+
+// GetJSON500 returns the response for an HTTP 500 `application/json` response
+func (r GetOperationsOperationIDResponse) GetJSON500() *N500 {
+	return r.JSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r GetOperationsOperationIDResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetOperationsOperationIDResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetOperationsOperationIDResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetOperationsOperationIDResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -13223,17 +13795,28 @@ type PostVolumesResponse struct {
 	HTTPResponse *http.Response
 	// JSON201 the response for an HTTP 201 `application/json` response
 	JSON201 *VolumeAndToken
+	// JSON202 the response for an HTTP 202 `application/json` response
+	JSON202 *VolumeOperationAccepted
 	// JSON400 the response for an HTTP 400 `application/json` response
 	JSON400 *N400
 	// JSON401 the response for an HTTP 401 `application/json` response
 	JSON401 *N401
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *N409
 	// JSON500 the response for an HTTP 500 `application/json` response
 	JSON500 *N500
+	// JSON503 the response for an HTTP 503 `application/json` response
+	JSON503 *N503
 }
 
 // GetJSON201 returns the response for an HTTP 201 `application/json` response
 func (r PostVolumesResponse) GetJSON201() *VolumeAndToken {
 	return r.JSON201
+}
+
+// GetJSON202 returns the response for an HTTP 202 `application/json` response
+func (r PostVolumesResponse) GetJSON202() *VolumeOperationAccepted {
+	return r.JSON202
 }
 
 // GetJSON400 returns the response for an HTTP 400 `application/json` response
@@ -13246,9 +13829,19 @@ func (r PostVolumesResponse) GetJSON401() *N401 {
 	return r.JSON401
 }
 
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r PostVolumesResponse) GetJSON409() *N409 {
+	return r.JSON409
+}
+
 // GetJSON500 returns the response for an HTTP 500 `application/json` response
 func (r PostVolumesResponse) GetJSON500() *N500 {
 	return r.JSON500
+}
+
+// GetJSON503 returns the response for an HTTP 503 `application/json` response
+func (r PostVolumesResponse) GetJSON503() *N503 {
+	return r.JSON503
 }
 
 // GetBody returns the raw response body bytes
@@ -13283,12 +13876,21 @@ func (r PostVolumesResponse) ContentType() string {
 type DeleteVolumesVolumeIDResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
+	// JSON202 the response for an HTTP 202 `application/json` response
+	JSON202 *VolumeOperationAccepted
 	// JSON401 the response for an HTTP 401 `application/json` response
 	JSON401 *N401
 	// JSON404 the response for an HTTP 404 `application/json` response
 	JSON404 *N404
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *N409
 	// JSON500 the response for an HTTP 500 `application/json` response
 	JSON500 *N500
+}
+
+// GetJSON202 returns the response for an HTTP 202 `application/json` response
+func (r DeleteVolumesVolumeIDResponse) GetJSON202() *VolumeOperationAccepted {
+	return r.JSON202
 }
 
 // GetJSON401 returns the response for an HTTP 401 `application/json` response
@@ -13299,6 +13901,11 @@ func (r DeleteVolumesVolumeIDResponse) GetJSON401() *N401 {
 // GetJSON404 returns the response for an HTTP 404 `application/json` response
 func (r DeleteVolumesVolumeIDResponse) GetJSON404() *N404 {
 	return r.JSON404
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r DeleteVolumesVolumeIDResponse) GetJSON409() *N409 {
+	return r.JSON409
 }
 
 // GetJSON500 returns the response for an HTTP 500 `application/json` response
@@ -13391,6 +13998,158 @@ func (r GetVolumesVolumeIDResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetVolumesVolumeIDResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PostVolumesVolumeIDCloneResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON202 the response for an HTTP 202 `application/json` response
+	JSON202 *VolumeOperationAccepted
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *N400
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *N401
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *N404
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *N409
+	// JSON500 the response for an HTTP 500 `application/json` response
+	JSON500 *N500
+	// JSON503 the response for an HTTP 503 `application/json` response
+	JSON503 *N503
+}
+
+// GetJSON202 returns the response for an HTTP 202 `application/json` response
+func (r PostVolumesVolumeIDCloneResponse) GetJSON202() *VolumeOperationAccepted {
+	return r.JSON202
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r PostVolumesVolumeIDCloneResponse) GetJSON400() *N400 {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r PostVolumesVolumeIDCloneResponse) GetJSON401() *N401 {
+	return r.JSON401
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r PostVolumesVolumeIDCloneResponse) GetJSON404() *N404 {
+	return r.JSON404
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r PostVolumesVolumeIDCloneResponse) GetJSON409() *N409 {
+	return r.JSON409
+}
+
+// GetJSON500 returns the response for an HTTP 500 `application/json` response
+func (r PostVolumesVolumeIDCloneResponse) GetJSON500() *N500 {
+	return r.JSON500
+}
+
+// GetJSON503 returns the response for an HTTP 503 `application/json` response
+func (r PostVolumesVolumeIDCloneResponse) GetJSON503() *N503 {
+	return r.JSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r PostVolumesVolumeIDCloneResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PostVolumesVolumeIDCloneResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostVolumesVolumeIDCloneResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PostVolumesVolumeIDCloneResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetVolumesVolumeIDRevisionsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *[]VolumeRevision
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *N400
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *N401
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *N404
+	// JSON500 the response for an HTTP 500 `application/json` response
+	JSON500 *N500
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetVolumesVolumeIDRevisionsResponse) GetJSON200() *[]VolumeRevision {
+	return r.JSON200
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r GetVolumesVolumeIDRevisionsResponse) GetJSON400() *N400 {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r GetVolumesVolumeIDRevisionsResponse) GetJSON401() *N401 {
+	return r.JSON401
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r GetVolumesVolumeIDRevisionsResponse) GetJSON404() *N404 {
+	return r.JSON404
+}
+
+// GetJSON500 returns the response for an HTTP 500 `application/json` response
+func (r GetVolumesVolumeIDRevisionsResponse) GetJSON500() *N500 {
+	return r.JSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r GetVolumesVolumeIDRevisionsResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetVolumesVolumeIDRevisionsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetVolumesVolumeIDRevisionsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetVolumesVolumeIDRevisionsResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -13739,6 +14498,21 @@ func (c *ClientWithResponses) PostNodesNodeIDWithResponse(ctx context.Context, n
 		return nil, err
 	}
 	return ParsePostNodesNodeIDResponse(rsp)
+}
+
+// GetOperationsOperationIDWithResponse Volume operation
+//
+// Get the state of a background block volume operation.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /operations/{operationID} (the `GetOperationsOperationID` operationId).
+func (c *ClientWithResponses) GetOperationsOperationIDWithResponse(ctx context.Context, operationID OperationID, reqEditors ...RequestEditorFn) (*GetOperationsOperationIDResponse, error) {
+	rsp, err := c.GetOperationsOperationID(ctx, operationID, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetOperationsOperationIDResponse(rsp)
 }
 
 // GetSandboxesWithResponse List running sandboxes
@@ -14757,8 +15531,8 @@ func (c *ClientWithResponses) GetVolumesWithResponse(ctx context.Context, reqEdi
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
 // Corresponds with POST /volumes (the `PostVolumes` operationId).
-func (c *ClientWithResponses) PostVolumesWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostVolumesResponse, error) {
-	rsp, err := c.PostVolumesWithBody(ctx, contentType, body, reqEditors...)
+func (c *ClientWithResponses) PostVolumesWithBodyWithResponse(ctx context.Context, params *PostVolumesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostVolumesResponse, error) {
+	rsp, err := c.PostVolumesWithBody(ctx, params, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -14772,8 +15546,8 @@ func (c *ClientWithResponses) PostVolumesWithBodyWithResponse(ctx context.Contex
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
 // Corresponds with POST /volumes (the `PostVolumes` operationId).
-func (c *ClientWithResponses) PostVolumesWithResponse(ctx context.Context, body PostVolumesJSONRequestBody, reqEditors ...RequestEditorFn) (*PostVolumesResponse, error) {
-	rsp, err := c.PostVolumes(ctx, body, reqEditors...)
+func (c *ClientWithResponses) PostVolumesWithResponse(ctx context.Context, params *PostVolumesParams, body PostVolumesJSONRequestBody, reqEditors ...RequestEditorFn) (*PostVolumesResponse, error) {
+	rsp, err := c.PostVolumes(ctx, params, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -14808,6 +15582,51 @@ func (c *ClientWithResponses) GetVolumesVolumeIDWithResponse(ctx context.Context
 		return nil, err
 	}
 	return ParseGetVolumesVolumeIDResponse(rsp)
+}
+
+// PostVolumesVolumeIDCloneWithBodyWithResponse Clone a block volume
+//
+// Create a new block volume from a revision of an existing one, on the same node. The new volume starts with a fresh filesystem identity.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /volumes/{volumeID}/clone (the `PostVolumesVolumeIDClone` operationId).
+func (c *ClientWithResponses) PostVolumesVolumeIDCloneWithBodyWithResponse(ctx context.Context, volumeID VolumeID, params *PostVolumesVolumeIDCloneParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostVolumesVolumeIDCloneResponse, error) {
+	rsp, err := c.PostVolumesVolumeIDCloneWithBody(ctx, volumeID, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostVolumesVolumeIDCloneResponse(rsp)
+}
+
+// PostVolumesVolumeIDCloneWithResponse Clone a block volume
+//
+// Create a new block volume from a revision of an existing one, on the same node. The new volume starts with a fresh filesystem identity.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /volumes/{volumeID}/clone (the `PostVolumesVolumeIDClone` operationId).
+func (c *ClientWithResponses) PostVolumesVolumeIDCloneWithResponse(ctx context.Context, volumeID VolumeID, params *PostVolumesVolumeIDCloneParams, body PostVolumesVolumeIDCloneJSONRequestBody, reqEditors ...RequestEditorFn) (*PostVolumesVolumeIDCloneResponse, error) {
+	rsp, err := c.PostVolumesVolumeIDClone(ctx, volumeID, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostVolumesVolumeIDCloneResponse(rsp)
+}
+
+// GetVolumesVolumeIDRevisionsWithResponse List block volume revisions
+//
+// # List the sealed revisions of a block volume, newest first
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /volumes/{volumeID}/revisions (the `GetVolumesVolumeIDRevisions` operationId).
+func (c *ClientWithResponses) GetVolumesVolumeIDRevisionsWithResponse(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*GetVolumesVolumeIDRevisionsResponse, error) {
+	rsp, err := c.GetVolumesVolumeIDRevisions(ctx, volumeID, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetVolumesVolumeIDRevisionsResponse(rsp)
 }
 
 // ParseGetAdminSandboxesRunningCountsResponse parses an HTTP response from a GetAdminSandboxesRunningCountsWithResponse call
@@ -15678,6 +16497,60 @@ func ParsePostNodesNodeIDResponse(rsp *http.Response) (*PostNodesNodeIDResponse,
 			return nil, err
 		}
 		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest N500
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetOperationsOperationIDResponse parses an HTTP response from a GetOperationsOperationIDWithResponse call
+func ParseGetOperationsOperationIDResponse(rsp *http.Response) (*GetOperationsOperationIDResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetOperationsOperationIDResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest VolumeOperation
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest N400
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest N401
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest N404
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest N500
@@ -18259,6 +19132,13 @@ func ParsePostVolumesResponse(rsp *http.Response) (*PostVolumesResponse, error) 
 		}
 		response.JSON201 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest VolumeOperationAccepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest N400
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -18273,12 +19153,26 @@ func ParsePostVolumesResponse(rsp *http.Response) (*PostVolumesResponse, error) 
 		}
 		response.JSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest N409
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest N500
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest N503
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
 
 	}
 
@@ -18299,6 +19193,13 @@ func ParseDeleteVolumesVolumeIDResponse(rsp *http.Response) (*DeleteVolumesVolum
 	}
 
 	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest VolumeOperationAccepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
 	case rsp.StatusCode == 204:
 		break // No content-type
 
@@ -18315,6 +19216,13 @@ func ParseDeleteVolumesVolumeIDResponse(rsp *http.Response) (*DeleteVolumesVolum
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest N409
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest N500
@@ -18348,6 +19256,128 @@ func ParseGetVolumesVolumeIDResponse(rsp *http.Response) (*GetVolumesVolumeIDRes
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest N401
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest N404
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest N500
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostVolumesVolumeIDCloneResponse parses an HTTP response from a PostVolumesVolumeIDCloneWithResponse call
+func ParsePostVolumesVolumeIDCloneResponse(rsp *http.Response) (*PostVolumesVolumeIDCloneResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostVolumesVolumeIDCloneResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest VolumeOperationAccepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest N400
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest N401
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest N404
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest N409
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest N500
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest N503
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetVolumesVolumeIDRevisionsResponse parses an HTTP response from a GetVolumesVolumeIDRevisionsWithResponse call
+func ParseGetVolumesVolumeIDRevisionsResponse(rsp *http.Response) (*GetVolumesVolumeIDRevisionsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetVolumesVolumeIDRevisionsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []VolumeRevision
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest N400
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest N401
