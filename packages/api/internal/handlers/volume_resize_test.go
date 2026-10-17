@@ -97,6 +97,24 @@ func TestBlockVolumeResizeOnResume(t *testing.T) {
 		assert.Equal(t, int64(20<<30), *v.CapacityBytes, "the head's growth is the volume's")
 	})
 
+	t.Run("a filesystem-only snapshot grows offline at boot", func(t *testing.T) {
+		t.Parallel()
+
+		f := newBlockAPIFixture(t, db)
+		ctx := t.Context()
+		vol, inc, _ := f.readyVolume(t)
+		buildID := testutils.CreateTestBuild(t, ctx, f.db, testutils.CreateTestTemplate(t, f.db, f.team.ID), "success")
+		sealRevision(t, f, vol, inc, consistencyFilesystemQuiesced, buildID)
+		mounts := []*orchestrator.SandboxVolumeMount{{Id: vol.ID.String(), Name: "ws", Path: "/w", Backend: volumeBackendBlock}}
+
+		resume, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, false, false, false, map[string]int64{"ws": 20 << 30})
+		require.Nil(t, apiErr)
+
+		bound, apiErr := resume.Attach(ctx, uuid.New(), "sbx", "e2")
+		require.Nil(t, apiErr)
+		assert.EqualValues(t, 20<<30, bound[0].GetResizeToBytes())
+	})
+
 	t.Run("the same capacity is a no-op", func(t *testing.T) {
 		t.Parallel()
 
