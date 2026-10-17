@@ -200,3 +200,13 @@ func TestParseInstanceGroupName(t *testing.T) {
 		assert.Equal(t, "orch-client-pool-region-rig", config.InstanceGroupName)
 	})
 }
+
+func TestAdvertisedLabels(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, []string{"default"}, Config{NodeLabels: []string{"default"}}.AdvertisedLabels())
+	assert.Equal(t, []string{"default", blockVolumeNodeLabel}, Config{NodeLabels: []string{"default"}, BlockVolumeEnabled: true}.AdvertisedLabels())
+	assert.Equal(t, []string{blockVolumeNodeLabel}, Config{NodeLabels: []string{blockVolumeNodeLabel}, BlockVolumeEnabled: true}.AdvertisedLabels(),
+		"an operator-set label is not duplicated")
+	assert.Equal(t, []uint64{10 << 30, 20 << 30}, Config{BlockVolumeCapacityTiersGiB: []uint64{10, 20}}.BlockVolumeCapacityTiers())
+}

@@ -210,22 +210,22 @@ type APIStore struct {
 	// volumeJobs enqueues block volume jobs; set by NewOutbox.
 	volumeJobs volumeJobEnqueuer
 	// volumeExecutor runs a block volume operation inline (the fork path).
-	volumeExecutor *outbox.VolumeExecutor
-	authDB                 *authdb.Client
-	redisClient            redis.UniversalClient
-	templateCache          *templatecache.TemplateCache
-	templateBuildsCache    *templatecache.TemplatesBuildCache
-	snapshotCache          *snapshotcache.SnapshotCache
-	authService            sharedauth.Service
-	templateSpawnCounter   *utils.TemplateSpawnCounter
-	clickhouseStore        clickhouse.Clickhouse
-	sandboxLogsReader      *sandboxlogs.Reader
-	accessTokenGenerator   *sandbox.AccessTokenGenerator
-	featureFlags           *featureflags.Client
-	clusters               *clusters.Pool
-	snapshotUpsertSem      *sharedutils.AdjustableSemaphore
-	sandboxListSem         *sharedutils.AdjustableSemaphore
-	snapshotBuildQuerySem  *sharedutils.AdjustableSemaphore
+	volumeExecutor        *outbox.VolumeExecutor
+	authDB                *authdb.Client
+	redisClient           redis.UniversalClient
+	templateCache         *templatecache.TemplateCache
+	templateBuildsCache   *templatecache.TemplatesBuildCache
+	snapshotCache         *snapshotcache.SnapshotCache
+	authService           sharedauth.Service
+	templateSpawnCounter  *utils.TemplateSpawnCounter
+	clickhouseStore       clickhouse.Clickhouse
+	sandboxLogsReader     *sandboxlogs.Reader
+	accessTokenGenerator  *sandbox.AccessTokenGenerator
+	featureFlags          *featureflags.Client
+	clusters              *clusters.Pool
+	snapshotUpsertSem     *sharedutils.AdjustableSemaphore
+	sandboxListSem        *sharedutils.AdjustableSemaphore
+	snapshotBuildQuerySem *sharedutils.AdjustableSemaphore
 
 	// secretsConn and secretsManagement are nil when no secrets store backend
 	// address is configured. The routes stay registered either way and answer

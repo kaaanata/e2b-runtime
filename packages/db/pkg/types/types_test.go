@@ -219,3 +219,24 @@ func TestSandboxVolumeMountConfig_ConsistencyProfileRoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(data, &back))
 	assert.Equal(t, withProfile, back)
 }
+
+func TestSandboxVolumeMountConfig_BlockFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	var legacy SandboxVolumeMountConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"v1","type":"local","name":"vol","path":"/vol"}`), &legacy))
+	assert.False(t, legacy.IsBlock(), "rows from before block volumes are NFS")
+
+	block := SandboxVolumeMountConfig{ID: "v1", Type: "block", Name: "ws", Path: "/w", Backend: VolumeBackendBlock, IncarnationID: "i1", FsUUID: "f1", CapacityBytes: 1 << 30}
+	raw, err := json.Marshal(block)
+	require.NoError(t, err)
+
+	var back SandboxVolumeMountConfig
+	require.NoError(t, json.Unmarshal(raw, &back))
+	assert.Equal(t, block, back)
+	assert.True(t, back.IsBlock())
+
+	nfs, err := json.Marshal(SandboxVolumeMountConfig{ID: "v1", Type: "local", Name: "vol", Path: "/vol"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(nfs), "backend", "NFS rows are byte-identical to before")
+}

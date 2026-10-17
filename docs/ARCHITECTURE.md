@@ -165,6 +165,16 @@ The control-plane entry point (Gin, OpenAPI-generated from `spec/openapi.yml`, p
   `outbox.jobs.finished`, and the backlog reports `outbox.jobs` and `outbox.oldest_*_age`.
   `OUTBOX_MAX_WORKERS` (default 10) and `OUTBOX_BACKLOG_INTERVAL` (default 30s) configure it;
   shutdown stops it after the sandbox-work drain, before the database and Redis clients close.
+  The same client works the block volume jobs `volume.create|clone|seal|delete|reconcile`. Each
+  carries only a `volume_operations` id: that table is the ledger (River prunes finished jobs),
+  written in the same transaction as the job, with `UNIQUE (kind, idempotency_key)` turning a
+  replayed request into the same operation. `outbox.VolumeExecutor` turns an operation into
+  `BlockVolumeService` RPCs on the volume's owner node and commits the results together with the
+  operation's success under its row lock. Every identifier the node creates is allocated before
+  the first attempt, so a retry is the same request (the node replays operations by id); an RPC
+  whose outcome is unknown marks the operation `unknown`, and the next attempt reconciles the
+  volume before retrying. Definite refusals fail the operation and cancel the job; anything else
+  is retried with River's backoff, the last attempt failing the operation.
 - Reads ClickHouse for sandbox/team metrics endpoints. Sandbox and template-build logs default to
   Loki, with a LaunchDarkly-gated ClickHouse read path (`logs-read-config`) for local-cluster logs
   during the log storage migration. `LOKI_URL` is optional: without it the api has no Loki client
@@ -185,6 +195,10 @@ gRPC services on :5008 (`pkg/server/`, `pkg/service/`, `pkg/template/server/`, `
 - **TemplateService** — `TemplateCreate`, `TemplateBuildStatus`, `TemplateBuildDelete` (template-manager role only).
 - **InfoService** — node identity, roles, capacity, health status (used by API node discovery).
 - **ChunkService / VolumeService** — peer-to-peer template chunk serving; persistent volumes.
+- **BlockVolumeService** (`pkg/blockvol/`, only with `BLOCK_VOLUME_ENABLED`) — create, clone,
+  seal, delete and reconcile workspace block volumes under `BLOCK_VOLUME_ROOT`, idempotent by
+  operation id. An enabled node advertises the `volume-backend=block` label; the API only places
+  block volumes on such nodes.
 
 Process shutdown, triggered by `SIGINT`, `SIGTERM`, `SIGUSR1`, or a service failure, moves
 the node to `ShuttingDown` before draining builds and sandboxes. Like `Draining`, this excludes new
@@ -501,6 +515,17 @@ The orchestrator passes each sandbox's volumes to envd in `/init` (`VolumeMount`
 - **Block volumes** (`volume_type` `block`) are ext4 images attached as guest drives; envd finds
   the device by filesystem UUID and mounts it, and `/volumes/resize` grows it online. They have no
   host directory, so `VolumeService` answers `FailedPrecondition` for every directory/file RPC.
+  `POST /volumes` with `backend: block` returns 202 and an operation (`GET /operations/{id}`);
+  the volume lives on one owner node and every sandbox mounting it is placed there, with no
+  fallback. Postgres keeps its lineage: incarnations (writable images), revisions (sealed
+  read-only snapshots, `filesystem-quiesced` or `paired-memory`), attachments (one active RW
+  writer per incarnation, enforced by a partial unique index) and `snapshot_volume_refs` (the
+  revisions a paused snapshot needs, which block deleting the volume). A new sandbox attaches the
+  volume's head incarnation; a resume binds the exact incarnation its snapshot's revision was
+  sealed from and is refused if another execution used it since; a fork clones the revision into
+  a new incarnation, keeping the filesystem identity from a memory snapshot only with
+  `allowSharedIdentity`. `POST /volumes/{id}/clone` makes a new volume from a
+  `filesystem-quiesced` revision. A deleted block volume stays as a tombstone (`deleted_at`).
 - **Checkpoint freeze.** `/fsfreeze-set` freezes the mount set envd derives from its own mount
   ledger (block volumes deepest first, then `/`) under a caller-chosen operation token, rolling back
   on partial failure; `GET /fsfreeze-set` reports a recorded outcome whose response was lost and

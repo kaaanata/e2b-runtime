@@ -28,14 +28,14 @@ func newBlockFixture(t *testing.T) blockFixture {
 	return blockFixture{db: db, q: db.SqlcClient.Queries, teamID: testutils.CreateTestTeam(t, db)}
 }
 
-func (f blockFixture) createVolume(t *testing.T, name string) queries.Volume {
+func (f blockFixture) createVolume(t *testing.T) queries.Volume {
 	t.Helper()
 
 	vol, err := f.q.CreateBlockVolume(t.Context(), queries.CreateBlockVolumeParams{
 		ID:            uuid.New(),
 		TeamID:        f.teamID,
 		VolumeType:    "block",
-		Name:          name,
+		Name:          "ws",
 		OwnerNodeID:   new("node-a"),
 		CapacityBytes: new(int64(10 << 30)),
 	})
@@ -117,7 +117,7 @@ func TestBlockVolumes_CreateAndLifecycle(t *testing.T) {
 	f := newBlockFixture(t)
 	ctx := t.Context()
 
-	vol := f.createVolume(t, "ws")
+	vol := f.createVolume(t)
 	assert.Equal(t, "block", vol.Backend)
 	assert.Equal(t, "creating", vol.Lifecycle)
 	assert.Nil(t, vol.HeadIncarnationID)
@@ -163,7 +163,7 @@ func TestBlockVolumes_OperationIdempotency(t *testing.T) {
 
 	f := newBlockFixture(t)
 	ctx := t.Context()
-	vol := f.createVolume(t, "ws")
+	vol := f.createVolume(t)
 
 	op := f.createOperation(t, vol.ID, "create", "key-1")
 	assert.Equal(t, "pending", op.State)
@@ -212,7 +212,7 @@ func TestBlockVolumes_SingleWriter(t *testing.T) {
 
 	f := newBlockFixture(t)
 	ctx := t.Context()
-	vol := f.createVolume(t, "ws")
+	vol := f.createVolume(t)
 	inc, rev := f.materialise(t, vol, f.createOperation(t, vol.ID, "create", vol.ID.String()))
 
 	first, err := f.attach(t, vol, inc, "sbx-1", "exec-1")
@@ -263,7 +263,7 @@ func TestBlockVolumes_SnapshotRefsAndTombstone(t *testing.T) {
 
 	f := newBlockFixture(t)
 	ctx := t.Context()
-	vol := f.createVolume(t, "ws")
+	vol := f.createVolume(t)
 	_, rev := f.materialise(t, vol, f.createOperation(t, vol.ID, "create", vol.ID.String()))
 
 	templateID := testutils.CreateTestTemplate(t, f.db, f.teamID)
@@ -323,7 +323,7 @@ func TestBlockVolumes_SnapshotRefsAndTombstone(t *testing.T) {
 	assert.Empty(t, byName)
 
 	// ...and frees the name.
-	reused := f.createVolume(t, "ws")
+	reused := f.createVolume(t)
 	assert.NotEqual(t, vol.ID, reused.ID)
 }
 
@@ -332,7 +332,7 @@ func TestBlockVolumes_RevisionsReferencedBySnapshotsCannotBeRemoved(t *testing.T
 
 	f := newBlockFixture(t)
 	ctx := t.Context()
-	vol := f.createVolume(t, "ws")
+	vol := f.createVolume(t)
 	_, rev := f.materialise(t, vol, f.createOperation(t, vol.ID, "create", vol.ID.String()))
 
 	templateID := testutils.CreateTestTemplate(t, f.db, f.teamID)

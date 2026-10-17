@@ -102,7 +102,7 @@ func newBlockAPIFixture(t *testing.T, db *testutils.Database, nodes ...*nodemana
 	}
 }
 
-func (f blockAPIFixture) request(t *testing.T, method, path string, body any, headers map[string]string) (*gin.Context, *httptest.ResponseRecorder) {
+func (f blockAPIFixture) request(t *testing.T, method, path string, body any) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
 
 	var raw []byte
@@ -116,9 +116,6 @@ func (f blockAPIFixture) request(t *testing.T, method, path string, body any, he
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequestWithContext(t.Context(), method, path, bytes.NewReader(raw))
 	c.Request.Header.Set("Content-Type", "application/json")
-	for k, v := range headers {
-		c.Request.Header.Set(k, v)
-	}
 
 	auth.SetTeamInfoForTest(t, c, f.team)
 
@@ -128,7 +125,7 @@ func (f blockAPIFixture) request(t *testing.T, method, path string, body any, he
 func (f blockAPIFixture) create(t *testing.T, body api.NewVolume, key *string) (int, api.VolumeOperationAccepted) {
 	t.Helper()
 
-	c, rec := f.request(t, http.MethodPost, "/volumes", body, nil)
+	c, rec := f.request(t, http.MethodPost, "/volumes", body)
 	f.store.PostVolumes(c, api.PostVolumesParams{IdempotencyKey: key})
 
 	var accepted api.VolumeOperationAccepted
@@ -153,10 +150,10 @@ func (f blockAPIFixture) jobs(t *testing.T, operationID string) []string {
 
 // readyVolume creates a block volume and materialises it the way a
 // succeeded volume.create does.
-func (f blockAPIFixture) readyVolume(t *testing.T, name string) (queries.Volume, queries.VolumeIncarnation, queries.VolumeRevision) {
+func (f blockAPIFixture) readyVolume(t *testing.T) (queries.Volume, queries.VolumeIncarnation, queries.VolumeRevision) {
 	t.Helper()
 
-	code, accepted := f.create(t, api.NewVolume{Name: name, Backend: new(api.Block), CapacityGiB: new(int64(10))}, nil)
+	code, accepted := f.create(t, api.NewVolume{Name: "ws", Backend: new(api.Block), CapacityGiB: new(int64(10))}, nil)
 	require.Equal(t, http.StatusAccepted, code)
 
 	ctx := t.Context()
@@ -265,20 +262,20 @@ func TestBlockVolumeLifecycleEndpoints(t *testing.T) {
 
 		f := newBlockAPIFixture(t, db)
 		ctx := t.Context()
-		vol, inc, _ := f.readyVolume(t, "ws")
+		vol, inc, _ := f.readyVolume(t)
 
 		att, err := f.db.SqlcClient.CreateVolumeAttachment(ctx, queries.CreateVolumeAttachmentParams{
 			ID: uuid.New(), VolumeID: vol.ID, IncarnationID: inc.ID, SandboxID: "sbx", ExecutionID: "e", NodeID: "node-a", Mode: "rw", GuestPath: "/w",
 		})
 		require.NoError(t, err)
 
-		c, rec := f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil, nil)
+		c, rec := f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil)
 		f.store.DeleteVolumesVolumeID(c, vol.ID.String())
 		assert.Equal(t, http.StatusConflict, rec.Code)
 
 		require.NoError(t, f.db.SqlcClient.ReleaseVolumeAttachment(ctx, att.ID))
 
-		c, rec = f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil, nil)
+		c, rec = f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil)
 		f.store.DeleteVolumesVolumeID(c, vol.ID.String())
 		require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
 
@@ -288,7 +285,7 @@ func TestBlockVolumeLifecycleEndpoints(t *testing.T) {
 		assert.Equal(t, dboutbox.VolumeOperationDelete, accepted.Operation.Kind)
 		assert.Equal(t, []string{"volume.delete"}, f.jobs(t, accepted.Operation.OperationID))
 
-		c, rec = f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil, nil)
+		c, rec = f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil)
 		f.store.DeleteVolumesVolumeID(c, vol.ID.String())
 		require.Equal(t, http.StatusAccepted, rec.Code)
 
@@ -308,14 +305,14 @@ func TestBlockVolumeLifecycleEndpoints(t *testing.T) {
 
 		f := newBlockAPIFixture(t, db)
 		ctx := t.Context()
-		vol, _, rev := f.readyVolume(t, "ws")
+		vol, _, rev := f.readyVolume(t)
 
 		buildID := testutils.CreateTestBuild(t, ctx, f.db, testutils.CreateTestTemplate(t, f.db, f.team.ID), "success")
 		require.NoError(t, f.db.SqlcClient.InsertSnapshotVolumeRef(ctx, queries.InsertSnapshotVolumeRefParams{
 			SnapshotBuildID: buildID, RevisionID: rev.ID, VolumeID: vol.ID, MountPath: "/w",
 		}))
 
-		c, rec := f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil, nil)
+		c, rec := f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil)
 		f.store.DeleteVolumesVolumeID(c, vol.ID.String())
 		assert.Equal(t, http.StatusConflict, rec.Code)
 	})
@@ -324,9 +321,9 @@ func TestBlockVolumeLifecycleEndpoints(t *testing.T) {
 		t.Parallel()
 
 		f := newBlockAPIFixture(t, db)
-		vol, _, rev := f.readyVolume(t, "ws")
+		vol, _, rev := f.readyVolume(t)
 
-		c, rec := f.request(t, http.MethodPost, "/volumes/"+vol.ID.String()+"/clone", api.CloneVolume{Name: "ws-copy"}, nil)
+		c, rec := f.request(t, http.MethodPost, "/volumes/"+vol.ID.String()+"/clone", api.CloneVolume{Name: "ws-copy"})
 		f.store.PostVolumesVolumeIDClone(c, vol.ID.String(), api.PostVolumesVolumeIDCloneParams{})
 		require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
 
@@ -348,12 +345,12 @@ func TestBlockVolumeLifecycleEndpoints(t *testing.T) {
 		assert.True(t, params.Clone.NewVolume)
 
 		// GET /operations/{id} is team-scoped.
-		c, rec = f.request(t, http.MethodGet, "/operations/"+accepted.Operation.OperationID, nil, nil)
+		c, rec = f.request(t, http.MethodGet, "/operations/"+accepted.Operation.OperationID, nil)
 		f.store.GetOperationsOperationID(c, accepted.Operation.OperationID)
 		require.Equal(t, http.StatusOK, rec.Code)
 
 		other := newBlockAPIFixture(t, db)
-		c, rec = other.request(t, http.MethodGet, "/operations/"+accepted.Operation.OperationID, nil, nil)
+		c, rec = other.request(t, http.MethodGet, "/operations/"+accepted.Operation.OperationID, nil)
 		other.store.GetOperationsOperationID(c, accepted.Operation.OperationID)
 		assert.Equal(t, http.StatusNotFound, rec.Code)
 	})
@@ -363,7 +360,7 @@ func TestBlockVolumeLifecycleEndpoints(t *testing.T) {
 
 		f := newBlockAPIFixture(t, db)
 		ctx := t.Context()
-		vol, inc, rev := f.readyVolume(t, "ws")
+		vol, inc, rev := f.readyVolume(t)
 
 		paired, err := f.db.SqlcClient.InsertVolumeRevision(ctx, queries.InsertVolumeRevisionParams{
 			ID: uuid.New(), VolumeID: vol.ID, IncarnationID: inc.ID, ParentID: &rev.ID, SubvolUuid: uuid.New(), FsUuid: inc.FsUuid,
@@ -372,11 +369,11 @@ func TestBlockVolumeLifecycleEndpoints(t *testing.T) {
 		require.NoError(t, err)
 
 		id := paired.ID.String()
-		c, rec := f.request(t, http.MethodPost, "/volumes/"+vol.ID.String()+"/clone", api.CloneVolume{Name: "x", RevisionID: &id}, nil)
+		c, rec := f.request(t, http.MethodPost, "/volumes/"+vol.ID.String()+"/clone", api.CloneVolume{Name: "x", RevisionID: &id})
 		f.store.PostVolumesVolumeIDClone(c, vol.ID.String(), api.PostVolumesVolumeIDCloneParams{})
 		assert.Equal(t, http.StatusConflict, rec.Code)
 
-		c, rec = f.request(t, http.MethodGet, "/volumes/"+vol.ID.String()+"/revisions", nil, nil)
+		c, rec = f.request(t, http.MethodGet, "/volumes/"+vol.ID.String()+"/revisions", nil)
 		f.store.GetVolumesVolumeIDRevisions(c, vol.ID.String())
 		require.Equal(t, http.StatusOK, rec.Code)
 
@@ -391,9 +388,9 @@ func TestBlockVolumeLifecycleEndpoints(t *testing.T) {
 		t.Parallel()
 
 		f := newBlockAPIFixture(t, db)
-		vol, _, _ := f.readyVolume(t, "ws")
+		vol, _, _ := f.readyVolume(t)
 
-		c, rec := f.request(t, http.MethodGet, "/volumes/"+vol.ID.String(), nil, nil)
+		c, rec := f.request(t, http.MethodGet, "/volumes/"+vol.ID.String(), nil)
 		f.store.GetVolumesVolumeID(c, vol.ID.String())
 		require.Equal(t, http.StatusOK, rec.Code)
 
@@ -416,7 +413,7 @@ func TestBlockVolumeAttach(t *testing.T) {
 
 		f := newBlockAPIFixture(t, db)
 		ctx := t.Context()
-		_, inc, _ := f.readyVolume(t, "ws")
+		_, inc, _ := f.readyVolume(t)
 
 		mounts, blocks, err := convertAPIVolumesToOrchestratorVolumes(ctx, f.db.SqlcClient, f.store.featureFlags, f.team.ID,
 			[]api.SandboxVolumeMount{{Name: "ws", Path: "/workspace"}}, newEnvd)
@@ -452,7 +449,7 @@ func TestBlockVolumeAttach(t *testing.T) {
 
 		f := newBlockAPIFixture(t, db)
 		ctx := t.Context()
-		f.readyVolume(t, "ws")
+		f.readyVolume(t)
 		code, _ := f.create(t, api.NewVolume{Name: "pending", Backend: new(api.Block), CapacityGiB: new(int64(10))}, nil)
 		require.Equal(t, http.StatusAccepted, code)
 
@@ -473,7 +470,7 @@ func TestBlockVolumeAttach(t *testing.T) {
 
 		f := newBlockAPIFixture(t, db)
 		ctx := t.Context()
-		vol, inc, _ := f.readyVolume(t, "ws")
+		vol, inc, _ := f.readyVolume(t)
 		q := f.db.SqlcClient
 
 		// The paused execution's attachment, then its pause seal.
@@ -532,7 +529,7 @@ func TestBlockVolumeAttach(t *testing.T) {
 
 		f := newBlockAPIFixture(t, db)
 		ctx := t.Context()
-		vol, inc, _ := f.readyVolume(t, "ws")
+		vol, inc, _ := f.readyVolume(t)
 		buildID := testutils.CreateTestBuild(t, ctx, f.db, testutils.CreateTestTemplate(t, f.db, f.team.ID), "success")
 		sealRevision(t, f, vol, inc, consistencyPairedMemory, buildID)
 

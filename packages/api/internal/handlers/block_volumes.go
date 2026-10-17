@@ -398,7 +398,7 @@ func (a *APIStore) deleteBlockVolume(c *gin.Context, team *types.Team, volume qu
 		}
 
 		if current.Lifecycle == volumeLifecycleCreating {
-			return errBlockVolumeBusy{reason: "it is still being created"}
+			return blockVolumeBusyError{reason: "it is still being created"}
 		}
 
 		attached, err := q.CountActiveVolumeAttachments(ctx, volume.ID)
@@ -407,7 +407,7 @@ func (a *APIStore) deleteBlockVolume(c *gin.Context, team *types.Team, volume qu
 		}
 
 		if attached > 0 {
-			return errBlockVolumeBusy{reason: "it is mounted by a sandbox"}
+			return blockVolumeBusyError{reason: "it is mounted by a sandbox"}
 		}
 
 		refs, err := q.CountVolumeSnapshotRefs(ctx, volume.ID)
@@ -416,7 +416,7 @@ func (a *APIStore) deleteBlockVolume(c *gin.Context, team *types.Team, volume qu
 		}
 
 		if refs > 0 {
-			return errBlockVolumeBusy{reason: "a paused sandbox snapshot needs it; delete the snapshot first"}
+			return blockVolumeBusyError{reason: "a paused sandbox snapshot needs it; delete the snapshot first"}
 		}
 
 		op, _, err = a.recordVolumeOperation(ctx, q, tx, newVolumeOperation{
@@ -440,7 +440,7 @@ func (a *APIStore) deleteBlockVolume(c *gin.Context, team *types.Team, volume qu
 		return err
 	})
 
-	var busy errBlockVolumeBusy
+	var busy blockVolumeBusyError
 
 	switch {
 	case errors.As(err, &busy):
@@ -461,9 +461,9 @@ func (a *APIStore) deleteBlockVolume(c *gin.Context, team *types.Team, volume qu
 	c.JSON(http.StatusAccepted, api.VolumeOperationAccepted{Volume: volumeToAPI(current), Operation: volumeOperationToAPI(op)})
 }
 
-type errBlockVolumeBusy struct{ reason string }
+type blockVolumeBusyError struct{ reason string }
 
-func (e errBlockVolumeBusy) Error() string { return "block volume is busy: " + e.reason }
+func (e blockVolumeBusyError) Error() string { return "block volume is busy: " + e.reason }
 
 // PostVolumesVolumeIDClone creates a new block volume from a cold-bootable
 // revision of an existing one, on the same node.

@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -12,6 +13,8 @@ import (
 	"github.com/e2b-dev/infra/packages/db/pkg/outbox"
 	"github.com/e2b-dev/infra/packages/db/queries"
 )
+
+var errVolumeOfAnotherTeam = errors.New("volume belongs to another team")
 
 // SealedWorkspaceRevision is a block volume revision a node sealed while it
 // paused or checkpointed a sandbox (the VM was paused and its drives drained).
@@ -63,7 +66,7 @@ func recordSealedRevision(ctx context.Context, q *sqlcdb.Client, teamID, snapsho
 	}
 
 	if vol.TeamID != teamID {
-		return fmt.Errorf("volume belongs to another team")
+		return errVolumeOfAnotherTeam
 	}
 
 	params, err := json.Marshal(outbox.VolumeOperationParams{

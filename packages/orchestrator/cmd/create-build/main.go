@@ -658,7 +658,7 @@ func parseWorkspaceSlots(gib string) (*metadata.WorkspaceLayout, error) {
 	}
 
 	ws := &metadata.WorkspaceLayout{}
-	for _, part := range strings.Split(gib, ",") {
+	for part := range strings.SplitSeq(gib, ",") {
 		n, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("workspace slot size %q: %w", part, err)
