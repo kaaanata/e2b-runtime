@@ -232,6 +232,21 @@ func (e TemplateBuildStatus) Valid() bool {
 	}
 }
 
+// Defines values for TemplateLayout.
+const (
+	BlockV1 TemplateLayout = "block-v1"
+)
+
+// Valid indicates whether the value is a known member of the TemplateLayout enum.
+func (e TemplateLayout) Valid() bool {
+	switch e {
+	case BlockV1:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for VolumeAndTokenContentApi.
 const (
 	Supported   VolumeAndTokenContentApi = "supported"
@@ -1551,6 +1566,9 @@ type TemplateBuildStartV2 struct {
 	// FromTemplate Template to use as a base for the template build
 	FromTemplate *string `json:"fromTemplate,omitempty"`
 
+	// Layout Guest device layout of a template. `block-v1` reserves workspace block slots in the base snapshot so block volumes can be mounted into its sandboxes. Omitted keeps the rootfs-only layout (or, for a build from another template, inherits that template's layout, which cannot be changed).
+	Layout *TemplateLayout `json:"layout,omitempty"`
+
 	// ReadyCmd Ready check command to execute in the template after the build
 	ReadyCmd *string `json:"readyCmd,omitempty"`
 
@@ -1559,10 +1577,16 @@ type TemplateBuildStartV2 struct {
 
 	// Steps List of steps to execute in the template build
 	Steps *[]TemplateStep `json:"steps,omitempty"`
+
+	// WorkspaceSlotCapacityGiB Capacity of each workspace block slot of a `block-v1` template, one entry per slot (at most 4). A block volume mounts into a slot of exactly its capacity. Required with `layout: block-v1`; a build from another template inherits that template's slots when both fields are omitted.
+	WorkspaceSlotCapacityGiB *[]int64 `json:"workspaceSlotCapacityGiB,omitempty"`
 }
 
 // TemplateBuildStatus Status of the template build
 type TemplateBuildStatus string
+
+// TemplateLayout Guest device layout of a template. `block-v1` reserves workspace block slots in the base snapshot so block volumes can be mounted into its sandboxes. Omitted keeps the rootfs-only layout (or, for a build from another template, inherits that template's layout, which cannot be changed).
+type TemplateLayout string
 
 // TemplateLegacy defines model for TemplateLegacy.
 type TemplateLegacy struct {

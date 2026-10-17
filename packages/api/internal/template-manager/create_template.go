@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -34,6 +35,41 @@ func (e *FromTemplateError) Unwrap() error {
 	return e.err
 }
 
+// TemplateLayout is the guest device layout a build asks for. The zero value
+// asks for none: a build from scratch is rootfs-only, a build from another
+// template inherits that template's layout. The template manager validates it.
+type TemplateLayout struct {
+	// Layout is "block-v1" or nil.
+	Layout *string
+	// WorkspaceSlotCapacityBytes is the capacity of each workspace slot.
+	WorkspaceSlotCapacityBytes []int64
+}
+
+// TemplateLayoutFromAPI converts the public build request's layout fields.
+func TemplateLayoutFromAPI(layout *api.TemplateLayout, slotCapacityGiB *[]int64) (TemplateLayout, error) {
+	var out TemplateLayout
+
+	if layout != nil {
+		if !layout.Valid() {
+			return TemplateLayout{}, fmt.Errorf("unknown template layout %q", *layout)
+		}
+
+		out.Layout = new(string(*layout))
+	}
+
+	if slotCapacityGiB != nil {
+		for i, gib := range *slotCapacityGiB {
+			if gib <= 0 || gib > math.MaxInt64>>30 {
+				return TemplateLayout{}, fmt.Errorf("workspace slot %d capacity %d GiB is out of range", i, gib)
+			}
+
+			out.WorkspaceSlotCapacityBytes = append(out.WorkspaceSlotCapacityBytes, gib<<30)
+		}
+	}
+
+	return out, nil
+}
+
 func (tm *TemplateManager) CreateTemplate(
 	ctx context.Context,
 	teamID uuid.UUID,
@@ -56,6 +92,7 @@ func (tm *TemplateManager) CreateTemplate(
 	clusterID uuid.UUID,
 	nodeID string,
 	version string,
+	layout TemplateLayout,
 ) (e error) {
 	ctx, span := tracer.Start(ctx, "create-template",
 		trace.WithAttributes(
@@ -113,21 +150,23 @@ func (tm *TemplateManager) CreateTemplate(
 	// used via TemplateBuildMetadata. They are still populated here for
 	// backwards compatibility with older template-managers that honor them.
 	template := &templatemanagergrpc.TemplateConfig{
-		TeamID:             teamID.String(),
-		TemplateID:         templateID,
-		BuildID:            buildID.String(),
-		VCpuCount:          int32(vCpuCount),
-		MemoryMB:           int32(memoryMB),
-		DiskSizeMB:         int32(diskSizeMB),
-		FreeDiskSizeMB:     new(int32(freeDiskSizeMB)),
-		KernelVersion:      kernelVersion,
-		FirecrackerVersion: firecrackerVersion,
-		HugePages:          features.HasHugePages(),
-		StartCommand:       startCmd,
-		ReadyCommand:       readyCmd,
-		Force:              force,
-		Steps:              convertTemplateSteps(steps),
-		FromImageRegistry:  imageRegistry,
+		TeamID:                     teamID.String(),
+		TemplateID:                 templateID,
+		BuildID:                    buildID.String(),
+		VCpuCount:                  int32(vCpuCount),
+		MemoryMB:                   int32(memoryMB),
+		DiskSizeMB:                 int32(diskSizeMB),
+		FreeDiskSizeMB:             new(int32(freeDiskSizeMB)),
+		KernelVersion:              kernelVersion,
+		FirecrackerVersion:         firecrackerVersion,
+		HugePages:                  features.HasHugePages(),
+		StartCommand:               startCmd,
+		ReadyCommand:               readyCmd,
+		Force:                      force,
+		Steps:                      convertTemplateSteps(steps),
+		FromImageRegistry:          imageRegistry,
+		Layout:                     layout.Layout,
+		WorkspaceSlotCapacityBytes: layout.WorkspaceSlotCapacityBytes,
 	}
 
 	err = setTemplateSource(ctx, tm, teamID, teamSlug, template, fromImage, fromTemplate)

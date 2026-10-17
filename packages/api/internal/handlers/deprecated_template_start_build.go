@@ -222,6 +222,7 @@ func (a *APIStore) PostTemplatesTemplateIDBuildsBuildID(c *gin.Context, template
 		apiutils.WithClusterFallback(team.ClusterID),
 		builderNode.NodeID,
 		templates.TemplateV1Version,
+		templatemanager.TemplateLayout{}, // layouts are a v2 build option
 	)
 
 	a.posthog.CreateAnalyticsUserEvent(ctx, userID.String(), team.ID.String(), "built environment", posthog.NewProperties().

@@ -1683,6 +1683,32 @@ components:
         readyCmd:
           description: Ready check command to execute in the template after the build
           type: string
+        layout:
+          $ref: "#/components/schemas/TemplateLayout"
+        workspaceSlotCapacityGiB:
+          description: >
+            Capacity of each workspace block slot of a `block-v1` template, one
+            entry per slot (at most 4). A block volume mounts into a slot of
+            exactly its capacity. Required with `layout: block-v1`; a build from
+            another template inherits that template's slots when both fields are
+            omitted.
+          type: array
+          maxItems: 4
+          items:
+            type: integer
+            format: int64
+            minimum: 1
+
+    TemplateLayout:
+      type: string
+      description: >
+        Guest device layout of a template. `block-v1` reserves workspace block
+        slots in the base snapshot so block volumes can be mounted into its
+        sandboxes. Omitted keeps the rootfs-only layout (or, for a build from
+        another template, inherits that template's layout, which cannot be
+        changed).
+      enum:
+        - block-v1
 
     TemplateBuildFileUpload:
       required:

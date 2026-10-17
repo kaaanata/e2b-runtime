@@ -15,6 +15,7 @@ import (
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	templatecache "github.com/e2b-dev/infra/packages/api/internal/cache/templates"
+	templatemanager "github.com/e2b-dev/infra/packages/api/internal/template-manager"
 	"github.com/e2b-dev/infra/packages/db/pkg/types"
 	"github.com/e2b-dev/infra/packages/db/queries"
 	"github.com/e2b-dev/infra/packages/shared/pkg/clusters"
@@ -179,6 +180,13 @@ func (a *APIStore) PostV2TemplatesTemplateIDBuildsBuildID(c *gin.Context, templa
 		return
 	}
 
+	layout, err := templatemanager.TemplateLayoutFromAPI(body.Layout, body.WorkspaceSlotCapacityGiB)
+	if err != nil {
+		a.sendAPIStoreError(c, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
 	// Call the Template Manager to build the environment
 	err = a.templateManager.CreateTemplate(
 		ctx,
@@ -202,6 +210,7 @@ func (a *APIStore) PostV2TemplatesTemplateIDBuildsBuildID(c *gin.Context, templa
 		clusterID,
 		builderNode.NodeID,
 		version,
+		layout,
 	)
 
 	a.posthog.CreateAnalyticsTeamEvent(ctx, team.ID.String(), "built environment", posthog.NewProperties().
