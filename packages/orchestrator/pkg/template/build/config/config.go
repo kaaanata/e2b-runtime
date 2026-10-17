@@ -2,6 +2,7 @@ package config
 
 import (
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/build/core/oci/auth"
+	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/metadata"
 	"github.com/e2b-dev/infra/packages/shared/pkg/consts"
 	templatemanager "github.com/e2b-dev/infra/packages/shared/pkg/grpc/template-manager"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
@@ -82,6 +83,15 @@ type TemplateConfig struct {
 	// flag once, at the start of the build, so every boot in the build agrees and the
 	// stored snapshot is self-describing.
 	CmdlineArgs map[string]string
+
+	// Layout is the guest device layout this build produces: metadata.LayoutLegacy
+	// (rootfs only) or metadata.LayoutBlockV1, whose every boot in the build carries
+	// Workspace.Slots placeholder drives so the base snapshot reserves them. Part of
+	// the base-layer cache key, since the device table is part of the snapshot.
+	Layout string
+
+	// Workspace is the slot layout of a LayoutBlockV1 build; nil otherwise.
+	Workspace *metadata.WorkspaceLayout
 }
 
 // ObjectMetadata is the provenance stamped on a build's uploaded objects.

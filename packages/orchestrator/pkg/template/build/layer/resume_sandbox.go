@@ -33,6 +33,14 @@ func (rs *ResumeSandbox) Sandbox(
 	layerExecutor *LayerExecutor,
 	template sbxtemplate.Template,
 ) (*sandbox.Sandbox, error) {
+	// A cached layer of a block-layout build was snapshotted with placeholder
+	// workspace drives; the resume needs files of the same size in the slots.
+	workspaceDrives, releaseWorkspace, err := buildWorkspaceDrives(layerExecutor)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseWorkspace()
+
 	sbx, err := rs.sandboxFactory.ResumeSandbox(
 		ctx,
 		template,
@@ -48,6 +56,7 @@ func (rs *ResumeSandbox) Sandbox(
 		time.Now(),
 		time.Now().Add(rs.timeout),
 		nil,
+		sandbox.ResumeWithWorkspaceDrives(workspaceDrives),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("resume sandbox: %w", err)

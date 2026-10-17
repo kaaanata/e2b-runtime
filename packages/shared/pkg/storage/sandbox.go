@@ -61,6 +61,16 @@ func (s *SandboxFiles) SandboxCacheRootfsLinkPath(config Config) string {
 	return filepath.Join(config.SandboxCacheDir, fmt.Sprintf("rootfs-%s-%s.link", s.SandboxID, s.randomID))
 }
 
+// SandboxCacheWorkspaceLinkPath is the host-side symlink the firecracker start
+// script resolves for the workspace block device in the given slot. It plays
+// the same role for a workspace drive as SandboxCacheRootfsLinkPath does for
+// the rootfs: the sandbox mount namespace holds a fixed path per slot, that
+// path is a symlink to this file, and this file is re-pointed at the real
+// backing file before the drive is configured or a snapshot is loaded.
+func (s *SandboxFiles) SandboxCacheWorkspaceLinkPath(config Config, slot int) string {
+	return filepath.Join(config.SandboxCacheDir, fmt.Sprintf("workspace%d-%s-%s.link", slot, s.SandboxID, s.randomID))
+}
+
 func (s *SandboxFiles) SandboxMetricsFifoPath() string {
 	return filepath.Join(s.tmpDir, fmt.Sprintf("fc-metrics-%s-%s.fifo", s.SandboxID, s.randomID))
 }
@@ -71,7 +81,8 @@ func (s *SandboxFiles) SandboxCgroupName() string {
 
 // SandboxFileGlobs returns glob patterns matching the on-disk files a sandbox
 // creates: firecracker/uffd sockets and the metrics fifo under tempDir, plus
-// the rootfs overlay and link files under sandboxCacheDir. The patterns mirror
+// the rootfs overlay and link files and the workspace drive link files under
+// sandboxCacheDir. The patterns mirror
 // the path builders above and are the single source of truth used by startup
 // reclaim. sandboxCacheDir may be empty, in which case the cache patterns are
 // omitted.
@@ -85,6 +96,7 @@ func SandboxFileGlobs(tempDir, sandboxCacheDir string) []string {
 		patterns = append(patterns,
 			filepath.Join(sandboxCacheDir, "rootfs-*-*.cow"),
 			filepath.Join(sandboxCacheDir, "rootfs-*-*.link"),
+			filepath.Join(sandboxCacheDir, "workspace*-*-*.link"),
 		)
 	}
 

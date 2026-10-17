@@ -4,6 +4,7 @@ package fc
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -18,10 +19,27 @@ const (
 
 	rootfsDriveID = "rootfs"
 
+	// workspaceDriveIDPrefix is the prefix of the Firecracker drive IDs of the
+	// workspace block slots; WorkspaceDriveID appends the slot index.
+	workspaceDriveIDPrefix = "workspace"
+
+	// MaxWorkspaceSlots is how many workspace block slots a block-layout template
+	// reserves in the guest device table. The slots exist from the template's
+	// base snapshot on: a memory snapshot restores the device table it was taken
+	// with, so a slot that was not in the build VM cannot be added at resume.
+	MaxWorkspaceSlots = 4
+
 	entropyBytesSize    int64 = 1024 // 1 KB
 	entropyRefillTime   int64 = 100
 	entropyOneTimeBurst int64 = 0
 )
+
+// WorkspaceDriveID is the Firecracker drive ID of the workspace block slot i
+// (0 <= i < MaxWorkspaceSlots). The ID is part of the snapshot's device table,
+// so it is derived from the slot index alone and never from the volume behind it.
+func WorkspaceDriveID(i int) string {
+	return fmt.Sprintf("%s%d", workspaceDriveIDPrefix, i)
+}
 
 type Config struct {
 	KernelVersion      string

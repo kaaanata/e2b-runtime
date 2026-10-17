@@ -130,6 +130,14 @@ func (cs *CreateSandbox) Sandbox(
 		return nil, fmt.Errorf("error comparing envd version: %w", err)
 	}
 
+	// Block-layout builds boot with placeholder workspace drives so this layer's
+	// snapshot reserves the slots; released right after FC has opened them.
+	workspaceDrives, releaseWorkspace, err := buildWorkspaceDrives(layerExecutor)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseWorkspace()
+
 	// In case of a new sandbox, base template ID is now used as the potentially exported template base ID.
 	sbx, err := cs.sandboxFactory.CreateSandbox(
 		ctx,
@@ -161,6 +169,7 @@ func (cs *CreateSandbox) Sandbox(
 		},
 		nil,
 		cs.preBootFn,
+		sandbox.WithWorkspaceDrives(workspaceDrives),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create sandbox: %w", err)

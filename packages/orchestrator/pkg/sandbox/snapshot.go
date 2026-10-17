@@ -11,6 +11,7 @@ import (
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/build"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/template"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/scheduling"
+	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/metadata"
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
 	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
@@ -59,6 +60,13 @@ type Snapshot struct {
 	// compression validation. (The memfile block size lives in
 	// MemorySnapshot.BlockSize.)
 	RootfsBlockSize uint64
+
+	// WorkspaceRevisions are the sealed revisions of the sandbox's workspace
+	// block slots, one per bound slot, produced after CreateSnapshot and before
+	// any resume so they pair with the memory state. Empty for a sandbox without
+	// workspace slots. The server publishes them alongside the snapshot; a
+	// snapshot whose revisions are missing is not ready.
+	WorkspaceRevisions []metadata.WorkspaceRevisionRef
 
 	cleanup *Cleanup
 }

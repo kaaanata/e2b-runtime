@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/cfg"
+	"github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/fc"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage"
 )
@@ -105,11 +106,18 @@ func cleanupFiles(config cfg.BuilderConfig, files *storage.SandboxFiles) func(co
 	return func(context.Context) error {
 		var errs []error
 
-		for _, p := range []string{
+		paths := []string{
 			files.SandboxFirecrackerSocketPath(),
 			files.SandboxUffdSocketPath(),
 			files.SandboxCacheRootfsLinkPath(config.StorageConfig),
-		} {
+		}
+		// Every slot, not only the bound ones: cleanup runs before it is known
+		// which slots the sandbox had, and removing a missing link is a no-op.
+		for slot := range fc.MaxWorkspaceSlots {
+			paths = append(paths, files.SandboxCacheWorkspaceLinkPath(config.StorageConfig, slot))
+		}
+
+		for _, p := range paths {
 			err := os.RemoveAll(p)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("failed to delete '%s': %w", p, err))

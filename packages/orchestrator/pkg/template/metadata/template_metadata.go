@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 
 	"go.opentelemetry.io/otel"
 
@@ -34,6 +36,62 @@ const (
 // ErrReplaceCommitted means the replacement is visible, but parent-directory
 // durability could not be confirmed.
 var ErrReplaceCommitted = ioutils.ErrAtomicWriteCommitted
+
+const (
+	// LayoutLegacy is the device layout every template had before workspace block
+	// slots: a rootfs drive and nothing else. It is the empty string so that
+	// pre-existing metadata (no field) decodes to it without a migration.
+	LayoutLegacy = ""
+
+	// LayoutBlockV1 is the layout whose base snapshot reserves workspace block
+	// slots next to the rootfs (see Template.Workspace). Also the capability name
+	// a reader must have to handle such a template.
+	LayoutBlockV1 = "block-v1"
+)
+
+// KnownCapabilities are the layouts and required capabilities this reader
+// handles. A Template naming anything outside this set is refused by the decode
+// path (ErrUnsupportedLayout) so that a reader built before a layout existed
+// never restores, forks or deletes what it does not understand. Adding a layout
+// means adding it here, in the release that can handle it, BEFORE any writer may
+// produce it.
+var KnownCapabilities = map[string]struct{}{
+	LayoutBlockV1: {},
+}
+
+// ErrUnsupportedLayout is the sentinel every UnsupportedLayoutError matches with
+// errors.Is. It is returned by the metadata decode path (FromFile, FromBuildID),
+// which is the one place both the API and the orchestrator read snapshots
+// through, so the gate cannot be bypassed by reading from a different entry.
+var ErrUnsupportedLayout = errors.New("unsupported template layout")
+
+// UnsupportedLayoutError reports which layout or required capability this reader
+// does not know. It wraps ErrUnsupportedLayout for errors.Is.
+type UnsupportedLayoutError struct {
+	// Layout is the unknown layout, or "" when only a capability is unknown.
+	Layout string
+	// Capabilities are the required capabilities this reader lacks.
+	Capabilities []string
+}
+
+func (e *UnsupportedLayoutError) Error() string {
+	switch {
+	case e.Layout != "" && len(e.Capabilities) > 0:
+		return fmt.Sprintf("%s: layout %q, required capabilities %v", ErrUnsupportedLayout, e.Layout, e.Capabilities)
+	case e.Layout != "":
+		return fmt.Sprintf("%s: layout %q", ErrUnsupportedLayout, e.Layout)
+	default:
+		return fmt.Sprintf("%s: required capabilities %v", ErrUnsupportedLayout, e.Capabilities)
+	}
+}
+
+func (e *UnsupportedLayoutError) Is(target error) bool {
+	return target == ErrUnsupportedLayout
+}
+
+func (e *UnsupportedLayoutError) Unwrap() error {
+	return ErrUnsupportedLayout
+}
 
 var tracer = otel.Tracer("github.com/e2b-dev/infra/packages/orchestrator/pkg/template/metadata")
 
@@ -146,6 +204,37 @@ type Prefetch struct {
 	Memory *MemoryPrefetchMapping `json:"memory"`
 }
 
+// WorkspaceLayout describes the workspace block slots a block-layout template
+// reserved in its device table at build time.
+type WorkspaceLayout struct {
+	// Slots is the number of workspace drives in the device table, numbered from
+	// 0 after the rootfs.
+	Slots int `json:"slots"`
+	// SlotCapacityBytes is the size of each slot's backing file, index-aligned
+	// with the slots. A snapshot restores only with files of exactly this size
+	// per slot, so it is recorded rather than re-derived.
+	SlotCapacityBytes []int64 `json:"slot_capacity_bytes"`
+}
+
+// WorkspaceRevisionRef points a snapshot at the sealed revision of one
+// workspace slot's volume, as it was at the pause that produced the snapshot.
+type WorkspaceRevisionRef struct {
+	// RevisionID is the control-plane identity of the sealed revision.
+	RevisionID string `json:"revision_id"`
+	// SubvolUUID and FsUUID identify the sealed Btrfs snapshot and the
+	// filesystem it lives on, so a restore can verify it opens the revision the
+	// snapshot was paired with rather than "the latest file" of the volume.
+	SubvolUUID string `json:"subvol_uuid"`
+	FsUUID     string `json:"fs_uuid"`
+	// SizeBytes is the revision's backing-file size; a restore must present the
+	// slot at exactly this size.
+	SizeBytes int64 `json:"size_bytes"`
+	// Consistency is how the revision pairs with the rest of the snapshot:
+	// "paired-memory" for a revision sealed with a memory snapshot,
+	// "filesystem-quiesced" for one sealed with a frozen filesystem-only pause.
+	Consistency string `json:"consistency"`
+}
+
 type Template struct {
 	Version      uint64           `json:"version"`
 	Template     TemplateMetadata `json:"template"`
@@ -192,6 +281,66 @@ type Template struct {
 	// This is a building block: it lets a later feature decide safely whether a
 	// snapshot is one it can cold-boot / rewrite without repairing the journal.
 	FsQuiesced bool `json:"fs_quiesced,omitempty"`
+
+	// Layout names the guest device layout this template's snapshots carry:
+	// LayoutLegacy (rootfs only, the zero value every pre-existing template
+	// decodes to) or LayoutBlockV1 (rootfs plus Workspace slots).
+	//
+	// Top level, next to CmdlineArgs, for the same reason: the device table is
+	// fixed when the base snapshot is taken and every later snapshot of the
+	// lineage restores it, so it is inherited lineage state. It must survive
+	// SameVersionTemplate on every pause, which the nested TemplateMetadata does
+	// not. A reader that does not know the layout refuses the whole Template
+	// (see KnownCapabilities).
+	Layout string `json:"layout,omitempty"`
+
+	// Workspace describes the workspace block slots of a LayoutBlockV1 template;
+	// nil for LayoutLegacy. Carried like Layout.
+	Workspace *WorkspaceLayout `json:"workspace,omitempty"`
+
+	// RequiredCapabilities lists what a reader must support to handle this
+	// Template beyond what Layout implies. Empty for every template so far; the
+	// decode path refuses any entry outside KnownCapabilities. Carried like
+	// Layout: a capability a snapshot needs, every later snapshot of the lineage
+	// needs too.
+	RequiredCapabilities []string `json:"required_capabilities,omitempty"`
+
+	// WorkspaceRevisions are the sealed workspace volume revisions paired with
+	// this snapshot, one per bound slot, stamped at pause by the checkpoint
+	// path. Like FilesystemOnly it describes ONE snapshot, not the lineage, so
+	// SameVersionTemplate/NewVersionTemplate/BasedOn deliberately do NOT carry
+	// it and Pause re-stamps it. WithPrefetch does carry it: it rewrites the
+	// metadata of the same snapshot, whose revisions are unchanged.
+	WorkspaceRevisions []WorkspaceRevisionRef `json:"workspace_revisions,omitempty"`
+}
+
+// HasWorkspaceSlots reports whether this template's device table reserves
+// workspace block slots, i.e. a sandbox of it can bind workspace volumes.
+func (t Template) HasWorkspaceSlots() bool {
+	return t.Layout == LayoutBlockV1 && t.Workspace != nil && t.Workspace.Slots > 0
+}
+
+// checkCapabilities refuses a Template whose layout or required capabilities
+// this reader does not know. Run in the single decode path so every consumer
+// (API, orchestrator, build) gets the same answer.
+func (t Template) checkCapabilities() error {
+	var unknown UnsupportedLayoutError
+
+	if _, ok := KnownCapabilities[t.Layout]; t.Layout != LayoutLegacy && !ok {
+		unknown.Layout = t.Layout
+	}
+
+	for _, c := range t.RequiredCapabilities {
+		if _, ok := KnownCapabilities[c]; !ok && !slices.Contains(unknown.Capabilities, c) {
+			unknown.Capabilities = append(unknown.Capabilities, c)
+		}
+	}
+
+	if unknown.Layout == "" && len(unknown.Capabilities) == 0 {
+		return nil
+	}
+
+	return &unknown
 }
 
 // IsFilesystemOnly reports whether this snapshot persists only the filesystem
@@ -246,54 +395,74 @@ func V1TemplateVersion() Template {
 // lineage, this is a new build that resolves the guest kernel cmdline flag for its own
 // team — inheriting the parent's arguments would record arguments the child's kernel
 // never booted with, and a later filesystem-only cold boot would then apply them.
+//
+// It DOES carry Layout, Workspace and RequiredCapabilities: the child build resumes
+// the parent's snapshot, whose device table it cannot change, so the slots are a
+// fact about the child's layers too. The finalize phase then stamps the build's
+// own configuration over them, as it does for CmdlineArgs.
 func (t Template) BasedOn(
 	ft FromTemplate,
 ) Template {
 	return Template{
-		Version:      CurrentVersion,
-		Template:     t.Template,
-		Context:      t.Context,
-		Start:        t.Start,
-		FromTemplate: &ft,
-		FromImage:    nil,
+		Version:              CurrentVersion,
+		Template:             t.Template,
+		Context:              t.Context,
+		Start:                t.Start,
+		FromTemplate:         &ft,
+		FromImage:            nil,
+		Layout:               t.Layout,
+		Workspace:            t.Workspace,
+		RequiredCapabilities: t.RequiredCapabilities,
 	}
 }
 
 func (t Template) NewVersionTemplate(metadata TemplateMetadata) Template {
 	return Template{
-		Version:      CurrentVersion,
-		Template:     metadata,
-		Context:      t.Context,
-		Start:        t.Start,
-		FromTemplate: t.FromTemplate,
-		FromImage:    t.FromImage,
-		CmdlineArgs:  t.CmdlineArgs,
+		Version:              CurrentVersion,
+		Template:             metadata,
+		Context:              t.Context,
+		Start:                t.Start,
+		FromTemplate:         t.FromTemplate,
+		FromImage:            t.FromImage,
+		CmdlineArgs:          t.CmdlineArgs,
+		Layout:               t.Layout,
+		Workspace:            t.Workspace,
+		RequiredCapabilities: t.RequiredCapabilities,
 	}
 }
 
 func (t Template) SameVersionTemplate(metadata TemplateMetadata) Template {
 	return Template{
-		Version:      t.Version,
-		Template:     metadata,
-		Context:      t.Context,
-		Start:        t.Start,
-		FromTemplate: t.FromTemplate,
-		FromImage:    t.FromImage,
-		CmdlineArgs:  t.CmdlineArgs,
+		Version:              t.Version,
+		Template:             metadata,
+		Context:              t.Context,
+		Start:                t.Start,
+		FromTemplate:         t.FromTemplate,
+		FromImage:            t.FromImage,
+		CmdlineArgs:          t.CmdlineArgs,
+		Layout:               t.Layout,
+		Workspace:            t.Workspace,
+		RequiredCapabilities: t.RequiredCapabilities,
 	}
 }
 
 // WithPrefetch returns a copy of the template with the given prefetch mapping.
+// It describes the SAME snapshot, so unlike the other copy-constructors it keeps
+// WorkspaceRevisions.
 func (t Template) WithPrefetch(prefetch *Prefetch) Template {
 	return Template{
-		Version:      t.Version,
-		Template:     t.Template,
-		Context:      t.Context,
-		Start:        t.Start,
-		FromTemplate: t.FromTemplate,
-		FromImage:    t.FromImage,
-		Prefetch:     prefetch,
-		CmdlineArgs:  t.CmdlineArgs,
+		Version:              t.Version,
+		Template:             t.Template,
+		Context:              t.Context,
+		Start:                t.Start,
+		FromTemplate:         t.FromTemplate,
+		FromImage:            t.FromImage,
+		Prefetch:             prefetch,
+		CmdlineArgs:          t.CmdlineArgs,
+		Layout:               t.Layout,
+		Workspace:            t.Workspace,
+		RequiredCapabilities: t.RequiredCapabilities,
+		WorkspaceRevisions:   t.WorkspaceRevisions,
 	}
 }
 
@@ -391,6 +560,14 @@ func deserialize(reader io.Reader) (Template, error) {
 	err = json.Unmarshal(data, &templateMetadata)
 	if err != nil {
 		return Template{}, fmt.Errorf("error unmarshaling template metadata: %w", err)
+	}
+
+	// Unknown JSON fields are ignored above, so a newer writer's additions are
+	// invisible to an older reader. Layout and RequiredCapabilities are the
+	// fields a writer sets precisely to make a reader notice; refuse rather
+	// than treat the snapshot as the legacy layout it is not.
+	if err := templateMetadata.checkCapabilities(); err != nil {
+		return Template{}, err
 	}
 
 	return templateMetadata, nil
