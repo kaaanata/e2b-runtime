@@ -33,6 +33,7 @@ import (
 	clickhouse "github.com/e2b-dev/infra/packages/clickhouse/pkg"
 	clickhouseevents "github.com/e2b-dev/infra/packages/clickhouse/pkg/events"
 	clickhousehoststats "github.com/e2b-dev/infra/packages/clickhouse/pkg/hoststats"
+	"github.com/e2b-dev/infra/packages/orchestrator/pkg/blockvol"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/cfg"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/chrooted"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/events"
@@ -885,6 +886,23 @@ func run(config cfg.Config, opts Options) (success bool) {
 	builder := chrooted.NewBuilder(config)
 	volumeService := volumes.New(config, builder)
 
+	// workspace block volumes
+	var blockVolumes *blockvol.Service
+	if config.BlockVolumeEnabled {
+		watermarks := blockvol.DefaultWatermarks
+		if config.BlockVolumeMinDataFreeBytes > 0 {
+			watermarks.MinDataFree = config.BlockVolumeMinDataFreeBytes
+		}
+		if config.BlockVolumeMinMetadataFreeBytes > 0 {
+			watermarks.MinMetadataFree = config.BlockVolumeMinMetadataFreeBytes
+		}
+
+		blockVolumes, err = blockvol.New(blockvol.Config{Root: config.BlockVolumeRoot, Watermarks: watermarks})
+		if err != nil {
+			logger.L().Fatal(ctx, "failed to initialize block volumes", zap.Error(err))
+		}
+	}
+
 	uploads := sandbox.NewUploads(templateCache, persistence, peerResolver, redisClient)
 	closers = append(closers, closer{"pending uploads", func(context.Context) error {
 		uploads.Stop()
@@ -963,6 +981,10 @@ func run(config cfg.Config, opts Options) (success bool) {
 	grpcServer := e2bgrpc.NewGRPCServer(tel, e2bgrpc.WithSandboxResumeMetrics())
 	orchestrator.RegisterSandboxServiceServer(grpcServer, orchestratorService)
 	orchestrator.RegisterVolumeServiceServer(grpcServer, volumeService)
+	if blockVolumes != nil {
+		orchestrator.RegisterBlockVolumeServiceServer(grpcServer,
+			blockvol.NewGRPCServer(blockVolumes, blockVolumes.Layout().Root(), config.BlockVolumeCapacityTiers()))
+	}
 	orchestrator.RegisterChunkServiceServer(grpcServer, orchestratorService)
 
 	// template manager
