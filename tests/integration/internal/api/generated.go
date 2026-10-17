@@ -1049,7 +1049,7 @@ type SandboxEgressProxyConfig struct {
 
 // SandboxForkRequest defines model for SandboxForkRequest.
 type SandboxForkRequest struct {
-	// AllowSharedIdentity Required to fork a sandbox that mounts block volumes. Every fork resumes the same memory snapshot and a copy of each block volume taken at that instant, so the forks share everything that was in memory: tokens, sessions, open connections and filesystem identities. Upstream services see the forks as the same client. Without it such a fork is rejected with 409.
+	// AllowSharedIdentity Required to fork a sandbox that mounts block volumes. Every fork resumes the same memory snapshot and a copy of each block volume taken at that instant, so the forks share everything that was in memory: tokens, sessions, open connections and filesystem identities. Upstream services see the forks as the same client. Without it the whole request is rejected with 409 before the sandbox is checkpointed.
 	AllowSharedIdentity *bool `json:"allowSharedIdentity,omitempty"`
 
 	// Count Number of forked sandboxes to create. All forks boot from the same snapshot, so the snapshot is captured once regardless of count. Each fork succeeds or fails independently; the outcome of each is reported in its entry of the response list.
@@ -2666,7 +2666,7 @@ type ClientInterface interface {
 
 	// PostSandboxesSandboxIDForkWithBody Fork sandbox
 	//
-	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -2675,7 +2675,7 @@ type ClientInterface interface {
 
 	// PostSandboxesSandboxIDFork Fork sandbox
 	//
-	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -3796,7 +3796,7 @@ func (c *Client) PostSandboxesSandboxIDConnect(ctx context.Context, sandboxID Sa
 
 // PostSandboxesSandboxIDForkWithBody Fork sandbox
 //
-// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 //
 // Takes any type of body and a specified content type.
 //
@@ -3815,7 +3815,7 @@ func (c *Client) PostSandboxesSandboxIDForkWithBody(ctx context.Context, sandbox
 
 // PostSandboxesSandboxIDFork Fork sandbox
 //
-// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 //
 // Takes a body of the `application/json` content type.
 //
@@ -8841,7 +8841,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostSandboxesSandboxIDForkWithBodyWithResponse Fork sandbox
 	//
-	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -8850,7 +8850,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostSandboxesSandboxIDForkWithResponse Fork sandbox
 	//
-	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -11065,6 +11065,8 @@ type PostSandboxesSandboxIDForkResponse struct {
 	HTTPResponse *http.Response
 	// JSON201 the response for an HTTP 201 `application/json` response
 	JSON201 *[]SandboxForkResult
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *N400
 	// JSON401 the response for an HTTP 401 `application/json` response
 	JSON401 *N401
 	// JSON404 the response for an HTTP 404 `application/json` response
@@ -11080,6 +11082,11 @@ type PostSandboxesSandboxIDForkResponse struct {
 // GetJSON201 returns the response for an HTTP 201 `application/json` response
 func (r PostSandboxesSandboxIDForkResponse) GetJSON201() *[]SandboxForkResult {
 	return r.JSON201
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r PostSandboxesSandboxIDForkResponse) GetJSON400() *N400 {
+	return r.JSON400
 }
 
 // GetJSON401 returns the response for an HTTP 401 `application/json` response
@@ -14663,7 +14670,7 @@ func (c *ClientWithResponses) PostSandboxesSandboxIDConnectWithResponse(ctx cont
 
 // PostSandboxesSandboxIDForkWithBodyWithResponse Fork sandbox
 //
-// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -14678,7 +14685,7 @@ func (c *ClientWithResponses) PostSandboxesSandboxIDForkWithBodyWithResponse(ctx
 
 // PostSandboxesSandboxIDForkWithResponse Fork sandbox
 //
-// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -16935,6 +16942,13 @@ func ParsePostSandboxesSandboxIDForkResponse(rsp *http.Response) (*PostSandboxes
 			return nil, err
 		}
 		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest N400
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest N401

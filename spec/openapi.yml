@@ -1123,7 +1123,8 @@ components:
             taken at that instant, so the forks share everything that was in
             memory: tokens, sessions, open connections and filesystem
             identities. Upstream services see the forks as the same client.
-            Without it such a fork is rejected with 409.
+            Without it the whole request is rejected with 409 before the
+            sandbox is checkpointed.
 
     SandboxForkResult:
       type: object
@@ -3184,7 +3185,11 @@ paths:
         new sandboxes from that snapshot. Returns one result per requested
         fork, each carrying either the created sandbox or the error that
         prevented it from starting. A non-201 status means the request failed
-        before any fork was attempted.
+        before any fork was attempted, and before the checkpoint: a refused
+        fork leaves no snapshot and no block volume revision behind. 409 when
+        the sandbox is not running (e.g. paused) or when it mounts block
+        volumes and `allowSharedIdentity` is not true (`error_code`
+        `block_volume_shared_identity_required`).
       tags: [sandboxes]
       security:
         - ApiKeyAuth: []
@@ -3213,6 +3218,8 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/SandboxForkResult"
+        "400":
+          $ref: "#/components/responses/400"
         "409":
           $ref: "#/components/responses/409"
         "404":

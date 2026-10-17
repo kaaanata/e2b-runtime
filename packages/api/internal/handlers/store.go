@@ -201,6 +201,7 @@ type APIStore struct {
 	// (refusal before RemoveSandbox) without a real orchestrator.
 	pauseBackendOverride   pauseOrchestrator
 	resumeBackendOverride  resumeWaitOrchestrator
+	forkBackendOverride    forkOrchestrator
 	connectBackendOverride connectOrchestrator
 	teamSandboxCounter     teamRunningSandboxCounter
 	templateManager        *template_manager.TemplateManager

@@ -419,9 +419,9 @@ func (a *APIStore) planResumeBlockVolumes(
 
 		if fork && memorySnapshot && !allowSharedIdentity {
 			return nil, &api.APIError{
-				Code: http.StatusConflict,
-				ClientMsg: "Forking a sandbox with block volumes resumes the same memory and filesystem identity in every fork; " +
-					"set allowSharedIdentity to true to accept that",
+				Code:      http.StatusConflict,
+				ErrorCode: errCodeSharedIdentityRequired,
+				ClientMsg: errMsgSharedIdentityRequired,
 			}
 		}
 
