@@ -105,6 +105,18 @@ message SandboxVolumeMount {
   // Empty keeps envd's built-in options, which is what every sandbox created
   // before this field existed gets.
   string consistency_profile = 5;
+  // backend is "nfs" (or empty, for requests from before the field existed)
+  // or "block". A worker without block volume support must refuse a block
+  // mount instead of treating it as NFS.
+  string backend = 6;
+  // incarnation_id is the writable image a block mount binds; the control
+  // plane has already recorded the attachment. Block mounts only.
+  string incarnation_id = 7;
+  // fs_uuid is the ext4 UUID envd uses to find the device. Block mounts only.
+  string fs_uuid = 8;
+  // capacity_bytes is the image size the workspace slot is configured with.
+  // Block mounts only.
+  uint64 capacity_bytes = 9;
 }
 
 message SandboxNetworkConfig {

@@ -1,0 +1,192 @@
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "https://github.com/e2b-dev/infra/orchestrator";
+
+// BlockVolumeService manages workspace block volumes on the node that owns
+// them: ext4 images in Btrfs subvolumes, with writable incarnations and
+// sealed read-only revisions. It is internal to the control plane (the API's
+// volume jobs call it) and never serves volume content.
+//
+// Every mutating RPC is idempotent by operation_id: a replay with the same
+// arguments returns the recorded result without touching the filesystem
+// again, and a replay with different arguments fails with ALREADY_EXISTS.
+// Callers allocate every identifier (operation, incarnation, revision) before
+// the first attempt, so an attempt with an unknown outcome is retried with
+// the same request.
+//
+// Error codes: INVALID_ARGUMENT for malformed ids or a clone mode the source
+// revision does not support; NOT_FOUND for a missing revision or
+// incarnation; FAILED_PRECONDITION when an incarnation is held by another
+// writer, blocked, or still in use; RESOURCE_EXHAUSTED below the node's
+// Btrfs free-space watermarks; PERMISSION_DENIED when a seal names an
+// execution that is not the recorded holder; ALREADY_EXISTS for a reused
+// operation id; UNIMPLEMENTED when the node has block volumes disabled.
+service BlockVolumeService {
+  // CreateBlockVolume materialises a fresh fixed-capacity ext4 incarnation
+  // and seals it as the volume's first revision.
+  rpc CreateBlockVolume(CreateBlockVolumeRequest) returns (CreateBlockVolumeResponse);
+  // CloneBlockVolume derives a new writable incarnation from a revision.
+  rpc CloneBlockVolume(CloneBlockVolumeRequest) returns (CloneBlockVolumeResponse);
+  // SealBlockVolume snapshots an incarnation into an immutable revision.
+  rpc SealBlockVolume(SealBlockVolumeRequest) returns (SealBlockVolumeResponse);
+  // DeleteBlockVolume removes the named revisions and incarnations.
+  rpc DeleteBlockVolume(DeleteBlockVolumeRequest) returns (DeleteBlockVolumeResponse);
+  // ReconcileBlockVolume compares a volume's physical state with what the
+  // caller expects. It only reads.
+  rpc ReconcileBlockVolume(ReconcileBlockVolumeRequest) returns (ReconcileBlockVolumeResponse);
+  // ForgetBlockVolumeOperation drops the node-local record and staging area
+  // of an operation whose outcome the caller has durably committed. A replay
+  // of a forgotten operation redoes the work, so it must only be called once
+  // the operation can no longer be retried.
+  rpc ForgetBlockVolumeOperation(ForgetBlockVolumeOperationRequest) returns (ForgetBlockVolumeOperationResponse);
+}
+
+message BlockVolumeRef {
+  string team_id = 1;
+  string volume_id = 2;
+}
+
+// BlockVolumeConsistency says what a revision's image is consistent with.
+enum BlockVolumeConsistency {
+  BLOCK_VOLUME_CONSISTENCY_UNSPECIFIED = 0;
+  // The guest filesystems were frozen before the seal; a cold boot can mount
+  // the image.
+  BLOCK_VOLUME_CONSISTENCY_FILESYSTEM_QUIESCED = 1;
+  // The seal is paired with a memory snapshot taken at the same point; the
+  // image is only valid restored together with that memory.
+  BLOCK_VOLUME_CONSISTENCY_PAIRED_MEMORY = 2;
+}
+
+// BlockVolumeCloneMode says how the clone will be used. The node derives
+// whether the filesystem UUID is preserved from it, never the caller.
+enum BlockVolumeCloneMode {
+  BLOCK_VOLUME_CLONE_MODE_UNSPECIFIED = 0;
+  // A sandbox cold-boots on the clone: requires a filesystem-quiesced
+  // revision; the clone gets a fresh filesystem UUID.
+  BLOCK_VOLUME_CLONE_MODE_COLD_BOOT = 1;
+  // A memory snapshot is restored on the clone: requires a paired-memory
+  // revision; the clone keeps the revision's filesystem UUID because the
+  // restored guest kernel still has that filesystem mounted.
+  BLOCK_VOLUME_CLONE_MODE_MEMORY_RESTORE = 2;
+}
+
+message BlockVolumeIncarnation {
+  string incarnation_id = 1;
+  // Empty for the incarnation a volume is created with.
+  string parent_revision_id = 2;
+  string subvol_uuid = 3;
+  string fs_uuid = 4;
+  // Subvolume path relative to the node's block volume root.
+  string subvol_path = 5;
+  uint64 capacity_bytes = 6;
+  uint64 allocated_bytes = 7;
+}
+
+message BlockVolumeRevision {
+  string revision_id = 1;
+  string source_incarnation_id = 2;
+  string source_operation_id = 3;
+  string subvol_uuid = 4;
+  string parent_subvol_uuid = 5;
+  string fs_uuid = 6;
+  uint64 size_bytes = 7;
+  uint64 allocated_bytes = 8;
+  google.protobuf.Timestamp sealed_at = 9;
+  BlockVolumeConsistency consistency = 10;
+}
+
+message CreateBlockVolumeRequest {
+  string operation_id = 1;
+  BlockVolumeRef volume = 2;
+  string incarnation_id = 3;
+  string revision_id = 4;
+  uint64 capacity_bytes = 5;
+}
+
+message CreateBlockVolumeResponse {
+  BlockVolumeIncarnation incarnation = 1;
+  // Revision 0, filesystem-quiesced (a freshly formatted, never mounted
+  // image).
+  BlockVolumeRevision revision = 2;
+}
+
+message CloneBlockVolumeRequest {
+  string operation_id = 1;
+  BlockVolumeRef volume = 2;
+  string source_revision_id = 3;
+  // The consistency the control plane recorded when the revision was sealed.
+  BlockVolumeConsistency source_consistency = 4;
+  BlockVolumeCloneMode mode = 5;
+  string incarnation_id = 6;
+}
+
+message CloneBlockVolumeResponse {
+  BlockVolumeIncarnation incarnation = 1;
+}
+
+message SealBlockVolumeRequest {
+  string operation_id = 1;
+  BlockVolumeRef volume = 2;
+  string incarnation_id = 3;
+  string revision_id = 4;
+  // The writer the caller believes holds the incarnation. Empty asserts that
+  // nobody holds it (an offline seal of a released incarnation).
+  string execution_id = 5;
+  BlockVolumeConsistency consistency = 6;
+}
+
+message SealBlockVolumeResponse {
+  BlockVolumeRevision revision = 1;
+}
+
+message DeleteBlockVolumeRequest {
+  string operation_id = 1;
+  BlockVolumeRef volume = 2;
+  // Revisions are removed before incarnations. Missing images are not an
+  // error; a held incarnation fails the call with FAILED_PRECONDITION.
+  repeated string revision_ids = 3;
+  repeated string incarnation_ids = 4;
+}
+
+message DeleteBlockVolumeResponse {}
+
+message ReconcileBlockVolumeRequest {
+  string operation_id = 1;
+  BlockVolumeRef volume = 2;
+  repeated string incarnation_ids = 3;
+  repeated string revision_ids = 4;
+  // Incarnations of this volume that should have an active writer on the
+  // node.
+  repeated string held_incarnation_ids = 5;
+}
+
+message BlockVolumeHolder {
+  string incarnation_id = 1;
+  string sandbox_id = 2;
+  string execution_id = 3;
+  string state = 4;
+  string reason = 5;
+}
+
+message ReconcileBlockVolumeResponse {
+  repeated string missing_incarnation_ids = 1;
+  repeated string unexpected_incarnation_ids = 2;
+  repeated string missing_revision_ids = 3;
+  repeated string unexpected_revision_ids = 4;
+  repeated string missing_holder_incarnation_ids = 5;
+  repeated BlockVolumeHolder unexpected_holders = 6;
+  repeated BlockVolumeHolder blocked_holders = 7;
+  // Operations with leftovers in the node's staging area (all volumes);
+  // whether they are garbage depends on the caller's operation ledger.
+  repeated string staging_operation_ids = 8;
+  // True when the volume's images and holders match the request exactly.
+  bool clean = 9;
+}
+
+message ForgetBlockVolumeOperationRequest {
+  string operation_id = 1;
+}
+
+message ForgetBlockVolumeOperationResponse {}
