@@ -32,6 +32,7 @@ import (
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/artifact"
 	blockmetrics "github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/block/metrics"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/cgroup"
+	sandboxfc "github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/fc"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/nbd"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/network"
 	sbxtemplate "github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/template"
@@ -40,6 +41,8 @@ import (
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/build"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/build/config"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/build/metrics"
+	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/build/workspace"
+	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/metadata"
 	artifactsregistry "github.com/e2b-dev/infra/packages/shared/pkg/artifacts-registry"
 	"github.com/e2b-dev/infra/packages/shared/pkg/dockerhub"
 	"github.com/e2b-dev/infra/packages/shared/pkg/fcversion"
@@ -87,7 +90,18 @@ func main() {
 	readyCmd := flag.String("ready-cmd", "", "ready check command")
 	timeout := flag.Int("timeout", 5, "build timeout in minutes")
 	verbose := flag.Bool("v", false, "verbose output")
+	layout := flag.String("layout", metadata.LayoutLegacy, `guest device layout: "" (rootfs only) or "block-v1" (with workspace block slots)`)
+	workspaceSlotsGiB := flag.String("workspace-slots-gib", "", `comma-separated GiB size of each workspace slot of a "block-v1" build, e.g. "10,10,10,10"`)
 	flag.Parse()
+
+	workspaceLayout, err := parseWorkspaceSlots(*workspaceSlotsGiB)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := workspace.ValidateLayout(*layout, workspaceLayout, sandboxfc.MaxWorkspaceSlots); err != nil {
+		log.Fatalf("layout: %v", err)
+	}
 
 	if *disableMemfd {
 		featureflags.OverrideBoolFlag(featureflags.UseMemFdFlag, false)
@@ -134,7 +148,7 @@ func main() {
 		log.Fatalf("network config: %v", err)
 	}
 
-	err = doBuild(ctx, *templateID, *toBuild, *fromBuild, *kernel, *fc, *vcpu, *memory, *disk, *hugePages, *startCmd, *setupCmd, *readyCmd, localMode, *verbose, *timeout, builderConfig, networkConfig)
+	err = doBuild(ctx, *templateID, *toBuild, *fromBuild, *kernel, *fc, *vcpu, *memory, *disk, *hugePages, *startCmd, *setupCmd, *readyCmd, localMode, *verbose, *timeout, builderConfig, networkConfig, *layout, workspaceLayout)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -237,6 +251,8 @@ func doBuild(
 	timeout int,
 	builderConfig cfg.BuilderConfig,
 	networkConfig network.Config,
+	layout string,
+	workspaceLayout *metadata.WorkspaceLayout,
 ) error {
 	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(timeout)*time.Minute)
 	defer cancel()
@@ -411,6 +427,8 @@ func doBuild(
 		FreePageHinting:    fcInfo.HasFreePageHinting(),
 		TeamID:             "local",
 		Steps:              steps,
+		Layout:             layout,
+		Workspace:          workspaceLayout,
 	}
 
 	pageSizeStr := "2MB (hugepages)"
@@ -630,4 +648,26 @@ func download(ctx context.Context, rawURL, path string, perm os.FileMode) error 
 	fmt.Printf("✓ Downloaded %s\n", filepath.Base(path))
 
 	return nil
+}
+
+// parseWorkspaceSlots turns "10,10" (GiB per slot) into a workspace layout;
+// empty means none.
+func parseWorkspaceSlots(gib string) (*metadata.WorkspaceLayout, error) {
+	if gib == "" {
+		return nil, nil
+	}
+
+	ws := &metadata.WorkspaceLayout{}
+	for _, part := range strings.Split(gib, ",") {
+		n, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("workspace slot size %q: %w", part, err)
+		}
+
+		ws.SlotCapacityBytes = append(ws.SlotCapacityBytes, n<<30)
+	}
+
+	ws.Slots = len(ws.SlotCapacityBytes)
+
+	return ws, nil
 }

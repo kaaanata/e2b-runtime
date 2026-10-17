@@ -19,6 +19,7 @@ import (
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/build/buildlogger"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/build/config"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/build/core/oci/auth"
+	templatemetadata "github.com/e2b-dev/infra/packages/orchestrator/pkg/template/metadata"
 	"github.com/e2b-dev/infra/packages/shared/pkg/fcversion"
 	"github.com/e2b-dev/infra/packages/shared/pkg/featureflags"
 	templatemanager "github.com/e2b-dev/infra/packages/shared/pkg/grpc/template-manager"
@@ -132,6 +133,13 @@ func (s *ServerStore) TemplateCreate(ctx context.Context, templateRequest *templ
 
 	freeDiskSizeMB := resolveFreeDiskSizeMB(cfg)
 
+	layout, workspaceLayout, err := resolveTemplateLayout(ctx, cfg, func(ctx context.Context, buildID string) (templatemetadata.Template, error) {
+		return templatemetadata.FromBuildID(ctx, s.templateStorage, buildID)
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	template := config.TemplateConfig{
 		Version:              version,
 		TeamID:               cfg.GetTeamID(),
@@ -154,10 +162,10 @@ func (s *ServerStore) TemplateCreate(ctx context.Context, templateRequest *templ
 		KernelVersion:        kernelVersion,
 		FirecrackerVersion:   firecrackerVersion,
 		CmdlineArgs:          cmdlineArgs,
-		// Layout and Workspace stay at metadata.LayoutLegacy/nil: readers that
-		// understand LayoutBlockV1 ship before any writer produces it. Setting them
-		// from the build request is the control-plane step that enables
-		// workspace block slots for a template.
+		// Readers that understand LayoutBlockV1 must be deployed before a
+		// request asks for it (the bridge-reader rule).
+		Layout:    layout,
+		Workspace: workspaceLayout,
 	}
 
 	logs := buildlogger.NewLogEntryLogger()

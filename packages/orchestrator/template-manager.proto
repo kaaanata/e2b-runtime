@@ -91,6 +91,16 @@ message TemplateConfig {
   // Optional during the rolling upgrade. When absent, the template manager
   // uses diskSizeMB as the post-build free-space target.
   optional int32 freeDiskSizeMB = 17;
+
+  // layout is the guest device layout of the template: empty (rootfs only) or
+  // "block-v1", whose base snapshot reserves workspace block slots so block
+  // volumes can be attached to its sandboxes. A build from another template
+  // inherits that template's layout when this is unset and must not change it.
+  optional string layout = 18;
+  // workspaceSlotCapacityBytes is the size of each workspace slot of a
+  // "block-v1" build, one entry per slot; a block volume of exactly that size
+  // takes the slot at runtime.
+  repeated int64 workspaceSlotCapacityBytes = 19;
 }
 
 message TemplateCreateRequest {
