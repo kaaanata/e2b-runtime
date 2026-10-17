@@ -225,6 +225,21 @@ func TestGRPCCloneBlockVolumeModes(t *testing.T) {
 		requireCode(t, err, codes.InvalidArgument)
 	}
 
+	// Into another volume of the same team.
+	target := VolumeRef{Team: vol.Team, Volume: NewID()}
+	into, err := f.srv.CloneBlockVolume(t.Context(), &orchestrator.CloneBlockVolumeRequest{
+		OperationId: NewID().String(), Volume: refProto(target), SourceVolume: refProto(vol),
+		SourceRevisionId: srcRev, SourceConsistency: quiesced, Mode: coldBoot, IncarnationId: NewID().String(),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, into.GetIncarnation().GetSubvolPath(), target.Volume.String())
+
+	_, err = f.srv.CloneBlockVolume(t.Context(), &orchestrator.CloneBlockVolumeRequest{
+		OperationId: NewID().String(), Volume: refProto(VolumeRef{Team: NewID(), Volume: NewID()}), SourceVolume: refProto(vol),
+		SourceRevisionId: srcRev, SourceConsistency: quiesced, Mode: coldBoot, IncarnationId: NewID().String(),
+	})
+	requireCode(t, err, codes.InvalidArgument)
+
 	_, err = f.srv.CloneBlockVolume(t.Context(), &orchestrator.CloneBlockVolumeRequest{
 		OperationId: NewID().String(), Volume: refProto(vol), SourceRevisionId: NewID().String(),
 		SourceConsistency: quiesced, Mode: coldBoot, IncarnationId: NewID().String(),

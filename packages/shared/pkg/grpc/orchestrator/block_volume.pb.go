@@ -532,9 +532,14 @@ type CloneBlockVolumeRequest struct {
 	// The consistency the control plane recorded when the revision was sealed.
 	SourceConsistency BlockVolumeConsistency `protobuf:"varint,4,opt,name=source_consistency,json=sourceConsistency,proto3,enum=BlockVolumeConsistency" json:"source_consistency,omitempty"`
 	Mode              BlockVolumeCloneMode   `protobuf:"varint,5,opt,name=mode,proto3,enum=BlockVolumeCloneMode" json:"mode,omitempty"`
-	IncarnationId     string                 `protobuf:"bytes,6,opt,name=incarnation_id,json=incarnationId,proto3" json:"incarnation_id,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// incarnation_id is the new incarnation, created in volume.
+	IncarnationId string `protobuf:"bytes,6,opt,name=incarnation_id,json=incarnationId,proto3" json:"incarnation_id,omitempty"`
+	// source_volume owns source_revision_id. Empty means volume itself (a
+	// sandbox fork); a different volume of the same team clones into a new
+	// volume. Both must live on this node.
+	SourceVolume  *BlockVolumeRef `protobuf:"bytes,7,opt,name=source_volume,json=sourceVolume,proto3" json:"source_volume,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CloneBlockVolumeRequest) Reset() {
@@ -607,6 +612,13 @@ func (x *CloneBlockVolumeRequest) GetIncarnationId() string {
 		return x.IncarnationId
 	}
 	return ""
+}
+
+func (x *CloneBlockVolumeRequest) GetSourceVolume() *BlockVolumeRef {
+	if x != nil {
+		return x.SourceVolume
+	}
+	return nil
 }
 
 type CloneBlockVolumeResponse struct {
@@ -1276,14 +1288,15 @@ const file_block_volume_proto_rawDesc = "" +
 	"\x0ecapacity_bytes\x18\x05 \x01(\x04R\rcapacityBytes\"\x88\x01\n" +
 	"\x19CreateBlockVolumeResponse\x129\n" +
 	"\vincarnation\x18\x01 \x01(\v2\x17.BlockVolumeIncarnationR\vincarnation\x120\n" +
-	"\brevision\x18\x02 \x01(\v2\x14.BlockVolumeRevisionR\brevision\"\xad\x02\n" +
+	"\brevision\x18\x02 \x01(\v2\x14.BlockVolumeRevisionR\brevision\"\xe3\x02\n" +
 	"\x17CloneBlockVolumeRequest\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12'\n" +
 	"\x06volume\x18\x02 \x01(\v2\x0f.BlockVolumeRefR\x06volume\x12,\n" +
 	"\x12source_revision_id\x18\x03 \x01(\tR\x10sourceRevisionId\x12F\n" +
 	"\x12source_consistency\x18\x04 \x01(\x0e2\x17.BlockVolumeConsistencyR\x11sourceConsistency\x12)\n" +
 	"\x04mode\x18\x05 \x01(\x0e2\x15.BlockVolumeCloneModeR\x04mode\x12%\n" +
-	"\x0eincarnation_id\x18\x06 \x01(\tR\rincarnationId\"U\n" +
+	"\x0eincarnation_id\x18\x06 \x01(\tR\rincarnationId\x124\n" +
+	"\rsource_volume\x18\a \x01(\v2\x0f.BlockVolumeRefR\fsourceVolume\"U\n" +
 	"\x18CloneBlockVolumeResponse\x129\n" +
 	"\vincarnation\x18\x01 \x01(\v2\x17.BlockVolumeIncarnationR\vincarnation\"\x8a\x02\n" +
 	"\x16SealBlockVolumeRequest\x12!\n" +
@@ -1388,31 +1401,32 @@ var file_block_volume_proto_depIdxs = []int32{
 	2,  // 5: CloneBlockVolumeRequest.volume:type_name -> BlockVolumeRef
 	0,  // 6: CloneBlockVolumeRequest.source_consistency:type_name -> BlockVolumeConsistency
 	1,  // 7: CloneBlockVolumeRequest.mode:type_name -> BlockVolumeCloneMode
-	3,  // 8: CloneBlockVolumeResponse.incarnation:type_name -> BlockVolumeIncarnation
-	2,  // 9: SealBlockVolumeRequest.volume:type_name -> BlockVolumeRef
-	0,  // 10: SealBlockVolumeRequest.consistency:type_name -> BlockVolumeConsistency
-	4,  // 11: SealBlockVolumeResponse.revision:type_name -> BlockVolumeRevision
-	2,  // 12: DeleteBlockVolumeRequest.volume:type_name -> BlockVolumeRef
-	2,  // 13: ReconcileBlockVolumeRequest.volume:type_name -> BlockVolumeRef
-	14, // 14: ReconcileBlockVolumeResponse.unexpected_holders:type_name -> BlockVolumeHolder
-	14, // 15: ReconcileBlockVolumeResponse.blocked_holders:type_name -> BlockVolumeHolder
-	5,  // 16: BlockVolumeService.CreateBlockVolume:input_type -> CreateBlockVolumeRequest
-	7,  // 17: BlockVolumeService.CloneBlockVolume:input_type -> CloneBlockVolumeRequest
-	9,  // 18: BlockVolumeService.SealBlockVolume:input_type -> SealBlockVolumeRequest
-	11, // 19: BlockVolumeService.DeleteBlockVolume:input_type -> DeleteBlockVolumeRequest
-	13, // 20: BlockVolumeService.ReconcileBlockVolume:input_type -> ReconcileBlockVolumeRequest
-	16, // 21: BlockVolumeService.ForgetBlockVolumeOperation:input_type -> ForgetBlockVolumeOperationRequest
-	6,  // 22: BlockVolumeService.CreateBlockVolume:output_type -> CreateBlockVolumeResponse
-	8,  // 23: BlockVolumeService.CloneBlockVolume:output_type -> CloneBlockVolumeResponse
-	10, // 24: BlockVolumeService.SealBlockVolume:output_type -> SealBlockVolumeResponse
-	12, // 25: BlockVolumeService.DeleteBlockVolume:output_type -> DeleteBlockVolumeResponse
-	15, // 26: BlockVolumeService.ReconcileBlockVolume:output_type -> ReconcileBlockVolumeResponse
-	17, // 27: BlockVolumeService.ForgetBlockVolumeOperation:output_type -> ForgetBlockVolumeOperationResponse
-	22, // [22:28] is the sub-list for method output_type
-	16, // [16:22] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	2,  // 8: CloneBlockVolumeRequest.source_volume:type_name -> BlockVolumeRef
+	3,  // 9: CloneBlockVolumeResponse.incarnation:type_name -> BlockVolumeIncarnation
+	2,  // 10: SealBlockVolumeRequest.volume:type_name -> BlockVolumeRef
+	0,  // 11: SealBlockVolumeRequest.consistency:type_name -> BlockVolumeConsistency
+	4,  // 12: SealBlockVolumeResponse.revision:type_name -> BlockVolumeRevision
+	2,  // 13: DeleteBlockVolumeRequest.volume:type_name -> BlockVolumeRef
+	2,  // 14: ReconcileBlockVolumeRequest.volume:type_name -> BlockVolumeRef
+	14, // 15: ReconcileBlockVolumeResponse.unexpected_holders:type_name -> BlockVolumeHolder
+	14, // 16: ReconcileBlockVolumeResponse.blocked_holders:type_name -> BlockVolumeHolder
+	5,  // 17: BlockVolumeService.CreateBlockVolume:input_type -> CreateBlockVolumeRequest
+	7,  // 18: BlockVolumeService.CloneBlockVolume:input_type -> CloneBlockVolumeRequest
+	9,  // 19: BlockVolumeService.SealBlockVolume:input_type -> SealBlockVolumeRequest
+	11, // 20: BlockVolumeService.DeleteBlockVolume:input_type -> DeleteBlockVolumeRequest
+	13, // 21: BlockVolumeService.ReconcileBlockVolume:input_type -> ReconcileBlockVolumeRequest
+	16, // 22: BlockVolumeService.ForgetBlockVolumeOperation:input_type -> ForgetBlockVolumeOperationRequest
+	6,  // 23: BlockVolumeService.CreateBlockVolume:output_type -> CreateBlockVolumeResponse
+	8,  // 24: BlockVolumeService.CloneBlockVolume:output_type -> CloneBlockVolumeResponse
+	10, // 25: BlockVolumeService.SealBlockVolume:output_type -> SealBlockVolumeResponse
+	12, // 26: BlockVolumeService.DeleteBlockVolume:output_type -> DeleteBlockVolumeResponse
+	15, // 27: BlockVolumeService.ReconcileBlockVolume:output_type -> ReconcileBlockVolumeResponse
+	17, // 28: BlockVolumeService.ForgetBlockVolumeOperation:output_type -> ForgetBlockVolumeOperationResponse
+	23, // [23:29] is the sub-list for method output_type
+	17, // [17:23] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_block_volume_proto_init() }

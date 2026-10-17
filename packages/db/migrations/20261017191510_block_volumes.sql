@@ -42,7 +42,9 @@ CREATE UNIQUE INDEX volumes_teams_live_name_uq ON volumes (team_id, name) WHERE 
 CREATE TABLE volume_operations (
     id              UUID                      PRIMARY KEY,
     team_id         UUID                      NOT NULL REFERENCES teams (id),
-    volume_id       UUID                      REFERENCES volumes (id),
+    -- Deferred so a request inserts its operation (the idempotency check)
+    -- before the volume row it creates, in one transaction.
+    volume_id       UUID                      REFERENCES volumes (id) DEFERRABLE INITIALLY DEFERRED,
     kind            VARCHAR(32)               NOT NULL,
     idempotency_key TEXT                      NOT NULL,
     params_hash     TEXT                      NOT NULL,

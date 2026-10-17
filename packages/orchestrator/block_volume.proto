@@ -119,7 +119,12 @@ message CloneBlockVolumeRequest {
   // The consistency the control plane recorded when the revision was sealed.
   BlockVolumeConsistency source_consistency = 4;
   BlockVolumeCloneMode mode = 5;
+  // incarnation_id is the new incarnation, created in volume.
   string incarnation_id = 6;
+  // source_volume owns source_revision_id. Empty means volume itself (a
+  // sandbox fork); a different volume of the same team clones into a new
+  // volume. Both must live on this node.
+  BlockVolumeRef source_volume = 7;
 }
 
 message CloneBlockVolumeResponse {

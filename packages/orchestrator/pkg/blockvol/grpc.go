@@ -94,6 +94,18 @@ func (s *GRPCServer) CloneBlockVolume(ctx context.Context, req *orchestrator.Clo
 		return nil, err
 	}
 
+	source := vol
+	if req.GetSourceVolume() != nil {
+		source, err = parseVolumeRef(req.GetSourceVolume())
+		if err != nil {
+			return nil, err
+		}
+
+		if source.Team != vol.Team {
+			return nil, status.Error(codes.InvalidArgument, "source_volume must belong to the same team")
+		}
+	}
+
 	revID, err := parseRequestID("source_revision_id", req.GetSourceRevisionId())
 	if err != nil {
 		return nil, err
@@ -110,7 +122,7 @@ func (s *GRPCServer) CloneBlockVolume(ctx context.Context, req *orchestrator.Clo
 	}
 
 	info, err := s.backend.Clone(ctx, op,
-		RevisionRef{VolumeRef: vol, Revision: revID},
+		RevisionRef{VolumeRef: source, Revision: revID},
 		IncarnationRef{VolumeRef: vol, Incarnation: incID},
 		opts,
 	)
