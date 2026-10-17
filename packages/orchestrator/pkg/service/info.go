@@ -128,7 +128,7 @@ func NewInfoContainer(clientId string, version string, commit string, instanceID
 
 		Startup:     startup,
 		Roles:       serviceRoles,
-		Labels:      config.NodeLabels,
+		Labels:      config.AdvertisedLabels(),
 		MachineInfo: machineInfo,
 
 		SourceVersion: version,

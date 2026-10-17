@@ -90,6 +90,7 @@ type VolumeCreate struct {
 
 func (VolumeCreate) Kind() string                 { return "volume.create" }
 func (VolumeCreate) InsertOpts() river.InsertOpts { return volumeInsertOpts() }
+func (a VolumeCreate) Operation() uuid.UUID       { return a.OperationID }
 
 // VolumeClone works a "clone" volume operation.
 type VolumeClone struct {
@@ -98,6 +99,7 @@ type VolumeClone struct {
 
 func (VolumeClone) Kind() string                 { return "volume.clone" }
 func (VolumeClone) InsertOpts() river.InsertOpts { return volumeInsertOpts() }
+func (a VolumeClone) Operation() uuid.UUID       { return a.OperationID }
 
 // VolumeSeal works a "seal" volume operation.
 type VolumeSeal struct {
@@ -106,6 +108,7 @@ type VolumeSeal struct {
 
 func (VolumeSeal) Kind() string                 { return "volume.seal" }
 func (VolumeSeal) InsertOpts() river.InsertOpts { return volumeInsertOpts() }
+func (a VolumeSeal) Operation() uuid.UUID       { return a.OperationID }
 
 // VolumeDelete works a "delete" volume operation.
 type VolumeDelete struct {
@@ -114,6 +117,7 @@ type VolumeDelete struct {
 
 func (VolumeDelete) Kind() string                 { return "volume.delete" }
 func (VolumeDelete) InsertOpts() river.InsertOpts { return volumeInsertOpts() }
+func (a VolumeDelete) Operation() uuid.UUID       { return a.OperationID }
 
 // VolumeReconcile works a "reconcile" volume operation.
 type VolumeReconcile struct {
@@ -122,6 +126,7 @@ type VolumeReconcile struct {
 
 func (VolumeReconcile) Kind() string                 { return "volume.reconcile" }
 func (VolumeReconcile) InsertOpts() river.InsertOpts { return volumeInsertOpts() }
+func (a VolumeReconcile) Operation() uuid.UUID       { return a.OperationID }
 
 // VolumeJobMaxAttempts bounds how long an operation is retried. At the
 // River outbox's 15-minute retry cap this is about a day; the worker marks

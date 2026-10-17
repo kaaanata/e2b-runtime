@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -132,6 +133,22 @@ type Config struct {
 	// refused with RESOURCE_EXHAUSTED. Zero keeps the blockvol defaults.
 	BlockVolumeMinDataFreeBytes     uint64 `env:"BLOCK_VOLUME_MIN_DATA_FREE_BYTES"     envDefault:"0"`
 	BlockVolumeMinMetadataFreeBytes uint64 `env:"BLOCK_VOLUME_MIN_METADATA_FREE_BYTES" envDefault:"0"`
+}
+
+// blockVolumeNodeLabel is advertised while block volumes are enabled so the
+// control plane only places block volumes on nodes that serve them. The API
+// matches the same literal (packages/api/internal/labels.go).
+const blockVolumeNodeLabel = "volume-backend=block"
+
+// AdvertisedLabels is NodeLabels plus the capability labels the node derives
+// from its own configuration.
+func (c Config) AdvertisedLabels() []string {
+	labels := slices.Clone(c.NodeLabels)
+	if c.BlockVolumeEnabled && !slices.Contains(labels, blockVolumeNodeLabel) {
+		labels = append(labels, blockVolumeNodeLabel)
+	}
+
+	return labels
 }
 
 // BlockVolumeCapacityTiers returns BlockVolumeCapacityTiersGiB in bytes.

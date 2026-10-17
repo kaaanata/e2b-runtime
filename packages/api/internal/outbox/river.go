@@ -40,7 +40,10 @@ type Config struct {
 }
 
 type Dependencies struct {
-	Pool      *pgxpool.Pool
+	Pool *pgxpool.Pool
+	// Volumes carries out block volume operations; nil leaves the volume
+	// jobs without workers (they wait in the queue).
+	Volumes   *VolumeExecutor
 	Sandboxes teamSandboxes
 	Teams     *authdb.Client
 	Logger    logger.Logger
@@ -62,6 +65,9 @@ func New(deps Dependencies) (*River, error) {
 		teams:     deps.Teams,
 		steps:     steps.Job(outbox.TeardownTeamResources{}.Kind()),
 	})
+	if deps.Volumes != nil {
+		addVolumeWorkers(workers, deps.Volumes, steps)
+	}
 
 	client, err := river.NewClient(riverpgxv5.New(deps.Pool), &river.Config{
 		Schema:               dbmodule.RiverSchema,
@@ -83,7 +89,7 @@ func New(deps Dependencies) (*River, error) {
 
 	backlog, err := sharedriver.NewBacklog(deps.Pool, deps.Telemetry, deps.Logger, sharedriver.BacklogConfig{
 		Schema:   dbmodule.RiverSchema,
-		Kinds:    []string{outbox.TeardownTeamResources{}.Kind()},
+		Kinds:    append([]string{outbox.TeardownTeamResources{}.Kind()}, outbox.VolumeJobKinds()...),
 		Interval: deps.Config.BacklogInterval,
 	})
 	if err != nil {
