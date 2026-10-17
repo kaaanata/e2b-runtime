@@ -4,7 +4,9 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -68,7 +70,45 @@ type Snapshot struct {
 	// snapshot whose revisions are missing is not ready.
 	WorkspaceRevisions []metadata.WorkspaceRevisionRef
 
+	// WorkspaceSeals carries the same revisions with the identities the control
+	// plane records (volume, source incarnation, seal operation), in slot order.
+	WorkspaceSeals []SealedWorkspace
+
+	// workspaceSlots are the slots the sandbox had volumes bound to at pause;
+	// WorkspaceReady checks every one of them has a sealed revision.
+	workspaceSlots []int
+
 	cleanup *Cleanup
+}
+
+// ErrWorkspaceNotSealed is returned by WorkspaceReady for a snapshot of a
+// sandbox with workspace volumes that lacks a sealed revision for a bound slot.
+var ErrWorkspaceNotSealed = errors.New("snapshot is missing a sealed workspace revision")
+
+// WorkspaceReady reports whether the snapshot may be published: every slot the
+// sandbox had a volume bound to has a sealed, identified revision recorded in
+// both the seal list and the metadata revisions. A snapshot without workspace
+// volumes is trivially ready. The memory/rootfs readiness (and the async
+// peer-to-peer upload) is separate: workspace revisions are node-local-ready
+// as soon as the seal returned, before any resume.
+func (s *Snapshot) WorkspaceReady() error {
+	for _, slot := range s.workspaceSlots {
+		i := slices.IndexFunc(s.WorkspaceSeals, func(w SealedWorkspace) bool { return w.Slot == slot })
+		if i < 0 {
+			return fmt.Errorf("%w: slot %d", ErrWorkspaceNotSealed, slot)
+		}
+
+		rev := s.WorkspaceSeals[i].Revision
+		if rev.RevisionID == "" || rev.SubvolUUID == "" || rev.FsUUID == "" || rev.Consistency == "" {
+			return fmt.Errorf("%w: slot %d revision is incomplete", ErrWorkspaceNotSealed, slot)
+		}
+
+		if !slices.Contains(s.WorkspaceRevisions, rev) {
+			return fmt.Errorf("%w: slot %d revision %s is not in the snapshot metadata", ErrWorkspaceNotSealed, slot, rev.RevisionID)
+		}
+	}
+
+	return nil
 }
 
 // WaitMemorySealed blocks until a deferred (CoW window) memory export settles

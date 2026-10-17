@@ -139,6 +139,11 @@ type Config struct {
 
 	VolumeMounts []VolumeMountConfig
 
+	// WorkspaceVolumes binds the template's workspace block slots to volume
+	// incarnations for this start. Requires a LayoutBlockV1 template and a node
+	// with a workspace backend (see Factory.SetWorkspaceBackend).
+	WorkspaceVolumes []WorkspaceVolume
+
 	MaxSandboxLengthHours int64
 
 	// mu protects mutable sub-fields of Network (Egress, Ingress).
@@ -381,6 +386,10 @@ type Sandbox struct {
 
 	process      *fc.Process
 	cgroupHandle *cgroup.CgroupHandle
+
+	// workspace is this FC process's workspace slots and volume holders; nil
+	// for a sandbox whose template has no workspace slots. Set once at start.
+	workspace *workspaceSet
 
 	// inPlaceCheckpointInFlight excludes concurrent in-place checkpoints of
 	// this sandbox: it stays live and addressable through one (no MarkStopping),
@@ -627,6 +636,63 @@ type Factory struct {
 	// for the same reason: every one of those outcomes returns the same nil to the
 	// resume, so nothing else can tell them apart.
 	swapEnvdBinary func(ctx context.Context, rootfsPath, srcPath string) (rootfs.SwapResult, error)
+
+	// workspaceBackend admits sandboxes to workspace block volumes. Nil on a
+	// node without one: sandboxes of block-layout templates are then refused.
+	workspaceBackend WorkspaceBackend
+}
+
+// SetWorkspaceBackend installs the workspace block volume backend. Call it
+// once, before the factory starts sandboxes.
+func (f *Factory) SetWorkspaceBackend(b WorkspaceBackend) {
+	f.workspaceBackend = b
+}
+
+// WorkspaceBackend returns the installed workspace backend, or nil.
+func (f *Factory) WorkspaceBackend() WorkspaceBackend {
+	return f.workspaceBackend
+}
+
+// planSandboxWorkspace plans the workspace slots of a user sandbox start. A
+// caller that passed explicit drives (a template build, placeholders of its
+// own) keeps them, and must not also ask for volumes. Build sandboxes never
+// bind volumes, so only user sandboxes are planned from the template layout.
+func (f *Factory) planSandboxWorkspace(
+	ctx context.Context,
+	t template.Template,
+	config *Config,
+	runtime RuntimeMetadata,
+	executionID string,
+	explicit []fc.WorkspaceDrive,
+	mode workspaceMode,
+) (*workspaceSet, []fc.WorkspaceDrive, error) {
+	if len(explicit) > 0 {
+		if len(config.WorkspaceVolumes) > 0 {
+			return nil, nil, fmt.Errorf("%w: explicit workspace drives and workspace volumes are exclusive", ErrWorkspaceLayout)
+		}
+
+		return nil, explicit, nil
+	}
+
+	if len(config.WorkspaceVolumes) == 0 && runtime.SandboxType != SandboxTypeSandbox {
+		return nil, nil, nil
+	}
+
+	meta, err := t.Metadata()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get metadata: %w", err)
+	}
+
+	ws, err := planWorkspace(ctx, f.workspaceBackend, meta, config.WorkspaceVolumes, runtime.TeamID, runtime.SandboxID, executionID, mode)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if ws == nil {
+		return nil, nil, nil
+	}
+
+	return ws, ws.drives, nil
 }
 
 // offlineSwap is the offline swap implementation this Factory should use.
@@ -983,6 +1049,17 @@ func (f *Factory) CreateSandbox(
 		return cgroupHandle.Remove(ctx)
 	})
 
+	// A cold boot: the guest mounts the volumes from scratch, so a requested
+	// resize is done on the host, offline, before any VM can open the image.
+	workspace, workspaceDrives, err := f.planSandboxWorkspace(ctx, template, config, runtime, lifecycleID, createOpts.workspaceDrives, workspaceColdBoot)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := workspace.prepareColdBoot(ctx); err != nil {
+		return nil, err
+	}
+
 	fcHandle, err := fc.NewProcess(
 		ctx,
 		execCtx,
@@ -992,11 +1069,13 @@ func (f *Factory) CreateSandbox(
 		config.FirecrackerConfig,
 		rootfsProvider,
 		fc.ConstantRootfsPaths,
-		createOpts.workspaceDrives,
+		workspaceDrives,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init FC: %w", err)
 	}
+
+	installWorkspace(ctx, workspace, fcHandle, cleanup)
 
 	throttleConfig := featureflags.GetTCPFirewallEgressThrottleConfig(ctx, f.featureFlags)
 	driveThrottleConfig := featureflags.GetBlockDriveThrottleConfig(ctx, f.featureFlags)
@@ -1038,6 +1117,7 @@ func (f *Factory) CreateSandbox(
 		files:     sandboxFiles,
 		process:   fcHandle,
 		sandboxes: f.Sandboxes,
+		workspace: workspace,
 
 		cleanup:      cleanup,
 		featureFlags: f.featureFlags,
@@ -1549,6 +1629,16 @@ func (f *Factory) ResumeSandbox(
 		return cgroupHandle.Remove(ctx)
 	})
 
+	// A memory restore: the guest may have the volumes mounted, so each slot
+	// must present the revision's identity at the recorded size (or a grow of
+	// it the guest completes online). Every resume path — API resume, create
+	// from a template, checkpoint resume-fresh, prefetch harvest — goes through
+	// here, so a snapshot with mounted volumes is never loaded without them.
+	workspace, workspaceDrives, err := f.planSandboxWorkspace(ctx, t, config, runtime, lifecycleID, ropts.workspaceDrives, workspaceMemoryRestore)
+	if err != nil {
+		return nil, err
+	}
+
 	fcHandle, fcErr := fc.NewProcess(
 		ctx,
 		execCtx,
@@ -1563,11 +1653,13 @@ func (f *Factory) ResumeSandbox(
 			TemplateID:      config.BaseTemplateID,
 			BuildID:         rootfs.Header().Metadata.BaseBuildId.String(),
 		},
-		ropts.workspaceDrives,
+		workspaceDrives,
 	)
 	if fcErr != nil {
 		return nil, fmt.Errorf("failed to create FC: %w", fcErr)
 	}
+
+	installWorkspace(ctx, workspace, fcHandle, cleanup)
 
 	resumeThrottleConfig := featureflags.GetTCPFirewallEgressThrottleConfig(ctx, f.featureFlags)
 	resumeDriveThrottleConfig := featureflags.GetBlockDriveThrottleConfig(ctx, f.featureFlags)
@@ -1618,6 +1710,7 @@ func (f *Factory) ResumeSandbox(
 		files:     sandboxFiles,
 		process:   fcHandle,
 		sandboxes: f.Sandboxes,
+		workspace: workspace,
 
 		cleanup:      cleanup,
 		featureFlags: f.featureFlags,
@@ -1757,6 +1850,12 @@ func (f *Factory) ResumeSandbox(
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to wait for sandbox start: %w", err)
+		}
+
+		// A workspace volume grown while paused: FC already re-read the device
+		// size before the resume, now the guest grows the mounted ext4.
+		if err := sbx.resizeWorkspaceFilesystems(ctx); err != nil {
+			return nil, err
 		}
 	}
 
@@ -1914,6 +2013,12 @@ type pauseOptions struct {
 	filesystemSnapshot bool
 	deferRootfsExport  bool
 	maintainSandbox    bool
+	// resumeFresh marks a checkpoint whose snapshot a NEW sandbox resumes
+	// from while this one is stopped (Server.checkpointResumeFresh).
+	resumeFresh bool
+	// deferWorkspaceSeal asks for the workspace seal to run after the resume.
+	// No caller sets it today; it exists so the refusal is explicit and tested.
+	deferWorkspaceSeal bool
 }
 
 type PauseOption func(*pauseOptions)
@@ -1942,6 +2047,21 @@ func WithFilesystemSnapshot() PauseOption {
 // path, not a resume-fresh checkpoint.
 func WithDeferredRootfsExport() PauseOption {
 	return func(o *pauseOptions) { o.deferRootfsExport = true }
+}
+
+// WithResumeFreshCheckpoint marks a pause whose snapshot a fresh sandbox is
+// resumed from right after (the resume-fresh checkpoint). Refused for a
+// sandbox with workspace volumes (ErrCapabilityUnsupported).
+func WithResumeFreshCheckpoint() PauseOption {
+	return func(o *pauseOptions) { o.resumeFresh = true }
+}
+
+// WithDeferredWorkspaceSeal asks for the workspace volumes to be sealed after
+// the VM resumed. Never honoured: a revision sealed after the guest ran again
+// does not pair with the memory snapshot. Refused for a sandbox with workspace
+// volumes (ErrCapabilityUnsupported), a no-op otherwise.
+func WithDeferredWorkspaceSeal() PauseOption {
+	return func(o *pauseOptions) { o.deferWorkspaceSeal = true }
 }
 
 // ErrSandboxLost reports that an operation destroyed the sandbox in the
@@ -1979,8 +2099,17 @@ func (s *Sandbox) Pause(
 		opt(&pauseOpts)
 	}
 
+	// Refuse what a sandbox with workspace volumes cannot take before anything
+	// is stopped or frozen. Here, not in the handlers, so every caller of
+	// Pause (API pause and checkpoint, autopause, template builds, tools) is
+	// covered.
+	if err := s.checkPauseSupported(pauseOpts); err != nil {
+		return nil, err
+	}
+
 	ctx, span := tracer.Start(ctx, "sandbox-snapshot", trace.WithAttributes(
 		attribute.Bool("fs-only-snapshot", pauseOpts.filesystemSnapshot),
+		attribute.Int("workspace_volumes", len(s.workspace.slots())),
 	))
 	defer span.End()
 
@@ -2064,7 +2193,24 @@ func (s *Sandbox) Pause(
 			fsQuiescedPauseCounter.Add(ctx, 1, metric.WithAttributes(attribute.Bool("quiesced", frozen)))
 		}
 	}()
-	if pauseOpts.filesystemSnapshot {
+	if pauseOpts.filesystemSnapshot && s.workspace.hasVolumes() {
+		// With workspace volumes every mount must be quiesced, not only the
+		// rootfs: freeze the whole mount set through envd and proceed only when
+		// all of it froze. No sync fallback — the revisions sealed below are
+		// recorded filesystem-quiesced, which a sync->pause race would make a
+		// lie. The token is this pause's build id, so a lost response can be
+		// queried and the cleanup thaws exactly this freeze.
+		if err := s.guestFreezeMountSetForPause(ctx, cleanup, buildID.String()); err != nil {
+			return nil, err
+		}
+
+		frozen = true
+
+		// Memory prefetch refers to the memfile, which is not persisted.
+		m.Prefetch = nil
+
+		span.SetAttributes(attribute.Bool("fs_quiesced", frozen))
+	} else if pauseOpts.filesystemSnapshot {
 		// FC never flushes the guest page cache and no memory snapshot will
 		// preserve it, so the rootfs must be quiesced before pause or it would
 		// persist missing acknowledged writes. This is mandatory, unlike the
@@ -2226,6 +2372,22 @@ func (s *Sandbox) Pause(
 		return nil, fmt.Errorf("error creating snapshot: %w", err)
 	}
 
+	// Seal the workspace volumes NOW: the VM is paused and CreateSnapshot has
+	// drained and fsynced every drive, so each incarnation's image is exactly
+	// what the snapshot's guest state refers to. This must complete before ANY
+	// resume (the in-place ResumeInPlace below is guarded on it): a revision
+	// taken after the guest ran again would not pair with the memory image.
+	// A failure fails the pause; for an in-place checkpoint the registered
+	// cleanup resumes the VM, and no half checkpoint is published (a revision
+	// already sealed stays on disk under its operation id for the control
+	// plane's GC, and a replay of this build id reuses it).
+	workspaceSeals, err := s.sealWorkspaceForPause(ctx, buildID, pauseOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	m = stampWorkspaceMetadata(m, workspaceSeals)
+
 	// Gather data for postprocessing
 	originalRootfs, err := s.Template.Rootfs()
 	if err != nil {
@@ -2297,6 +2459,15 @@ func (s *Sandbox) Pause(
 	// stall stays off the resume critical path. The destroy path skips this — its
 	// sandbox is already stopped.
 	if pauseOpts.maintainSandbox {
+		// The paired-consistency invariant, checked where it matters rather
+		// than trusted from the code above: no resume of a sandbox with
+		// workspace volumes unless every one of them has been sealed for this
+		// snapshot. Failing here leaves resumeOnError set, so the cleanup
+		// resumes the VM with the checkpoint unpublished.
+		if err := s.requireWorkspaceSealed(workspaceSeals); err != nil {
+			return nil, err
+		}
+
 		resumeOnError = false
 
 		// WithoutCancel: a client disconnect that cancels the request context
@@ -2344,7 +2515,9 @@ func (s *Sandbox) Pause(
 		// (a no-op if the guest was only sync'd). A native-only thaw would leave an
 		// exec-frozen guest's filesystem frozen after resume.
 		s.bestEffortUnfreeze(ctx)
-		if pauseOpts.filesystemSnapshot {
+		if pauseOpts.filesystemSnapshot && s.workspace.hasVolumes() {
+			s.bestEffortThawMountSet(ctx, buildID.String())
+		} else if pauseOpts.filesystemSnapshot {
 			if s.envdSupportsFsFreeze(ctx) {
 				s.bestEffortFsthaw(ctx)
 			} else {
@@ -2382,6 +2555,9 @@ func (s *Sandbox) Pause(
 		SchedulingMetadata:   schedulingMetadata,
 		FilesystemSnapshot:   pauseOpts.filesystemSnapshot,
 		RootfsBlockSize:      originalRootfs.Header().Metadata.BlockSize,
+		WorkspaceRevisions:   m.WorkspaceRevisions,
+		WorkspaceSeals:       workspaceSeals,
+		workspaceSlots:       s.workspace.slots(),
 
 		BuildID: buildID,
 

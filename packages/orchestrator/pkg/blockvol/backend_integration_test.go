@@ -468,3 +468,40 @@ func TestIntegrationProcLiveness(t *testing.T) {
 	_, err = live.Starttime(cmd.Process.Pid)
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
+
+// TestIntegrationGrowFilesystemOffline is the cold-boot resize on real tools:
+// the image grows, resize2fs grows the ext4 to it, UUID and data stay, and a
+// revision sealed before the grow keeps its old size (shared extents are not
+// rewritten).
+func TestIntegrationGrowFilesystemOffline(t *testing.T) {
+	t.Parallel()
+
+	svc := newIntegrationService(t, Watermarks{MinDataFree: 1, MinMetadataFree: 1})
+	ctx := t.Context()
+
+	vol := VolumeRef{Team: NewID(), Volume: NewID()}
+	inc := IncarnationRef{VolumeRef: vol, Incarnation: NewID()}
+
+	res, err := svc.Create(ctx, NewID(), inc, NewID(), integrationCapacity)
+	require.NoError(t, err)
+
+	image := svc.Layout().IncarnationImage(inc)
+
+	require.NoError(t, svc.GrowFilesystemOffline(ctx, inc, 2*integrationCapacity))
+	requireCleanExt4(t, image)
+
+	info, err := svc.DescribeIncarnation(ctx, inc)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2*integrationCapacity), info.CapacityBytes)
+	assert.Equal(t, res.Incarnation.FilesystemUUID, info.FilesystemUUID, "an offline grow keeps the filesystem identity")
+
+	out, err := exec.CommandContext(ctx, "dumpe2fs", "-h", image).Output()
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "Block count:              131072", "ext4 now spans the grown image (512 MiB / 4 KiB)")
+
+	revSize, _, err := imageSize(svc.Layout().RevisionImage(res.Revision.Ref))
+	require.NoError(t, err)
+	assert.Equal(t, uint64(integrationCapacity), revSize, "revision 0 is unchanged")
+
+	require.ErrorIs(t, svc.GrowFilesystemOffline(ctx, inc, integrationCapacity), ErrShrinkRefused)
+}

@@ -43,36 +43,36 @@ func TestWorkspaceSlots(t *testing.T) {
 	}{
 		"none": {drives: nil, wantSlots: []int{}},
 		"in order": {
-			drives:    []WorkspaceDrive{{"workspace0", "/a"}, {"workspace1", "/b"}},
+			drives:    []WorkspaceDrive{{DriveID: "workspace0", PathOnHost: "/a"}, {DriveID: "workspace1", PathOnHost: "/b"}},
 			wantSlots: []int{0, 1},
 		},
 		"any order, sparse": {
-			drives:    []WorkspaceDrive{{"workspace3", "/a"}, {"workspace1", "/b"}},
+			drives:    []WorkspaceDrive{{DriveID: "workspace3", PathOnHost: "/a"}, {DriveID: "workspace1", PathOnHost: "/b"}},
 			wantSlots: []int{3, 1},
 		},
 		"unknown id": {
-			drives:  []WorkspaceDrive{{"rootfs", "/a"}},
+			drives:  []WorkspaceDrive{{DriveID: "rootfs", PathOnHost: "/a"}},
 			wantErr: "unknown workspace drive id",
 		},
 		"past the last slot": {
-			drives:  []WorkspaceDrive{{WorkspaceDriveID(MaxWorkspaceSlots), "/a"}},
+			drives:  []WorkspaceDrive{{DriveID: WorkspaceDriveID(MaxWorkspaceSlots), PathOnHost: "/a"}},
 			wantErr: "unknown workspace drive id",
 		},
 		"duplicate": {
-			drives:  []WorkspaceDrive{{"workspace0", "/a"}, {"workspace0", "/b"}},
+			drives:  []WorkspaceDrive{{DriveID: "workspace0", PathOnHost: "/a"}, {DriveID: "workspace0", PathOnHost: "/b"}},
 			wantErr: "bound twice",
 		},
 		"relative path": {
-			drives:  []WorkspaceDrive{{"workspace0", "a"}},
+			drives:  []WorkspaceDrive{{DriveID: "workspace0", PathOnHost: "a"}},
 			wantErr: "absolute host path",
 		},
 		"empty path": {
-			drives:  []WorkspaceDrive{{"workspace0", ""}},
+			drives:  []WorkspaceDrive{{DriveID: "workspace0", PathOnHost: ""}},
 			wantErr: "absolute host path",
 		},
 		"too many": {
 			drives: []WorkspaceDrive{
-				{"workspace0", "/a"}, {"workspace1", "/a"}, {"workspace2", "/a"}, {"workspace3", "/a"}, {"workspace0", "/a"},
+				{DriveID: "workspace0", PathOnHost: "/a"}, {DriveID: "workspace1", PathOnHost: "/a"}, {DriveID: "workspace2", PathOnHost: "/a"}, {DriveID: "workspace3", PathOnHost: "/a"}, {DriveID: "workspace0", PathOnHost: "/a"},
 			},
 			wantErr: "exceed",
 		},
@@ -97,10 +97,10 @@ func TestWorkspaceSlots(t *testing.T) {
 func TestSortWorkspaceDrives(t *testing.T) {
 	t.Parallel()
 
-	in := []WorkspaceDrive{{"workspace3", "/d"}, {"bogus", "/x"}, {"workspace0", "/a"}, {"workspace2", "/c"}}
+	in := []WorkspaceDrive{{DriveID: "workspace3", PathOnHost: "/d"}, {DriveID: "bogus", PathOnHost: "/x"}, {DriveID: "workspace0", PathOnHost: "/a"}, {DriveID: "workspace2", PathOnHost: "/c"}}
 	got := sortWorkspaceDrives(in)
 
-	assert.Equal(t, []WorkspaceDrive{{"workspace0", "/a"}, {"workspace2", "/c"}, {"workspace3", "/d"}, {"bogus", "/x"}}, got)
+	assert.Equal(t, []WorkspaceDrive{{DriveID: "workspace0", PathOnHost: "/a"}, {DriveID: "workspace2", PathOnHost: "/c"}, {DriveID: "workspace3", PathOnHost: "/d"}, {DriveID: "bogus", PathOnHost: "/x"}}, got)
 	assert.Equal(t, "workspace3", in[0].DriveID, "the caller's slice is not reordered")
 	assert.Empty(t, sortWorkspaceDrives(nil))
 }

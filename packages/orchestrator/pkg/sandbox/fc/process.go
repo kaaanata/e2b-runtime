@@ -162,6 +162,9 @@ type Process struct {
 	// workspacePaths are their in-namespace paths, index-aligned.
 	workspaceDrives []WorkspaceDrive
 	workspacePaths  []string
+	// workspaceAdmission, when set, runs after FC started and before the slots
+	// are linked to their host files (see WorkspaceAdmission).
+	workspaceAdmission WorkspaceAdmission
 
 	Exit *utils.ErrorOnce
 
@@ -248,6 +251,30 @@ func NewProcess(
 	}
 
 	return p, nil
+}
+
+// SetWorkspaceAdmission installs the hook that admits this process as the
+// writer of its workspace volumes. It must be set before Create or Resume.
+func (p *Process) SetWorkspaceAdmission(admit WorkspaceAdmission) {
+	p.workspaceAdmission = admit
+}
+
+// admitWorkspace runs the admission hook, if any, with the started process's pid.
+func (p *Process) admitWorkspace(ctx context.Context) error {
+	if p.workspaceAdmission == nil || len(p.workspaceDrives) == 0 {
+		return nil
+	}
+
+	pid, err := p.Pid()
+	if err != nil {
+		return err
+	}
+
+	if err := p.workspaceAdmission(ctx, pid); err != nil {
+		return fmt.Errorf("workspace admission: %w", err)
+	}
+
+	return nil
 }
 
 // workspaceLinkPath is the host link the start script made the workspace slot's
@@ -462,7 +489,16 @@ func (p *Process) Create(
 
 	// Workspace block slots, in slot order after the rootfs so the guest device
 	// table is the same on every boot of the same layout. The host paths were
-	// resolved by the caller; here they are only linked and handed to FC.
+	// resolved by the caller; here they are only admitted, linked and handed to
+	// FC. Until the link is re-pointed it resolves to /dev/null, so nothing
+	// opened the volume before admission.
+	err = p.admitWorkspace(ctx)
+	if err != nil {
+		fcStopErr := p.Stop(ctx)
+
+		return errors.Join(err, fcStopErr)
+	}
+
 	err = p.linkWorkspaceDrives(hostPath)
 	if err != nil {
 		fcStopErr := p.Stop(ctx)
@@ -646,18 +682,6 @@ func (p *Process) Resume(
 
 		telemetry.ReportEvent(egCtx, "symlinked rootfs")
 
-		// The snapshot's device table names each workspace slot by its fixed
-		// in-namespace path; before loadSnapshot opens those paths they must
-		// resolve to this incarnation's backing files, same capacity as at pause.
-		err = p.linkWorkspaceDrives(hostPath)
-		if err != nil {
-			return err
-		}
-
-		if len(p.workspaceDrives) > 0 {
-			telemetry.ReportEvent(egCtx, "symlinked workspace drives")
-		}
-
 		return nil
 	})
 
@@ -666,6 +690,29 @@ func (p *Process) Resume(
 		fcStopErr := p.Stop(ctx)
 
 		return errors.Join(fmt.Errorf("error waiting for uffd socket or symlinking rootfs: %w", err), fcStopErr)
+	}
+
+	// The snapshot's device table names each workspace slot by its fixed
+	// in-namespace path; before loadSnapshot opens those paths they must resolve
+	// to this incarnation's backing files. Admission needs the running process's
+	// pid, so it runs only now that configure has started FC; the links still
+	// point at /dev/null until it succeeds.
+	err = p.admitWorkspace(ctx)
+	if err != nil {
+		fcStopErr := p.Stop(ctx)
+
+		return errors.Join(err, fcStopErr)
+	}
+
+	err = p.linkWorkspaceDrives(hostPath)
+	if err != nil {
+		fcStopErr := p.Stop(ctx)
+
+		return errors.Join(err, fcStopErr)
+	}
+
+	if len(p.workspaceDrives) > 0 {
+		telemetry.ReportEvent(ctx, "symlinked workspace drives")
 	}
 
 	// Start the metrics reader goroutine before calling setMetrics (same ordering as Create).
@@ -706,6 +753,25 @@ func (p *Process) Resume(
 		fcStopErr := p.Stop(ctx)
 
 		return errors.Join(fmt.Errorf("error setting drive rate limit: %w", setErr), fcStopErr)
+	}
+
+	// A workspace volume grown while the sandbox was paused is larger than the
+	// size the snapshot recorded. Re-PATCH the same path so FC re-reads the file
+	// size and the guest gets a config-change interrupt on resume (the guest then
+	// grows the mounted filesystem online). Before resumeVM: the guest must never
+	// run against a device table whose size disagrees with the file.
+	for i, drive := range p.workspaceDrives {
+		if !drive.RefreshSize {
+			continue
+		}
+
+		if setErr := p.client.patchDrivePath(ctx, drive.DriveID, p.workspacePaths[i]); setErr != nil {
+			fcStopErr := p.Stop(ctx)
+
+			return errors.Join(fmt.Errorf("error refreshing workspace drive %q size: %w", drive.DriveID, setErr), fcStopErr)
+		}
+
+		telemetry.ReportEvent(ctx, "refreshed workspace drive size", attribute.String("drive_id", drive.DriveID))
 	}
 
 	for _, drive := range p.workspaceDrives {

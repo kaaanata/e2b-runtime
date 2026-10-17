@@ -33,6 +33,7 @@ import (
 	clickhouse "github.com/e2b-dev/infra/packages/clickhouse/pkg"
 	clickhouseevents "github.com/e2b-dev/infra/packages/clickhouse/pkg/events"
 	clickhousehoststats "github.com/e2b-dev/infra/packages/clickhouse/pkg/hoststats"
+	"github.com/e2b-dev/infra/packages/orchestrator/pkg/blockvol"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/cfg"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/chrooted"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/events"
@@ -877,6 +878,19 @@ func run(config cfg.Config, opts Options) (success bool) {
 		networkAssignHook = sandbox.NoopNetworkAssignHook{}
 	}
 	sandboxFactory := sandbox.NewFactory(ctx, config.BuilderConfig, networkPool, devicePool, featureFlags, hostStatsDelivery, cgroupManager, egressSetup.Proxy, networkAssignHook, sandboxes)
+
+	// Workspace block volumes are opt-in per node: only a node whose
+	// BLOCK_VOLUME_ROOT names its Btrfs volume tree can host sandboxes that bind
+	// them. Without it, sandboxes of block-layout templates are refused with
+	// ErrCapabilityUnsupported rather than started without their volumes.
+	if os.Getenv(blockvol.RootEnv) != "" {
+		workspaceBackend, err := blockvol.New(blockvol.Config{})
+		if err != nil {
+			logger.L().Fatal(ctx, "workspace block volume backend", zap.Error(err))
+		}
+
+		sandboxFactory.SetWorkspaceBackend(workspaceBackend)
+	}
 
 	// confined volume filesystems (for the volume service and nfs proxy)
 	if err := chrooted.CheckSupport(); err != nil {

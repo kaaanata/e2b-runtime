@@ -4,6 +4,7 @@ package fc
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -20,7 +21,22 @@ import (
 type WorkspaceDrive struct {
 	DriveID    string
 	PathOnHost string
+	// RefreshSize makes a snapshot resume re-read the backing file's size after
+	// the load, with a PATCH /drives/{id} naming the same path: Firecracker then
+	// re-opens the file and raises a virtio config-change interrupt, so the
+	// restored guest sees the grown device when it resumes. Set it when the file
+	// is larger than the size the snapshot's device table recorded (a workspace
+	// volume grown while the sandbox was paused). Ignored on a cold boot, which
+	// sizes every drive from its file anyway.
+	RefreshSize bool
 }
+
+// WorkspaceAdmission is called once the Firecracker process exists and before
+// any workspace slot is pointed at its host file, with the pid the process
+// will be known by. The orchestrator records that pid as the single writer of
+// each bound volume (and may grow a volume image) here, so no VM ever opens a
+// volume it was not admitted to; an error stops the process before it does.
+type WorkspaceAdmission func(ctx context.Context, pid int) error
 
 // workspaceSlot returns the slot index a workspace drive ID names.
 func workspaceSlot(driveID string) (int, bool) {

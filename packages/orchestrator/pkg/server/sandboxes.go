@@ -276,6 +276,7 @@ func (s *Server) Create(ctx context.Context, req *orchestrator.SandboxCreateRequ
 		},
 
 		VolumeMounts:          volumeMounts,
+		WorkspaceVolumes:      workspaceVolumesFromRequest(req.GetWorkspaceSlots()),
 		MaxSandboxLengthHours: req.GetSandbox().GetMaxSandboxLength(),
 	})
 	childSpan.SetAttributes(
@@ -335,6 +336,14 @@ func (s *Server) Create(ctx context.Context, req *orchestrator.SandboxCreateRequ
 			telemetry.ReportError(ctx, "sandbox files not found", err, telemetry.WithSandboxID(req.GetSandbox().GetSandboxId()))
 
 			return nil, status.Errorf(codes.FailedPrecondition, "sandbox files for '%s' not found", req.GetSandbox().GetSandboxId())
+		}
+
+		// The workspace volumes do not fit the template/snapshot, or this node
+		// cannot host them: nothing was started, the request can be corrected.
+		if st := workspaceRefusalStatus(err); st != nil {
+			telemetry.ReportError(ctx, "workspace volumes refused", err, telemetry.WithSandboxID(req.GetSandbox().GetSandboxId()))
+
+			return nil, st
 		}
 
 		err = errors.Join(err, context.Cause(ctx))
@@ -944,7 +953,7 @@ func (s *Server) Pause(ctx context.Context, in *orchestrator.SandboxPauseRequest
 	deferRootfsExport := s.featureFlags.BoolFlag(ctx, featureflags.DeferRootfsExportFlag)
 
 	// Fire and forget - upload completes in the background
-	res, err := s.snapshotAndCacheSandbox(ctx, sbx, in.GetBuildId(), map[string]string{storage.ObjectMetadataTemplateID: in.GetTemplateId()}, storage.ObjectOriginPause, in.GetFilesystemOnly(), deferRootfsExport, false)
+	res, err := s.snapshotAndCacheSandbox(ctx, sbx, in.GetBuildId(), map[string]string{storage.ObjectMetadataTemplateID: in.GetTemplateId()}, storage.ObjectOriginPause, in.GetFilesystemOnly(), deferRootfsExport, false, false)
 	if err != nil {
 		telemetry.ReportCriticalError(ctx, "error snapshotting sandbox", err, telemetry.WithSandboxID(in.GetSandboxId()))
 
@@ -993,6 +1002,7 @@ func (s *Server) Pause(ctx context.Context, in *orchestrator.SandboxPauseRequest
 
 	return &orchestrator.SandboxPauseResponse{
 		SchedulingMetadata: res.schedulingMetadata,
+		WorkspaceRevisions: workspaceRevisionsToProto(res.workspaceSeals),
 	}, nil
 }
 
@@ -1080,6 +1090,19 @@ func (s *Server) Checkpoint(ctx context.Context, in *orchestrator.SandboxCheckpo
 	inPlace := sbx.UseSyncWP() &&
 		s.featureFlags.BoolFlag(ctx, featureflags.InPlaceCheckpointFlag) &&
 		firecrackerSupports(ctx, sbx, "in-place checkpoint", (*fcversion.Info).HasInPlaceCheckpoint)
+
+	// A sandbox with workspace volumes can only be checkpointed in place: the
+	// resume-fresh flow would load the snapshot into a second VM while the
+	// first still holds the volumes. Refuse BEFORE resume-fresh marks the
+	// sandbox stopping, so the refusal leaves it running. Pause re-checks the
+	// same rule for every other caller.
+	if !inPlace {
+		if err := sbx.CheckPauseSupported(sandbox.WithResumeFreshCheckpoint()); err != nil {
+			sbxlogger.E(sbx).Warn(ctx, "Refusing checkpoint", zap.Error(err))
+
+			return nil, status.Errorf(codes.FailedPrecondition, "sandbox '%s' cannot be checkpointed: %s", in.GetSandboxId(), err)
+		}
+	}
 
 	var res *orchestrator.SandboxCheckpointResponse
 	var err error
@@ -1213,7 +1236,8 @@ func (s *Server) checkpointInPlace(ctx context.Context, sbx *sandbox.Sandbox, in
 		storage.ObjectOriginSnapshotTemplate,
 		false, // filesystemOnly: full-memory checkpoint (fs-only in-place is a follow-up)
 		deferRootfsExport,
-		true, // maintainSandbox: resume in place
+		true,  // maintainSandbox: resume in place
+		false, // resumeFresh
 	)
 	if err != nil {
 		telemetry.ReportCriticalError(ctx, "error snapshotting sandbox for checkpoint", err, telemetry.WithSandboxID(in.GetSandboxId()))
@@ -1262,6 +1286,7 @@ func (s *Server) checkpointInPlace(ctx context.Context, sbx *sandbox.Sandbox, in
 
 	return &orchestrator.SandboxCheckpointResponse{
 		SchedulingMetadata: res.schedulingMetadata,
+		WorkspaceRevisions: workspaceRevisionsToProto(res.workspaceSeals),
 	}, nil
 }
 
@@ -1297,7 +1322,7 @@ func (s *Server) checkpointResumeFresh(ctx context.Context, sbx *sandbox.Sandbox
 	// Checkpoint resumes a fresh sandbox from the new build immediately, so the
 	// diff must be materialized synchronously — never defer the rootfs export
 	// here, and never maintain the paused sandbox.
-	res, err := s.snapshotAndCacheSandbox(ctx, sbx, in.GetBuildId(), in.GetMetadata(), storage.ObjectOriginSnapshotTemplate, false, false, false)
+	res, err := s.snapshotAndCacheSandbox(ctx, sbx, in.GetBuildId(), in.GetMetadata(), storage.ObjectOriginSnapshotTemplate, false, false, false, true)
 	if err != nil {
 		telemetry.ReportCriticalError(ctx, "error snapshotting sandbox for checkpoint", err, telemetry.WithSandboxID(in.GetSandboxId()))
 
@@ -1400,6 +1425,7 @@ func (s *Server) checkpointResumeFresh(ctx context.Context, sbx *sandbox.Sandbox
 
 	return &orchestrator.SandboxCheckpointResponse{
 		SchedulingMetadata: res.schedulingMetadata,
+		WorkspaceRevisions: workspaceRevisionsToProto(res.workspaceSeals),
 	}, nil
 }
 
@@ -1461,6 +1487,9 @@ type snapshotResult struct {
 	// waitMemorySealed (Snapshot.WaitMemorySealed) settles.
 	memoryExportDeferred bool
 	waitMemorySealed     func(ctx context.Context) error
+	// workspaceSeals are the workspace revisions the pause sealed, for the
+	// response (the control plane records them as snapshot_volume_refs).
+	workspaceSeals []sandbox.SealedWorkspace
 }
 
 // snapshotAndCacheSandbox creates a snapshot of a sandbox and adds it to the
@@ -1475,6 +1504,7 @@ func (s *Server) snapshotAndCacheSandbox(
 	filesystemOnly bool,
 	deferRootfsExport bool,
 	maintainSandbox bool,
+	resumeFresh bool,
 ) (*snapshotResult, error) {
 	meta, err := sbx.Template.Metadata()
 	if err != nil {
@@ -1497,9 +1527,20 @@ func (s *Server) snapshotAndCacheSandbox(
 	if maintainSandbox {
 		pauseOpts = append(pauseOpts, sandbox.WithMaintainSandbox())
 	}
+	if resumeFresh {
+		pauseOpts = append(pauseOpts, sandbox.WithResumeFreshCheckpoint())
+	}
 
 	snapshot, err := sbx.Pause(ctx, meta, sandbox.SnapshotUseCasePause, pauseOpts...)
 	if err != nil {
+		return nil, fmt.Errorf("error snapshotting sandbox: %w", err)
+	}
+
+	// Readiness: the snapshot joins the template cache (and so becomes
+	// resumable and uploadable) only with a sealed workspace revision for every
+	// bound slot. The revisions are node-local-ready here already — sealed
+	// before any resume — independent of the memory/rootfs upload.
+	if err := snapshot.WorkspaceReady(); err != nil {
 		return nil, fmt.Errorf("error snapshotting sandbox: %w", err)
 	}
 
@@ -1576,6 +1617,7 @@ func (s *Server) snapshotAndCacheSandbox(
 		rootfsDiff:           snapshot.RootfsDiff,
 		memoryExportDeferred: snapshot.MemoryExportDeferred,
 		waitMemorySealed:     snapshot.WaitMemorySealed,
+		workspaceSeals:       snapshot.WorkspaceSeals,
 	}, nil
 }
 
@@ -1853,6 +1895,14 @@ func (s *Server) maybeUpgradeEnvd(ctx context.Context, sbx *sandbox.Sandbox) (up
 	// the candidate for its version, and a cluster with the flag off must pay none of that.
 	target := featureflags.EnvdUpgradeTarget(ctx, s.featureFlags)
 	if featureflags.EnvdUpgradeTargetDisabled(target) {
+		return false, nil
+	}
+
+	// The live upgrade re-execs envd into a process that has not mounted the
+	// workspace volumes itself; its mount ledger — what /fsfreeze-set and
+	// /volumes/resize trust — would start empty while the volumes stay mounted.
+	// Not supported in the first block-volume release: keep the running envd.
+	if sbx.HasWorkspaceVolumes() {
 		return false, nil
 	}
 

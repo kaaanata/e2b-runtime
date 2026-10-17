@@ -44,6 +44,13 @@ func NewUpload(
 	useCase string,
 	objectMetadata storage.ObjectMetadata,
 ) (*Upload, error) {
+	// A snapshot of a sandbox with workspace volumes is only publishable with a
+	// sealed revision per bound slot: uploading its memory/rootfs alone would
+	// register a build the control plane cannot restore.
+	if err := snap.WorkspaceReady(); err != nil {
+		return nil, err
+	}
+
 	// Filesystem-only snapshots have no memfile (NoDiff, block size 0), so
 	// resolving its compress config would fail validation ("block size must be
 	// positive"). The memfile body and header are never uploaded anyway.

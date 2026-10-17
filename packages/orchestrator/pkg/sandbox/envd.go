@@ -89,7 +89,7 @@ func (s *Sandbox) doRequestWithInfiniteRetries(
 		AccessToken:    utils.DerefOrDefault(s.Config.Envd.AccessToken, ""),
 		DefaultUser:    utils.DerefOrDefault(s.Config.Envd.DefaultUser, ""),
 		DefaultWorkdir: utils.DerefOrDefault(s.Config.Envd.DefaultWorkdir, ""),
-		VolumeMounts:   s.convertMounts(s.Config.VolumeMounts),
+		VolumeMounts:   append(s.convertMounts(s.Config.VolumeMounts), s.workspace.envdMounts()...),
 		CaBundle:       s.CABundle,
 	}
 

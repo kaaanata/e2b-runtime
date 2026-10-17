@@ -219,6 +219,9 @@ type WorkspaceLayout struct {
 // WorkspaceRevisionRef points a snapshot at the sealed revision of one
 // workspace slot's volume, as it was at the pause that produced the snapshot.
 type WorkspaceRevisionRef struct {
+	// Slot is the workspace slot (drive index after the rootfs) the revision
+	// was sealed from and restores into.
+	Slot int `json:"slot"`
 	// RevisionID is the control-plane identity of the sealed revision.
 	RevisionID string `json:"revision_id"`
 	// SubvolUUID and FsUUID identify the sealed Btrfs snapshot and the

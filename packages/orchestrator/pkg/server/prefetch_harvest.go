@@ -201,6 +201,12 @@ func (s *Server) harvestResumePrefetchAsync(
 		return
 	}
 
+	// A throwaway resume cannot be given the sandbox's workspace volumes (see
+	// harvest); without them the snapshot is not restorable, so do not try.
+	if sbx.HasWorkspaceVolumes() {
+		return
+	}
+
 	timeoutMs := s.featureFlags.IntFlag(ctx, featureflags.PauseResumePrefetchHarvestTimeoutMsFlag)
 	// Guard against a misconfigured (zero/negative) flag value, which would yield
 	// an already-expired context and silently skip every harvest.
@@ -426,6 +432,12 @@ func (h *prefetchHarvester) resumeMapping(
 	// the live original's is untouched.
 	harvestConfig := *sbx.Config
 	harvestConfig.VolumeMounts = nil
+	// Never re-bind the paused sandbox's workspace incarnations to a throwaway:
+	// the guest would run against (and write) the original volumes. Without
+	// them the resume of a snapshot with mounted workspace volumes is refused by
+	// the resume path itself (ErrWorkspaceRestore); the handler also skips the
+	// harvest for such sandboxes so the refusal does not run on every pause.
+	harvestConfig.WorkspaceVolumes = nil
 
 	// The resumer isolates the throwaway from the network and keeps it out of the
 	// live registry: the user workload stays frozen until envd /init completes and

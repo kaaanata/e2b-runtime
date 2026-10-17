@@ -107,6 +107,45 @@ message SandboxVolumeMount {
   string consistency_profile = 5;
 }
 
+// SandboxWorkspaceSlot binds one workspace block slot of a block-v1 template
+// to one incarnation (a writable image) of a workspace volume, for one start.
+// Carried by SandboxCreateRequest because the binding is per execution: every
+// create, resume or fork gets the incarnation the control plane cloned for it.
+// The volume belongs to the sandbox's team (SandboxConfig.team_id).
+//
+// fs_uuid and capacity_bytes are the control plane's record of the
+// incarnation; when set, the orchestrator refuses a start whose image on disk
+// differs. resize_to_bytes > 0 grows the volume before the guest runs (never
+// shrinks): online on a memory restore, offline on a cold boot.
+message SandboxWorkspaceSlot {
+  uint32 slot = 1;
+  string volume_id = 2;
+  string incarnation_id = 3;
+  string mount_path = 4;
+  string fs_uuid = 5;
+  uint64 capacity_bytes = 6;
+  uint64 resize_to_bytes = 7;
+}
+
+// SandboxWorkspaceRevision is one workspace revision a pause or checkpoint
+// sealed, after CreateSnapshot and before any resume, for the control plane to
+// record against the snapshot (snapshot_volume_refs). operation_id is the
+// orchestrator's blockvol operation, derived from the build id, so a replayed
+// pause of the same build reports the same revision.
+message SandboxWorkspaceRevision {
+  uint32 slot = 1;
+  string volume_id = 2;
+  string source_incarnation_id = 3;
+  string revision_id = 4;
+  string operation_id = 5;
+  string subvolume_uuid = 6;
+  string fs_uuid = 7;
+  uint64 size_bytes = 8;
+  // "paired-memory" (memory pause/checkpoint) or "filesystem-quiesced"
+  // (filesystem-only pause with the whole mount set frozen).
+  string consistency = 9;
+}
+
 message SandboxNetworkConfig {
   optional SandboxNetworkEgressConfig egress = 1;
   optional SandboxNetworkIngressConfig ingress = 2;
@@ -154,6 +193,11 @@ message SandboxCreateRequest {
   // Absent = the snapshot's own metadata alone selects the boot path, so
   // existing callers are unaffected. Request-scoped: nothing durable records it.
   optional bool filesystem_boot = 4;
+
+  // Fields 20+ belong to the workspace checkpoint track.
+  // Workspace block slot bindings for this start; empty for a sandbox without
+  // workspace volumes. Requires a block-v1 template.
+  repeated SandboxWorkspaceSlot workspace_slots = 20;
 }
 
 message SandboxCreateResponse {
@@ -223,6 +267,10 @@ message SchedulingMetadata {
 
 message SandboxPauseResponse {
   SchedulingMetadata scheduling_metadata = 1;
+
+  // Fields 20+ belong to the workspace checkpoint track.
+  // One sealed revision per bound workspace slot, in slot order.
+  repeated SandboxWorkspaceRevision workspace_revisions = 20;
 }
 
 message SandboxCheckpointRequest {
@@ -236,6 +284,10 @@ message SandboxCheckpointRequest {
 
 message SandboxCheckpointResponse {
   SchedulingMetadata scheduling_metadata = 1;
+
+  // Fields 20+ belong to the workspace checkpoint track.
+  // One sealed revision per bound workspace slot, in slot order.
+  repeated SandboxWorkspaceRevision workspace_revisions = 20;
 }
 
 message RunningSandbox {

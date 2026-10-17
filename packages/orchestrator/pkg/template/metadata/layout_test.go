@@ -35,7 +35,7 @@ func TestDeserialize_BlockV1Decodes(t *testing.T) {
 	in := `{"version": 2, "template": {"build_id": "b1", "kernel_version": "6.1", "firecracker_version": "1.0"},
 	        "layout": "block-v1", "workspace": {"slots": 2, "slot_capacity_bytes": [1073741824, 2147483648]},
 	        "required_capabilities": ["block-v1"],
-	        "workspace_revisions": [{"revision_id": "rev-1", "subvol_uuid": "s-1", "fs_uuid": "f-1", "size_bytes": 1073741824, "consistency": "paired-memory"}]}`
+	        "workspace_revisions": [{"slot": 1, "revision_id": "rev-1", "subvol_uuid": "s-1", "fs_uuid": "f-1", "size_bytes": 1073741824, "consistency": "paired-memory"}]}`
 
 	got, err := deserialize(bytes.NewReader([]byte(in)))
 	require.NoError(t, err)
@@ -44,7 +44,7 @@ func TestDeserialize_BlockV1Decodes(t *testing.T) {
 	assert.Equal(t, WorkspaceLayout{Slots: 2, SlotCapacityBytes: []int64{1 << 30, 2 << 30}}, *got.Workspace)
 	assert.Equal(t, []string{"block-v1"}, got.RequiredCapabilities)
 	assert.Equal(t, []WorkspaceRevisionRef{{
-		RevisionID: "rev-1", SubvolUUID: "s-1", FsUUID: "f-1", SizeBytes: 1 << 30, Consistency: "paired-memory",
+		Slot: 1, RevisionID: "rev-1", SubvolUUID: "s-1", FsUUID: "f-1", SizeBytes: 1 << 30, Consistency: "paired-memory",
 	}}, got.WorkspaceRevisions)
 	assert.True(t, got.HasWorkspaceSlots())
 }
