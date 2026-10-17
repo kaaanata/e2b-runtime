@@ -178,3 +178,16 @@ JOIN volume_revisions rev ON rev.id = r.revision_id
 JOIN volumes v ON v.id = r.volume_id
 WHERE r.snapshot_build_id = @snapshot_build_id
 ORDER BY r.slot;
+
+-- ReleaseTemplateSnapshotVolumeRefs drops the block volume references of
+-- every build of a template that is being deleted (a killed paused sandbox's
+-- snapshot, or a discarded checkpoint): nothing can resume those builds, so
+-- their revisions must no longer keep the volumes from being deleted. The
+-- revisions themselves stay until the volume is deleted.
+-- name: ReleaseTemplateSnapshotVolumeRefs :execrows
+DELETE FROM snapshot_volume_refs
+WHERE snapshot_build_id IN (
+    SELECT eba.build_id FROM env_build_assignments eba WHERE eba.env_id = @template_id
+    UNION
+    SELECT eb.id FROM env_builds eb WHERE eb.env_id = @template_id
+);

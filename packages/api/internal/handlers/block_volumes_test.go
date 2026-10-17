@@ -21,6 +21,7 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal"
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	"github.com/e2b-dev/infra/packages/api/internal/cfg"
+	apidb "github.com/e2b-dev/infra/packages/api/internal/db"
 	"github.com/e2b-dev/infra/packages/api/internal/orchestrator/nodemanager"
 	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
 	authtypes "github.com/e2b-dev/infra/packages/auth/pkg/types"
@@ -337,6 +338,41 @@ func TestBlockVolumeLifecycleEndpoints(t *testing.T) {
 		f.store.DeleteVolumesVolumeID(c, vol.ID.String())
 		assert.Equal(t, http.StatusConflict, rec.Code)
 		assert.Equal(t, errCodeVolumeReferencedBySnapshot, errorCode(t, rec))
+	})
+
+	t.Run("killing the paused sandbox releases its snapshot's references", func(t *testing.T) {
+		t.Parallel()
+
+		f := newBlockAPIFixture(t, db)
+		ctx := t.Context()
+		vol, inc, _ := f.readyVolume(t)
+
+		// volume -> sandbox -> pause: the pause's snapshot build references a
+		// paired-memory revision of the volume.
+		base := testutils.CreateTestTemplate(t, f.db, f.team.ID)
+		sandboxID := "sbx-" + uuid.NewString()
+		snap := testutils.UpsertTestSnapshot(t, ctx, f.db, "snap-"+uuid.NewString(), sandboxID, f.team.ID, base)
+		sealRevision(t, f, vol, inc, consistencyPairedMemory, snap.BuildID)
+
+		c, rec := f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil)
+		f.store.DeleteVolumesVolumeID(c, vol.ID.String())
+		require.Equal(t, http.StatusConflict, rec.Code)
+		assert.Equal(t, errCodeVolumeReferencedBySnapshot, errorCode(t, rec))
+
+		// kill: DELETE /sandboxes/{id} of a paused sandbox soft-deletes its
+		// snapshot template (deleteSnapshot -> softDeleteTemplate).
+		builds, err := apidb.GetSnapshotBuilds(ctx, f.db.SqlcClient, f.team.ID, sandboxID)
+		require.NoError(t, err)
+		_, err = f.store.softDeleteTemplate(ctx, f.team.ID, builds.TemplateID)
+		require.NoError(t, err)
+
+		refs, err := f.db.SqlcClient.CountVolumeSnapshotRefs(ctx, vol.ID)
+		require.NoError(t, err)
+		assert.Zero(t, refs)
+
+		c, rec = f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil)
+		f.store.DeleteVolumesVolumeID(c, vol.ID.String())
+		assert.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
 	})
 
 	t.Run("delete refuses while the volume is being created", func(t *testing.T) {

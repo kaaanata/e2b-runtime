@@ -975,6 +975,28 @@ func (q *Queries) ReleaseSandboxAttachments(ctx context.Context, arg ReleaseSand
 	return items, nil
 }
 
+const releaseTemplateSnapshotVolumeRefs = `-- name: ReleaseTemplateSnapshotVolumeRefs :execrows
+DELETE FROM snapshot_volume_refs
+WHERE snapshot_build_id IN (
+    SELECT eba.build_id FROM env_build_assignments eba WHERE eba.env_id = $1
+    UNION
+    SELECT eb.id FROM env_builds eb WHERE eb.env_id = $1
+)
+`
+
+// ReleaseTemplateSnapshotVolumeRefs drops the block volume references of
+// every build of a template that is being deleted (a killed paused sandbox's
+// snapshot, or a discarded checkpoint): nothing can resume those builds, so
+// their revisions must no longer keep the volumes from being deleted. The
+// revisions themselves stay until the volume is deleted.
+func (q *Queries) ReleaseTemplateSnapshotVolumeRefs(ctx context.Context, templateID string) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseTemplateSnapshotVolumeRefs, templateID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const releaseVolumeAttachment = `-- name: ReleaseVolumeAttachment :exec
 UPDATE volume_attachments
 SET desired_state = 'released', released_at = now()
