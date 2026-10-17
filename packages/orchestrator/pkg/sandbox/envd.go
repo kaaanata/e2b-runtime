@@ -447,13 +447,38 @@ func (s *Sandbox) envdServerURL() string {
 // deadline must live on ctx (callers set it via context.WithTimeout) so it
 // stays in force while the caller reads the body.
 func (s *Sandbox) doEnvdPost(ctx context.Context, path string, query ...string) (*http.Response, error) {
-	address := s.envdServerURL() + "/" + path
-	if len(query) > 0 && query[0] != "" {
-		address += "?" + query[0]
+	rawQuery := ""
+	if len(query) > 0 {
+		rawQuery = query[0]
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, address, nil)
+
+	return s.doEnvdRequest(ctx, http.MethodPost, path, rawQuery, nil)
+}
+
+// doEnvdRequest is doEnvdPost for any method, with an optional JSON body (one
+// of the generated envd request models). Same ownership and deadline rules.
+func (s *Sandbox) doEnvdRequest(ctx context.Context, method, path, rawQuery string, body any) (*http.Response, error) {
+	address := s.envdServerURL() + "/" + path
+	if rawQuery != "" {
+		address += "?" + rawQuery
+	}
+
+	var reader io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("encode %s body: %w", path, err)
+		}
+
+		reader = bytes.NewReader(raw)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, address, reader)
 	if err != nil {
 		return nil, fmt.Errorf("build %s request: %w", path, err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	if s.Config.Envd.AccessToken != nil {
 		req.Header.Set("X-Access-Token", *s.Config.Envd.AccessToken)

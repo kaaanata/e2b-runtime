@@ -3,7 +3,6 @@
 package sandbox
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,46 +22,6 @@ import (
 // envd predates.
 var errEnvdEndpointMissing = errors.New("envd endpoint not found")
 
-// doEnvdJSON sends an authenticated request with an optional JSON body to
-// envd's /<path> and returns the response; the caller closes the body. The
-// deadline must live on ctx.
-func (s *Sandbox) doEnvdJSON(ctx context.Context, method, path string, query url.Values, body any) (*http.Response, error) {
-	address := s.envdServerURL() + "/" + path
-	if len(query) > 0 {
-		address += "?" + query.Encode()
-	}
-
-	var reader io.Reader = http.NoBody
-	if body != nil {
-		raw, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("encode %s body: %w", path, err)
-		}
-
-		reader = bytes.NewReader(raw)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, address, reader)
-	if err != nil {
-		return nil, fmt.Errorf("build %s request: %w", path, err)
-	}
-
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	if s.Config.Envd.AccessToken != nil {
-		req.Header.Set("X-Access-Token", *s.Config.Envd.AccessToken)
-	}
-
-	resp, err := sandboxHttpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("%s request: %w", path, err)
-	}
-
-	return resp, nil
-}
-
 // envdFreezeSetCall performs one mount-set freeze/thaw/status call and decodes
 // the FsFreezeSetResult, which envd returns with 200 and (for a failed freeze)
 // 500 alike.
@@ -71,16 +30,16 @@ func (s *Sandbox) envdFreezeSetCall(ctx context.Context, method, path, token str
 	defer cancel()
 
 	var (
-		query url.Values
+		query string
 		body  any
 	)
 	if method == http.MethodGet {
-		query = url.Values{"operation_token": []string{token}}
+		query = url.Values{"operation_token": []string{token}}.Encode()
 	} else {
 		body = envd.FsFreezeSetRequest{OperationToken: token}
 	}
 
-	resp, err := s.doEnvdJSON(ctx, method, path, query, body)
+	resp, err := s.doEnvdRequest(ctx, method, path, query, body)
 	if err != nil {
 		return envd.FsFreezeSetResult{}, 0, err
 	}
@@ -203,7 +162,7 @@ func (s *Sandbox) callEnvdVolumeResize(ctx context.Context, mountPath string) er
 	ctx, cancel := context.WithTimeout(ctx, s.guestSyncTimeout(ctx))
 	defer cancel()
 
-	resp, err := s.doEnvdJSON(ctx, http.MethodPost, "volumes/resize", nil, envd.VolumeResizeRequest{Path: mountPath})
+	resp, err := s.doEnvdRequest(ctx, http.MethodPost, "volumes/resize", "", envd.VolumeResizeRequest{Path: mountPath})
 	if err != nil {
 		return err
 	}

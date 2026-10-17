@@ -35,7 +35,7 @@ func newFakeWorkspaceBackend(log *[]string) *fakeWorkspaceBackend {
 	return &fakeWorkspaceBackend{log: log, incs: map[string]blockvol.IncarnationInfo{}, holders: map[string]string{}, failOn: map[string]error{}}
 }
 
-func (f *fakeWorkspaceBackend) record(format string, args ...any) {
+func (f *fakeWorkspaceBackend) recordf(format string, args ...any) {
 	*f.log = append(*f.log, fmt.Sprintf(format, args...))
 }
 
@@ -56,7 +56,7 @@ func (f *fakeWorkspaceBackend) Bind(_ context.Context, req blockvol.BindRequest)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.record("bind %s pid=%d", req.Incarnation.Incarnation, req.FCPid)
+	f.recordf("bind %s pid=%d", req.Incarnation.Incarnation, req.FCPid)
 	if err := f.failOn["bind"]; err != nil {
 		return blockvol.Holder{}, err
 	}
@@ -74,7 +74,7 @@ func (f *fakeWorkspaceBackend) Release(_ context.Context, req blockvol.ReleaseRe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.record("release %s", req.Incarnation)
+	f.recordf("release %s", req.Incarnation)
 	delete(f.holders, req.Incarnation.String())
 
 	return nil
@@ -84,7 +84,7 @@ func (f *fakeWorkspaceBackend) Seal(_ context.Context, op blockvol.ID, inc block
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.record("seal %s rev=%s op=%s", inc.Incarnation, revision, op)
+	f.recordf("seal %s rev=%s op=%s", inc.Incarnation, revision, op)
 	if err := f.failOn["seal"]; err != nil {
 		return blockvol.RevisionInfo{}, err
 	}
@@ -121,7 +121,7 @@ func (f *fakeWorkspaceBackend) GrowImage(_ context.Context, inc blockvol.Incarna
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.record("grow-image %s to=%d", inc.Incarnation, size)
+	f.recordf("grow-image %s to=%d", inc.Incarnation, size)
 	if err := f.failOn["grow"]; err != nil {
 		return err
 	}
@@ -141,7 +141,7 @@ func (f *fakeWorkspaceBackend) GrowFilesystemOffline(_ context.Context, inc bloc
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.record("grow-offline %s to=%d", inc.Incarnation, size)
+	f.recordf("grow-offline %s to=%d", inc.Incarnation, size)
 	if _, held := f.holders[inc.Incarnation.String()]; held {
 		return blockvol.ErrHolderMismatch
 	}
@@ -204,8 +204,9 @@ func (fx *workspaceFixture) plan(t *testing.T, meta metadata.Template, volumes [
 	return planWorkspace(t.Context(), fx.backend, meta, volumes, fx.team.String(), "sbx-1", "lifecycle-1", mode)
 }
 
-func pairedRevision(slot int, fsUUID string, size int64) metadata.WorkspaceRevisionRef {
-	return metadata.WorkspaceRevisionRef{Slot: slot, RevisionID: uuid.NewString(), SubvolUUID: "s", FsUUID: fsUUID, SizeBytes: size, Consistency: string(blockvol.ConsistencyPairedMemory)}
+// pairedRevision is a paired-memory revision of slot at the slot capacity.
+func pairedRevision(slot int, fsUUID string) metadata.WorkspaceRevisionRef {
+	return metadata.WorkspaceRevisionRef{Slot: slot, RevisionID: uuid.NewString(), SubvolUUID: "s", FsUUID: fsUUID, SizeBytes: slotCap, Consistency: string(blockvol.ConsistencyPairedMemory)}
 }
 
 func TestPlanWorkspace_LayoutGate(t *testing.T) {
@@ -282,17 +283,17 @@ func TestPlanWorkspace_RestoreValidation(t *testing.T) {
 	t.Run("a mounted slot without a volume is refused", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := fx.plan(t, blockTemplate(2, pairedRevision(1, fx.fsUUID, slotCap)), []WorkspaceVolume{vol}, workspaceMemoryRestore)
+		_, err := fx.plan(t, blockTemplate(2, pairedRevision(1, fx.fsUUID)), []WorkspaceVolume{vol}, workspaceMemoryRestore)
 		require.ErrorIs(t, err, ErrWorkspaceRestore)
 	})
 
 	t.Run("paired-memory needs the revision's ext4 UUID", func(t *testing.T) {
 		t.Parallel()
 
-		_, err := fx.plan(t, blockTemplate(1, pairedRevision(0, uuid.NewString(), slotCap)), []WorkspaceVolume{vol}, workspaceMemoryRestore)
+		_, err := fx.plan(t, blockTemplate(1, pairedRevision(0, uuid.NewString())), []WorkspaceVolume{vol}, workspaceMemoryRestore)
 		require.ErrorIs(t, err, ErrWorkspaceRestore)
 
-		ws, err := fx.plan(t, blockTemplate(1, pairedRevision(0, fx.fsUUID, slotCap)), []WorkspaceVolume{vol}, workspaceMemoryRestore)
+		ws, err := fx.plan(t, blockTemplate(1, pairedRevision(0, fx.fsUUID)), []WorkspaceVolume{vol}, workspaceMemoryRestore)
 		require.NoError(t, err)
 		assert.False(t, ws.drives[0].RefreshSize)
 	})
@@ -300,7 +301,7 @@ func TestPlanWorkspace_RestoreValidation(t *testing.T) {
 	t.Run("a filesystem-quiesced revision cannot be memory-restored", func(t *testing.T) {
 		t.Parallel()
 
-		rev := pairedRevision(0, fx.fsUUID, slotCap)
+		rev := pairedRevision(0, fx.fsUUID)
 		rev.Consistency = string(blockvol.ConsistencyFilesystemQuiesced)
 		_, err := fx.plan(t, blockTemplate(1, rev), []WorkspaceVolume{vol}, workspaceMemoryRestore)
 		require.ErrorIs(t, err, ErrWorkspaceRestore)
@@ -309,7 +310,7 @@ func TestPlanWorkspace_RestoreValidation(t *testing.T) {
 	t.Run("capacity must match without a resize", func(t *testing.T) {
 		t.Parallel()
 
-		meta := blockTemplate(1, pairedRevision(0, fx.fsUUID, slotCap))
+		meta := blockTemplate(1, pairedRevision(0, fx.fsUUID))
 		meta.Workspace.SlotCapacityBytes[0] = 2 * slotCap
 		_, err := fx.plan(t, meta, []WorkspaceVolume{vol}, workspaceMemoryRestore)
 		require.ErrorIs(t, err, ErrWorkspaceRestore)
@@ -320,7 +321,7 @@ func TestPlanWorkspace_RestoreValidation(t *testing.T) {
 
 		shrink := vol
 		shrink.ResizeToBytes = gib / 2
-		_, err := fx.plan(t, blockTemplate(1, pairedRevision(0, fx.fsUUID, slotCap)), []WorkspaceVolume{shrink}, workspaceMemoryRestore)
+		_, err := fx.plan(t, blockTemplate(1, pairedRevision(0, fx.fsUUID)), []WorkspaceVolume{shrink}, workspaceMemoryRestore)
 		require.ErrorIs(t, err, ErrWorkspaceRestore)
 
 		_, err = fx.plan(t, blockTemplate(1), []WorkspaceVolume{shrink}, workspaceColdBoot)
@@ -344,7 +345,7 @@ func TestPlanWorkspace_RestoreValidation(t *testing.T) {
 	t.Run("a cold boot does not need the revision's UUID", func(t *testing.T) {
 		t.Parallel()
 
-		rev := pairedRevision(0, uuid.NewString(), slotCap)
+		rev := pairedRevision(0, uuid.NewString())
 		rev.Consistency = string(blockvol.ConsistencyFilesystemQuiesced)
 		ws, err := fx.plan(t, blockTemplate(1, rev), []WorkspaceVolume{vol}, workspaceColdBoot)
 		require.NoError(t, err)
@@ -378,7 +379,7 @@ func TestWorkspace_PairedMemoryResizeOrdering(t *testing.T) {
 	vol := fx.volumeFor(0, fx.inc)
 	vol.ResizeToBytes = 3 * gib
 
-	ws, err := fx.plan(t, blockTemplate(1, pairedRevision(0, fx.fsUUID, slotCap)), []WorkspaceVolume{vol}, workspaceMemoryRestore)
+	ws, err := fx.plan(t, blockTemplate(1, pairedRevision(0, fx.fsUUID)), []WorkspaceVolume{vol}, workspaceMemoryRestore)
 	require.NoError(t, err)
 	assert.True(t, ws.drives[0].RefreshSize)
 	assert.Equal(t, []string{"/workspace0"}, ws.onlineResizePaths())
@@ -471,7 +472,7 @@ func TestWorkspace_SealStampsGrownSize(t *testing.T) {
 	fx := newWorkspaceFixture(t)
 	vol := fx.volumeFor(0, fx.inc)
 	vol.ResizeToBytes = 2 * gib
-	meta := blockTemplate(1, pairedRevision(0, fx.fsUUID, slotCap))
+	meta := blockTemplate(1, pairedRevision(0, fx.fsUUID))
 
 	ws, err := fx.plan(t, meta, []WorkspaceVolume{vol}, workspaceMemoryRestore)
 	require.NoError(t, err)
@@ -602,7 +603,7 @@ func TestRequireWorkspaceSealed(t *testing.T) {
 func TestSnapshotWorkspaceReady(t *testing.T) {
 	t.Parallel()
 
-	rev := pairedRevision(0, uuid.NewString(), slotCap)
+	rev := pairedRevision(0, uuid.NewString())
 	seal := SealedWorkspace{Slot: 0, Revision: rev}
 
 	require.NoError(t, (&Snapshot{}).WorkspaceReady(), "no workspace volumes")

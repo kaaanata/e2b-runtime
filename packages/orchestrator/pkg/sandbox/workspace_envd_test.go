@@ -212,7 +212,7 @@ func TestResizeWorkspaceFilesystems(t *testing.T) {
 
 	vol := fx.volumeFor(0, fx.inc)
 	vol.ResizeToBytes = 2 * gib
-	ws, err := fx.plan(t, blockTemplate(1, pairedRevision(0, fx.fsUUID, slotCap)), []WorkspaceVolume{vol}, workspaceMemoryRestore)
+	ws, err := fx.plan(t, blockTemplate(1, pairedRevision(0, fx.fsUUID)), []WorkspaceVolume{vol}, workspaceMemoryRestore)
 	require.NoError(t, err)
 	s.workspace = ws
 
