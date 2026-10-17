@@ -196,3 +196,26 @@ func TestSandboxNetworkConfigHasEgressProxy(t *testing.T) {
 		})
 	}
 }
+
+func TestSandboxVolumeMountConfig_ConsistencyProfileRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	// A row written before the field existed decodes to the legacy (empty) profile.
+	var legacy SandboxVolumeMountConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"v1","type":"local","name":"vol","path":"/vol"}`), &legacy))
+	assert.Empty(t, legacy.ConsistencyProfile)
+
+	// And the empty profile is not written back, so a row round-trips unchanged.
+	data, err := json.Marshal(legacy)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"id":"v1","type":"local","name":"vol","path":"/vol"}`, string(data))
+
+	withProfile := SandboxVolumeMountConfig{ID: "v1", Type: "local", Name: "vol", Path: "/vol", ConsistencyProfile: VolumeConsistencyCto}
+	data, err = json.Marshal(withProfile)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"id":"v1","type":"local","name":"vol","path":"/vol","consistencyProfile":"cto"}`, string(data))
+
+	var back SandboxVolumeMountConfig
+	require.NoError(t, json.Unmarshal(data, &back))
+	assert.Equal(t, withProfile, back)
+}

@@ -97,10 +97,11 @@ func ConvertOrchestratorMountsToDatabaseMounts(mounts []*orchestrator.SandboxVol
 
 	for _, item := range mounts {
 		results = append(results, &types.SandboxVolumeMountConfig{
-			ID:   item.GetId(),
-			Type: item.GetType(),
-			Name: item.GetName(),
-			Path: item.GetPath(),
+			ID:                 item.GetId(),
+			Type:               item.GetType(),
+			Name:               item.GetName(),
+			Path:               item.GetPath(),
+			ConsistencyProfile: item.GetConsistencyProfile(),
 		})
 	}
 

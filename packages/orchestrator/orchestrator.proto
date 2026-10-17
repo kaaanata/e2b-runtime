@@ -95,6 +95,11 @@ message SandboxVolumeMount {
   string path = 2;
   string type = 3;
   string name = 4;
+  // consistency_profile selects the NFS mount options envd uses for a shared
+  // volume: "strict" (no attribute or name caching) or "cto" (close-to-open).
+  // Empty keeps envd's built-in options, which is what every sandbox created
+  // before this field existed gets.
+  string consistency_profile = 5;
 }
 
 message SandboxNetworkConfig {

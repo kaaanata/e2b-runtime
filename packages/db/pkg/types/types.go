@@ -108,11 +108,26 @@ func (c *SandboxNetworkConfig) HasEgressProxyAuth() bool {
 	return c.HasEgressProxy() && c.Egress.EgressProxyUsername != ""
 }
 
+// VolumeConsistencyProfile selects how a shared (NFS) volume is mounted in the
+// sandbox: "strict" sends every operation to the server with no attribute or
+// name caching; "cto" is close-to-open (a writer's close makes its data visible
+// to a reader's next open). Empty means the mount options every sandbox had
+// before profiles existed.
+type VolumeConsistencyProfile = string
+
+const (
+	VolumeConsistencyStrict VolumeConsistencyProfile = "strict"
+	VolumeConsistencyCto    VolumeConsistencyProfile = "cto"
+)
+
 type SandboxVolumeMountConfig struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
 	Name string `json:"name"`
 	Path string `json:"path"`
+	// ConsistencyProfile is the mount's VolumeConsistencyProfile. Rows written
+	// before the field existed omit the key and decode to "", the legacy options.
+	ConsistencyProfile VolumeConsistencyProfile `json:"consistencyProfile,omitempty"`
 }
 
 type SandboxAutoResumePolicy string
