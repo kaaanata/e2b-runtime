@@ -157,6 +157,12 @@ type Process struct {
 	kernelPath     string
 	files          *storage.SandboxFiles
 
+	// workspaceDrives are the workspace block slots this process binds, fixed at
+	// construction because the start script creates their links before FC runs.
+	// workspacePaths are their in-namespace paths, index-aligned.
+	workspaceDrives []WorkspaceDrive
+	workspacePaths  []string
+
 	Exit *utils.ErrorOnce
 
 	client *apiClient
@@ -175,15 +181,22 @@ func NewProcess(
 	versions Config,
 	rootfsProvider rootfs.Provider,
 	rootfsPaths RootfsPaths,
+	workspaceDrives []WorkspaceDrive,
 ) (*Process, error) {
 	ctx, childSpan := tracer.Start(ctx, "initialize-fc", trace.WithAttributes(
 		attribute.Int("sandbox.slot.index", slot.Idx),
+		attribute.Int("sandbox.workspace_drives", len(workspaceDrives)),
 	))
 	defer childSpan.End()
 
+	// Configure the slots in slot order whatever order the caller listed them in:
+	// Firecracker registers drives in the order they are PUT, and that order is
+	// the guest's device table.
+	workspaceDrives = sortWorkspaceDrives(workspaceDrives)
+
 	// Build the firecracker start script and get computed paths
 	startBuilder := NewStartScriptBuilder(config)
-	startScript, err := startBuilder.Build(versions, files, rootfsPaths, slot.NamespaceID())
+	startScript, err := startBuilder.Build(versions, files, rootfsPaths, slot.NamespaceID(), workspaceDrives)
 	if err != nil {
 		return nil, err
 	}
@@ -225,6 +238,9 @@ func NewProcess(
 
 		kernelPath: startScript.KernelPath,
 		rootfsPath: startScript.RootfsPath,
+
+		workspaceDrives: workspaceDrives,
+		workspacePaths:  startScript.WorkspacePaths,
 	}
 
 	cmd.SysProcAttr = &syscall.SysProcAttr{
@@ -233,6 +249,34 @@ func NewProcess(
 
 	return p, nil
 }
+
+// workspaceLinkPath is the host link the start script made the workspace slot's
+// in-namespace path point at.
+func (p *Process) workspaceLinkPath(drive WorkspaceDrive) string {
+	// NewProcess already validated the ID through the start script builder.
+	slot, _ := workspaceSlot(drive.DriveID)
+
+	return p.files.SandboxCacheWorkspaceLinkPath(p.config.StorageConfig, slot)
+}
+
+// linkWorkspaceDrives points every workspace slot's host link at target(drive):
+// /dev/null before the process starts, so the slot resolves to something while
+// FC comes up, and the real backing file before the drive is configured (Create)
+// or the snapshot that recorded the slot is loaded (Resume).
+func (p *Process) linkWorkspaceDrives(target func(WorkspaceDrive) string) error {
+	for _, drive := range p.workspaceDrives {
+		err := utils.SymlinkForce(target(drive), p.workspaceLinkPath(drive))
+		if err != nil {
+			return fmt.Errorf("error symlinking workspace drive %q: %w", drive.DriveID, err)
+		}
+	}
+
+	return nil
+}
+
+func devNull(WorkspaceDrive) string { return "/dev/null" }
+
+func hostPath(d WorkspaceDrive) string { return d.PathOnHost }
 
 func (p *Process) configure(
 	ctx context.Context,
@@ -348,6 +392,12 @@ func (p *Process) Create(
 		return fmt.Errorf("error symlinking rootfs: %w", err)
 	}
 
+	// Same for the workspace slots, which are re-pointed right after the rootfs below.
+	err = p.linkWorkspaceDrives(devNull)
+	if err != nil {
+		return err
+	}
+
 	err = p.configure(
 		ctx,
 		sbxMetadata,
@@ -409,6 +459,28 @@ func (p *Process) Create(
 		return errors.Join(fmt.Errorf("error setting fc drivers config: %w", err), fcStopErr)
 	}
 	telemetry.ReportEvent(ctx, "set fc drivers config")
+
+	// Workspace block slots, in slot order after the rootfs so the guest device
+	// table is the same on every boot of the same layout. The host paths were
+	// resolved by the caller; here they are only linked and handed to FC.
+	err = p.linkWorkspaceDrives(hostPath)
+	if err != nil {
+		fcStopErr := p.Stop(ctx)
+
+		return errors.Join(err, fcStopErr)
+	}
+
+	for i, drive := range p.workspaceDrives {
+		err = p.client.setWorkspaceDrive(ctx, drive.DriveID, p.workspacePaths[i], options.IoEngine, buildRateLimiter(driveRateLimit))
+		if err != nil {
+			fcStopErr := p.Stop(ctx)
+
+			return errors.Join(err, fcStopErr)
+		}
+	}
+	if len(p.workspaceDrives) > 0 {
+		telemetry.ReportEvent(ctx, "set fc workspace drives", attribute.Int("count", len(p.workspaceDrives)))
+	}
 
 	err = p.client.setNetworkInterface(ctx, p.slot.VpeerName(), p.slot.TapName(), p.slot.TapMAC(), buildRateLimiter(txRateLimit))
 	if err != nil {
@@ -518,6 +590,12 @@ func (p *Process) Resume(
 		return fmt.Errorf("error symlinking rootfs: %w", err)
 	}
 
+	// Same for the workspace slots, re-pointed together with the rootfs below.
+	err = p.linkWorkspaceDrives(devNull)
+	if err != nil {
+		return err
+	}
+
 	// create errgroup with context that handled socket wait + rootfs symlink
 	eg, egCtx := errgroup.WithContext(ctx)
 
@@ -568,6 +646,18 @@ func (p *Process) Resume(
 
 		telemetry.ReportEvent(egCtx, "symlinked rootfs")
 
+		// The snapshot's device table names each workspace slot by its fixed
+		// in-namespace path; before loadSnapshot opens those paths they must
+		// resolve to this incarnation's backing files, same capacity as at pause.
+		err = p.linkWorkspaceDrives(hostPath)
+		if err != nil {
+			return err
+		}
+
+		if len(p.workspaceDrives) > 0 {
+			telemetry.ReportEvent(egCtx, "symlinked workspace drives")
+		}
+
 		return nil
 	})
 
@@ -616,6 +706,14 @@ func (p *Process) Resume(
 		fcStopErr := p.Stop(ctx)
 
 		return errors.Join(fmt.Errorf("error setting drive rate limit: %w", setErr), fcStopErr)
+	}
+
+	for _, drive := range p.workspaceDrives {
+		if setErr := p.client.setDriveRateLimit(ctx, drive.DriveID, driveRateLimit); setErr != nil {
+			fcStopErr := p.Stop(ctx)
+
+			return errors.Join(fmt.Errorf("error setting workspace drive %q rate limit: %w", drive.DriveID, setErr), fcStopErr)
+		}
 	}
 	telemetry.ReportEvent(ctx, "configured drive rate limit")
 

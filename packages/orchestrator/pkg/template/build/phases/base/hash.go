@@ -15,6 +15,7 @@ import (
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/build/phases"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/build/phases/base/distro"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/build/storage/cache"
+	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/metadata"
 	"github.com/e2b-dev/infra/packages/shared/pkg/featureflags"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
@@ -133,6 +134,21 @@ func baseLayerKey(indexVersion, provisionVersion, baseSource string, buildContex
 		// KernelArgs.String() renders sorted, which is what makes this a stable key: Go
 		// randomises map iteration, and a cache key that varies run to run caches nothing.
 		keys = append(keys, "cmdline:"+fc.KernelArgs(buildContext.Config.CmdlineArgs).String())
+	}
+
+	// The device table is part of the base snapshot: a layer built with workspace
+	// slots cannot serve a legacy build or one with other slot sizes, and vice
+	// versa. Appended only for a non-legacy layout so every existing legacy key
+	// stays byte-identical.
+	if buildContext.Config.Layout != metadata.LayoutLegacy {
+		key := "layout:" + buildContext.Config.Layout
+		if ws := buildContext.Config.Workspace; ws != nil {
+			key += ":" + strconv.Itoa(ws.Slots)
+			for _, c := range ws.SlotCapacityBytes {
+				key += ":" + strconv.FormatInt(c, 10)
+			}
+		}
+		keys = append(keys, key)
 	}
 
 	// The rendered files differ between on and off while the template file set,

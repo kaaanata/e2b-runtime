@@ -838,9 +838,20 @@ type PreBootFn func(ctx context.Context, rootfsPath string) error
 type createOptions struct {
 	deferMarkRunning    bool
 	networkAssignReason NetworkAssignReason
+	// workspaceDrives are the workspace block slots the new VM boots with, each
+	// already resolved to a host file (see fc.WorkspaceDrive).
+	workspaceDrives []fc.WorkspaceDrive
 }
 
 type CreateOption func(*createOptions)
+
+// WithWorkspaceDrives boots the sandbox with the given workspace block slots in
+// its device table, each backed by the given host file. Resolving a volume to
+// that file is the caller's job; a template build passes placeholders of the
+// slot capacity so the base snapshot reserves the slots.
+func WithWorkspaceDrives(drives []fc.WorkspaceDrive) CreateOption {
+	return func(o *createOptions) { o.workspaceDrives = drives }
+}
 
 // WithDeferredMarkRunning skips marking the sandbox running inside CreateSandbox
 // so the caller can mark it only after envd is ready, matching ResumeSandbox.
@@ -977,6 +988,7 @@ func (f *Factory) CreateSandbox(
 		config.FirecrackerConfig,
 		rootfsProvider,
 		fc.ConstantRootfsPaths,
+		createOpts.workspaceDrives,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to init FC: %w", err)
@@ -1137,6 +1149,11 @@ type resumeOptions struct {
 	// pre-/init auth window after the upgrade re-exec. Unlike skipLiveRegistration
 	// the sandbox IS meant to go live — just later.
 	deferMarkRunning bool
+	// workspaceDrives are the workspace block slots recorded in the snapshot's
+	// device table, each resolved to the host file this incarnation loads them
+	// from (see fc.WorkspaceDrive). Must cover exactly the slots the snapshot
+	// has: Firecracker opens every recorded drive path at load.
+	workspaceDrives []fc.WorkspaceDrive
 }
 
 // describesCustomerStart reports whether this resume's start-path telemetry describes a
@@ -1161,6 +1178,13 @@ func (o *resumeOptions) describesCustomerStart() bool {
 
 // ResumeOption customizes a ResumeSandbox call.
 type ResumeOption func(*resumeOptions)
+
+// ResumeWithWorkspaceDrives loads the snapshot with its workspace block slots
+// pointed at the given host files, the same capacity as when the snapshot was
+// taken. Resolving a snapshot's volume refs to those files is the caller's job.
+func ResumeWithWorkspaceDrives(drives []fc.WorkspaceDrive) ResumeOption {
+	return func(o *resumeOptions) { o.workspaceDrives = drives }
+}
 
 // WithDenyEgress denies all network egress for the resumed sandbox — except the
 // orchestrator control path — before Firecracker is resumed, so neither envd
@@ -1535,6 +1559,7 @@ func (f *Factory) ResumeSandbox(
 			TemplateID:      config.BaseTemplateID,
 			BuildID:         rootfs.Header().Metadata.BaseBuildId.String(),
 		},
+		ropts.workspaceDrives,
 	)
 	if fcErr != nil {
 		return nil, fmt.Errorf("failed to create FC: %w", fcErr)

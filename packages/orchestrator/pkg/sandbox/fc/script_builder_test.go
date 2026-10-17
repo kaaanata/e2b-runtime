@@ -108,7 +108,7 @@ func TestStartScriptBuilder_Build(t *testing.T) {
 			builder := NewStartScriptBuilder(config)
 
 			// Call Build function directly with the four parameters
-			result, err := builder.Build(tt.versions, tt.files, tt.rootfsPaths, tt.namespaceID)
+			result, err := builder.Build(tt.versions, tt.files, tt.rootfsPaths, tt.namespaceID, nil)
 			require.NoError(t, err)
 			require.NotNil(t, result)
 
@@ -139,8 +139,65 @@ func TestStartScriptBuilder_Build(t *testing.T) {
 			if len(lines) <= 1 {
 				t.Error("Script should have multiple lines")
 			}
+
+			assert.Empty(t, result.WorkspacePaths, "no workspace drives were requested")
+			assert.NotContains(t, result.Value, "workspace", "a sandbox without workspace drives gets the script it always had")
 		})
 	}
+}
+
+// Workspace slots are symlinks next to the rootfs in the V2 layout, at a path
+// that depends on the slot alone: that path goes into the snapshot's device
+// table and must resolve on whichever host later loads it.
+func TestStartScriptBuilder_Build_WorkspaceDrives(t *testing.T) {
+	t.Parallel()
+	config, err := cfg.ParseBuilder()
+	require.NoError(t, err)
+
+	builder := NewStartScriptBuilder(config)
+	versions := Config{KernelVersion: "6.1.0", FirecrackerVersion: "1.4.0"}
+	files := createTestSandboxFiles("ws-sandbox", "ws-id")
+	drives := []WorkspaceDrive{
+		{DriveID: WorkspaceDriveID(2), PathOnHost: "/mnt/blockvol/inc-a/workspace.ext4"},
+		{DriveID: WorkspaceDriveID(0), PathOnHost: "/mnt/blockvol/inc-b/workspace.ext4"},
+	}
+
+	t.Run("v2 layout links every slot", func(t *testing.T) {
+		t.Parallel()
+
+		result, err := builder.Build(versions, files, RootfsPaths{TemplateVersion: 2}, "ns", drives)
+		require.NoError(t, err)
+
+		// The script links the per-sandbox host link, never the backing file: the
+		// backing file is re-pointed without regenerating the script.
+		assert.Contains(t, result.Value, "ln -s /orchestrator/sandbox/workspace2-ws-sandbox-ws-id.link /fc-vm/workspace2.ext4 &&")
+		assert.Contains(t, result.Value, "ln -s /orchestrator/sandbox/workspace0-ws-sandbox-ws-id.link /fc-vm/workspace0.ext4 &&")
+		assert.NotContains(t, result.Value, "/mnt/blockvol")
+		assert.Equal(t, []string{"/fc-vm/workspace2.ext4", "/fc-vm/workspace0.ext4"}, result.WorkspacePaths, "paths follow the input order")
+		assert.Equal(t, "/fc-vm/rootfs.ext4", result.RootfsPath)
+
+		// Still one well-formed command chain.
+		for _, line := range strings.Split(strings.TrimSpace(result.Value), "\n") {
+			if line == "" || strings.HasPrefix(line, "ip netns exec") {
+				continue
+			}
+			assert.True(t, strings.HasSuffix(line, "&&"), "line %q must chain", line)
+		}
+	})
+
+	t.Run("v1 layout has no room for slots", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := builder.Build(versions, files, RootfsPaths{TemplateVersion: 1, TemplateID: "t", BuildID: "b"}, "ns", drives)
+		require.ErrorContains(t, err, "v2 sandbox layout")
+	})
+
+	t.Run("invalid bindings are rejected before a script exists", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := builder.Build(versions, files, RootfsPaths{TemplateVersion: 2}, "ns", []WorkspaceDrive{{DriveID: "rootfs", PathOnHost: "/x"}})
+		require.ErrorContains(t, err, "invalid workspace drives")
+	})
 }
 
 // createTestSandboxFiles creates a SandboxFiles instance for testing

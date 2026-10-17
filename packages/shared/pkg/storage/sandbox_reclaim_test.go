@@ -23,6 +23,8 @@ func TestReclaimSandboxFiles(t *testing.T) {
 		// ".cow" suffix ("…-sealN.cow") precisely so this glob keeps matching
 		// — after the first fold it is the ONLY rootfs COW on disk.
 		filepath.Join(cacheDir, "rootfs-sbx-rand-seal1.cow"),
+		filepath.Join(cacheDir, "workspace0-sbx-rand.link"),
+		filepath.Join(cacheDir, "workspace3-sbx-rand.link"),
 	}
 	for _, path := range matching {
 		require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
@@ -34,6 +36,7 @@ func TestReclaimSandboxFiles(t *testing.T) {
 		filepath.Join(tmpDir, "fc-metrics-sbx.fifo"),
 		filepath.Join(cacheDir, "rootfs-sbx.cow"),
 		filepath.Join(cacheDir, "rootfs-sbx.link"),
+		filepath.Join(cacheDir, "workspace0-sbx.link"),
 	}
 	for _, path := range decoys {
 		require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))

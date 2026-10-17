@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -131,6 +132,19 @@ func (ppb *PostProcessingBuilder) Layer(
 	result.CmdlineArgs = nil
 	if len(ppb.Config.CmdlineArgs) > 0 {
 		result.CmdlineArgs = maps.Clone(ppb.Config.CmdlineArgs)
+	}
+
+	// The device layout, stamped the same way and for the same reason: every boot
+	// of this build carried exactly the workspace slots the configuration asked
+	// for, and a reader decides from these two fields whether it can bind
+	// volumes to the template's snapshots. The configuration was validated when
+	// the first build VM booted (see layer.buildWorkspaceDrives).
+	result.Layout = ppb.Config.Layout
+	result.Workspace = nil
+	if ppb.Config.Workspace != nil {
+		ws := *ppb.Config.Workspace
+		ws.SlotCapacityBytes = slices.Clone(ws.SlotCapacityBytes)
+		result.Workspace = &ws
 	}
 
 	return phases.LayerResult{

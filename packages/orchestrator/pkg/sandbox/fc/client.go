@@ -243,6 +243,33 @@ func (c *apiClient) setRootfsDrive(ctx context.Context, rootfsPath string, ioEng
 	return nil
 }
 
+// setWorkspaceDrive configures one workspace block slot. It mirrors
+// setRootfsDrive except that the drive is never the root device: the guest
+// mounts it from the device table, and the kernel command line keeps naming
+// the rootfs drive as root.
+func (c *apiClient) setWorkspaceDrive(ctx context.Context, driveID string, pathOnHost string, ioEngine *string, rateLimiter *models.RateLimiter) error {
+	isRootDevice := false
+	driveConfig := operations.PutGuestDriveByIDParams{
+		Context: ctx,
+		DriveID: driveID,
+		Body: &models.Drive{
+			DriveID:      &driveID,
+			PathOnHost:   pathOnHost,
+			IsRootDevice: &isRootDevice,
+			IsReadOnly:   false,
+			IoEngine:     ioEngine,
+			RateLimiter:  rateLimiter,
+		},
+	}
+
+	_, err := c.client.Operations.PutGuestDriveByID(&driveConfig)
+	if err != nil {
+		return fmt.Errorf("error setting fc workspace drive %q: %w", driveID, err)
+	}
+
+	return nil
+}
+
 // buildTokenBucket constructs a Firecracker TokenBucket from a TokenBucketConfig.
 // Returns nil when BucketSize < 0 (disabled).
 func buildTokenBucket(b TokenBucketConfig) *models.TokenBucket {
