@@ -46,6 +46,7 @@ const (
 	KillReasonAdmin               = sandboxtypes.KillReasonAdmin
 	KillReasonOrphaned            = sandboxtypes.KillReasonOrphaned
 	KillReasonBaseTemplateMissing = sandboxtypes.KillReasonBaseTemplateMissing
+	KillReasonTeamDeleted         = sandboxtypes.KillReasonTeamDeleted
 )
 
 // Errors and pre-defined state actions / transition tables.

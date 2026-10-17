@@ -13,12 +13,11 @@ import (
 
 	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
-	"github.com/pressly/goose/v3/database"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	infradb "github.com/e2b-dev/infra/packages/db"
 	authdb "github.com/e2b-dev/infra/packages/db/pkg/auth"
 	"github.com/e2b-dev/infra/packages/shared/pkg/keys"
 )
@@ -48,20 +47,10 @@ func TestRun(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	// run the db migration, through a provider carrying its own store rather
-	// than goose's package-level dialect and tracking-table globals
-	store, err := database.NewStore(goose.DialectPostgres, "_migrations")
-	require.NoError(t, err)
-
-	provider, err := goose.NewProvider(
-		"", // Has to be empty when using a custom store
-		db,
-		os.DirFS(filepath.Join("..", "db", "migrations")),
-		goose.WithStore(store),
-	)
-	require.NoError(t, err)
-
-	_, err = provider.Up(t.Context())
+	// The files come embedded from the db module: go test does not track a
+	// file outside this module as a test input, so a migration edit read from
+	// the sibling checkout would leave a cached pass standing.
+	err = infradb.Migrate(t.Context(), db)
 	require.NoError(t, err)
 
 	canonicalUserID := uuid.New()

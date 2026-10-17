@@ -25,6 +25,12 @@ func (a *APIStore) DeleteVolumesVolumeID(c *gin.Context, volumeID api.VolumeID) 
 		return
 	}
 
+	if volume.Backend == volumeBackendBlock {
+		a.deleteBlockVolume(c, team, volume)
+
+		return
+	}
+
 	clusterID := clustershared.WithClusterFallback(team.ClusterID)
 
 	if err := a.sqlcDB.DeleteVolume(ctx, queries.DeleteVolumeParams{

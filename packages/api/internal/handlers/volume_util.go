@@ -121,6 +121,12 @@ func (a *APIStore) executeOnOrchestratorByClusterID(
 	volume queries.Volume,
 	fn func(context.Context, *clusters.GRPCClient) error,
 ) error {
+	// A block volume's images exist only on its owner node: run there or
+	// nowhere, regardless of label fallback.
+	if volume.Backend == volumeBackendBlock {
+		return a.executeOnBlockVolumeNode(ctx, clusterID, volume, fn)
+	}
+
 	nodes := a.orchestrator.GetClusterNodes(clusterID)
 	if len(nodes) == 0 {
 		return ErrClusterNotFound
@@ -255,4 +261,28 @@ func isRetryableError(err error) bool {
 	}
 
 	return false
+}
+
+// executeOnBlockVolumeNode runs fn on the node owning a block volume. An
+// unavailable owner is errBlockVolumeNodeUnavailable (a 503 to the client);
+// there is deliberately no other node to try, so
+// VolumeFallbackToUnmatchedNodesFlag does not apply.
+func (a *APIStore) executeOnBlockVolumeNode(
+	ctx context.Context,
+	clusterID uuid.UUID,
+	volume queries.Volume,
+	fn func(context.Context, *clusters.GRPCClient) error,
+) error {
+	if volume.OwnerNodeID == nil {
+		return fmt.Errorf("%w: volume %s has no owner node", errBlockVolumeNodeUnavailable, volume.ID)
+	}
+
+	node, err := a.blockVolumeNode(clusterID, *volume.OwnerNodeID)
+	if err != nil {
+		return err
+	}
+
+	client, clientCtx := node.GetClient(ctx)
+
+	return fn(clientCtx, client)
 }

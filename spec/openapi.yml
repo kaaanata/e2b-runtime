@@ -127,6 +127,23 @@ components:
       required: true
       schema:
         type: string
+    operationID:
+      name: operationID
+      in: path
+      required: true
+      schema:
+        type: string
+    idempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: >
+        Makes a block volume request safe to retry: a repeat with the same key
+        and the same body returns the original operation instead of starting a
+        new one, and a repeat with a different body is rejected with 409.
+      required: false
+      schema:
+        type: string
+        maxLength: 255
     secretID:
       name: secretID
       in: path
@@ -733,9 +750,25 @@ components:
         path:
           type: string
           description: Path of the volume
+        consistencyProfile:
+          $ref: "#/components/schemas/VolumeConsistencyProfile"
       required:
         - name
         - path
+
+    VolumeConsistencyProfile:
+      type: string
+      description: >
+        How a shared (NFS) volume is mounted. `strict` sends every operation to
+        the server with no attribute or name caching, so changes from other
+        sandboxes are visible immediately. `cto` is close-to-open: a writer's
+        changes are visible to a reader that opens the file after the writer
+        closed it, at a fraction of the metadata cost. Omitted keeps the
+        sandbox's built-in options. Not accepted for block volumes, which have
+        a single writer.
+      enum:
+        - strict
+        - cto
 
     Sandbox:
       required:
@@ -1081,6 +1114,16 @@ components:
             snapshot, so the snapshot is captured once regardless of count.
             Each fork succeeds or fails independently; the outcome of each is
             reported in its entry of the response list.
+        allowSharedIdentity:
+          type: boolean
+          default: false
+          description: >-
+            Required to fork a sandbox that mounts block volumes. Every fork
+            resumes the same memory snapshot and a copy of each block volume
+            taken at that instant, so the forks share everything that was in
+            memory: tokens, sessions, open connections and filesystem
+            identities. Upstream services see the forks as the same client.
+            Without it such a fork is rejected with 409.
 
     SandboxForkResult:
       type: object
@@ -2206,6 +2249,30 @@ components:
           type: string
           description: Suffix used in masked version of the token or key
 
+    VolumeBackend:
+      type: string
+      description: >
+        `nfs` volumes are shared directories any number of sandboxes can mount
+        and write at once. `block` volumes are workspace disks: a fixed-size
+        filesystem on one node with a single writing sandbox at a time, sealed
+        into revisions together with paused sandboxes and cloneable from those
+        revisions.
+      enum:
+        - nfs
+        - block
+
+    VolumeState:
+      type: string
+      description: >
+        `creating` until the volume's first image exists (block volumes only),
+        `ready` once it can be mounted, `failed` if creation failed, `deleting`
+        while its images are being removed.
+      enum:
+        - creating
+        - ready
+        - failed
+        - deleting
+
     Volume:
       type: object
       properties:
@@ -2215,6 +2282,17 @@ components:
         name:
           type: string
           description: Name of the volume
+        backend:
+          $ref: "#/components/schemas/VolumeBackend"
+        state:
+          $ref: "#/components/schemas/VolumeState"
+        capacityGiB:
+          type: integer
+          format: int64
+          description: Fixed capacity of a block volume in GiB
+        ownerNode:
+          type: string
+          description: ID of the node holding a block volume; sandboxes mounting it run there
       required:
         - volumeID
         - name
@@ -2238,6 +2316,26 @@ components:
             replacing the default `api.<E2B_DOMAIN>`. Only returned when the
             team is connected to a custom (BYOC) cluster; absent otherwise, in
             which case the default domain is used.
+        backend:
+          $ref: "#/components/schemas/VolumeBackend"
+        state:
+          $ref: "#/components/schemas/VolumeState"
+        capacityGiB:
+          type: integer
+          format: int64
+          description: Fixed capacity of a block volume in GiB
+        ownerNode:
+          type: string
+          description: ID of the node holding a block volume
+        contentApi:
+          type: string
+          description: >
+            Whether the volume content API accepts `token`. Block volumes have
+            no content API (their files are reached through a sandbox that
+            mounts them) and return an empty token.
+          enum:
+            - supported
+            - unsupported
       required:
         - volumeID
         - name
@@ -2250,8 +2348,120 @@ components:
           type: string
           description: Name of the volume
           pattern: "^[a-zA-Z0-9_-]+$"
+        backend:
+          $ref: "#/components/schemas/VolumeBackend"
+        capacityGiB:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Capacity of a block volume in GiB; must be one of the deployment's capacity tiers. Required for block volumes.
       required:
         - name
+
+    CloneVolume:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name of the new volume
+          pattern: "^[a-zA-Z0-9_-]+$"
+        revisionID:
+          type: string
+          description: >
+            Revision to clone. Defaults to the source volume's newest revision
+            that can be booted without its paired memory snapshot
+            (`filesystem-quiesced`).
+      required:
+        - name
+
+    VolumeRevision:
+      type: object
+      properties:
+        revisionID:
+          type: string
+        volumeID:
+          type: string
+        incarnationID:
+          type: string
+          description: Writable image the revision was sealed from
+        parentRevisionID:
+          type: string
+        consistency:
+          type: string
+          description: >
+            `filesystem-quiesced` revisions were sealed with the sandbox's
+            filesystems frozen and can be cloned into new volumes;
+            `paired-memory` revisions belong to a memory snapshot and are only
+            usable by resuming or forking that snapshot.
+          enum:
+            - filesystem-quiesced
+            - paired-memory
+        sizeBytes:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - revisionID
+        - volumeID
+        - incarnationID
+        - consistency
+        - sizeBytes
+        - createdAt
+
+    VolumeOperation:
+      type: object
+      description: >
+        A block volume change carried out in the background. Poll it until
+        `state` is `succeeded` or `failed`.
+      properties:
+        operationID:
+          type: string
+        kind:
+          type: string
+          description: One of `create`, `clone`, `seal`, `delete`, `reconcile`.
+        state:
+          type: string
+          description: >
+            One of `pending`, `running`, `unknown`, `succeeded`, `failed`.
+            `unknown` means the last attempt ended without a definite answer
+            and will be reconciled and retried; `succeeded` and `failed` are
+            final.
+        volumeID:
+          type: string
+        error:
+          type: string
+        attempts:
+          type: integer
+          format: int32
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+      required:
+        - operationID
+        - kind
+        - state
+        - attempts
+        - createdAt
+        - updatedAt
+
+    VolumeOperationAccepted:
+      type: object
+      properties:
+        volume:
+          $ref: "#/components/schemas/Volume"
+        operation:
+          $ref: "#/components/schemas/VolumeOperation"
+      required:
+        - volume
+        - operation
 
     SecretMetadata:
       type: object
@@ -4248,6 +4458,8 @@ paths:
           AdminTeamAuth: []
         - AdminJWTAuth: []
           AdminTeamAuth: []
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
       requestBody:
         required: true
         content:
@@ -4261,12 +4473,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VolumeAndToken"
+        "202":
+          description: Accepted a new block volume; it is ready once the operation succeeds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolumeOperationAccepted"
         "400":
           $ref: "#/components/responses/400"
         "401":
           $ref: "#/components/responses/401"
+        "409":
+          $ref: "#/components/responses/409"
         "500":
           $ref: "#/components/responses/500"
+        "503":
+          $ref: "#/components/responses/503"
 
   /volumes/{volumeID}:
     get:
@@ -4312,8 +4534,126 @@ paths:
       parameters:
         - $ref: "#/components/parameters/volumeID"
       responses:
+        "202":
+          description: >
+            Accepted the deletion of a block volume; its images are removed in
+            the background and the volume disappears once the operation succeeds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolumeOperationAccepted"
         "204":
           description: Successfully deleted a team volume
+        "401":
+          $ref: "#/components/responses/401"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          $ref: "#/components/responses/409"
+        "500":
+          $ref: "#/components/responses/500"
+
+  /volumes/{volumeID}/clone:
+    post:
+      summary: Clone a block volume
+      description: >
+        Create a new block volume from a revision of an existing one, on the
+        same node. The new volume starts with a fresh filesystem identity.
+      tags: [volumes]
+      security:
+        - ApiKeyAuth: []
+        - AuthProviderBearerAuth: []
+          AuthProviderTeamAuth: []
+        - AdminApiKeyAuth: []
+          AdminTeamAuth: []
+        - AdminJWTAuth: []
+          AdminTeamAuth: []
+      parameters:
+        - $ref: "#/components/parameters/volumeID"
+        - $ref: "#/components/parameters/idempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloneVolume"
+      responses:
+        "202":
+          description: Accepted the clone; the new volume is ready once the operation succeeds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolumeOperationAccepted"
+        "400":
+          $ref: "#/components/responses/400"
+        "401":
+          $ref: "#/components/responses/401"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          $ref: "#/components/responses/409"
+        "500":
+          $ref: "#/components/responses/500"
+        "503":
+          $ref: "#/components/responses/503"
+
+  /volumes/{volumeID}/revisions:
+    get:
+      summary: List block volume revisions
+      description: List the sealed revisions of a block volume, newest first
+      tags: [volumes]
+      security:
+        - ApiKeyAuth: []
+        - AuthProviderBearerAuth: []
+          AuthProviderTeamAuth: []
+        - AdminApiKeyAuth: []
+          AdminTeamAuth: []
+        - AdminJWTAuth: []
+          AdminTeamAuth: []
+      parameters:
+        - $ref: "#/components/parameters/volumeID"
+      responses:
+        "200":
+          description: Successfully listed the volume's revisions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VolumeRevision"
+        "400":
+          $ref: "#/components/responses/400"
+        "401":
+          $ref: "#/components/responses/401"
+        "404":
+          $ref: "#/components/responses/404"
+        "500":
+          $ref: "#/components/responses/500"
+
+  /operations/{operationID}:
+    get:
+      summary: Volume operation
+      description: Get the state of a background block volume operation
+      tags: [volumes]
+      security:
+        - ApiKeyAuth: []
+        - AuthProviderBearerAuth: []
+          AuthProviderTeamAuth: []
+        - AdminApiKeyAuth: []
+          AdminTeamAuth: []
+        - AdminJWTAuth: []
+          AdminTeamAuth: []
+      parameters:
+        - $ref: "#/components/parameters/operationID"
+      responses:
+        "200":
+          description: Successfully retrieved the operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolumeOperation"
+        "400":
+          $ref: "#/components/responses/400"
         "401":
           $ref: "#/components/responses/401"
         "404":

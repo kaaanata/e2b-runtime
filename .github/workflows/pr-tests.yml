@@ -48,6 +48,13 @@ jobs:
             test_path: ./...
             sudo: false
             runner: blacksmith-4vcpu-ubuntu-2404
+          # The batcher, event and host-stats helpers, and the guard that keeps
+          # the embedded migrations equal to the directory. The module had no
+          # unit shard before this entry.
+          - package: packages/clickhouse
+            test_path: ./...
+            sudo: false
+            runner: blacksmith-4vcpu-ubuntu-2404
           - package: packages/db
             flag: unit-db
             test_path: ./...

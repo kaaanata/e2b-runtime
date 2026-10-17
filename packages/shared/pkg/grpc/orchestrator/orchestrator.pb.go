@@ -463,8 +463,20 @@ type SandboxVolumeMount struct {
 	// Empty keeps envd's built-in options, which is what every sandbox created
 	// before this field existed gets.
 	ConsistencyProfile string `protobuf:"bytes,5,opt,name=consistency_profile,json=consistencyProfile,proto3" json:"consistency_profile,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// backend is "nfs" (or empty, for requests from before the field existed)
+	// or "block". A worker without block volume support must refuse a block
+	// mount instead of treating it as NFS.
+	Backend string `protobuf:"bytes,6,opt,name=backend,proto3" json:"backend,omitempty"`
+	// incarnation_id is the writable image a block mount binds; the control
+	// plane has already recorded the attachment. Block mounts only.
+	IncarnationId string `protobuf:"bytes,7,opt,name=incarnation_id,json=incarnationId,proto3" json:"incarnation_id,omitempty"`
+	// fs_uuid is the ext4 UUID envd uses to find the device. Block mounts only.
+	FsUuid string `protobuf:"bytes,8,opt,name=fs_uuid,json=fsUuid,proto3" json:"fs_uuid,omitempty"`
+	// capacity_bytes is the image size the workspace slot is configured with.
+	// Block mounts only.
+	CapacityBytes uint64 `protobuf:"varint,9,opt,name=capacity_bytes,json=capacityBytes,proto3" json:"capacity_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SandboxVolumeMount) Reset() {
@@ -530,6 +542,34 @@ func (x *SandboxVolumeMount) GetConsistencyProfile() string {
 		return x.ConsistencyProfile
 	}
 	return ""
+}
+
+func (x *SandboxVolumeMount) GetBackend() string {
+	if x != nil {
+		return x.Backend
+	}
+	return ""
+}
+
+func (x *SandboxVolumeMount) GetIncarnationId() string {
+	if x != nil {
+		return x.IncarnationId
+	}
+	return ""
+}
+
+func (x *SandboxVolumeMount) GetFsUuid() string {
+	if x != nil {
+		return x.FsUuid
+	}
+	return ""
+}
+
+func (x *SandboxVolumeMount) GetCapacityBytes() uint64 {
+	if x != nil {
+		return x.CapacityBytes
+	}
+	return 0
 }
 
 type SandboxNetworkConfig struct {
@@ -1702,13 +1742,17 @@ const file_orchestrator_proto_rawDesc = "" +
 	"token_type\x18\x02 \x01(\tR\ttokenType\"Z\n" +
 	"\x17SandboxAutoResumeConfig\x12\x16\n" +
 	"\x06policy\x18\x01 \x01(\tR\x06policy\x12'\n" +
-	"\x0ftimeout_seconds\x18\x02 \x01(\x04R\x0etimeoutSeconds\"\x91\x01\n" +
+	"\x0ftimeout_seconds\x18\x02 \x01(\x04R\x0etimeoutSeconds\"\x92\x02\n" +
 	"\x12SandboxVolumeMount\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x12\n" +
 	"\x04type\x18\x03 \x01(\tR\x04type\x12\x12\n" +
 	"\x04name\x18\x04 \x01(\tR\x04name\x12/\n" +
-	"\x13consistency_profile\x18\x05 \x01(\tR\x12consistencyProfile\"\xa4\x01\n" +
+	"\x13consistency_profile\x18\x05 \x01(\tR\x12consistencyProfile\x12\x18\n" +
+	"\abackend\x18\x06 \x01(\tR\abackend\x12%\n" +
+	"\x0eincarnation_id\x18\a \x01(\tR\rincarnationId\x12\x17\n" +
+	"\afs_uuid\x18\b \x01(\tR\x06fsUuid\x12%\n" +
+	"\x0ecapacity_bytes\x18\t \x01(\x04R\rcapacityBytes\"\xa4\x01\n" +
 	"\x14SandboxNetworkConfig\x128\n" +
 	"\x06egress\x18\x01 \x01(\v2\x1b.SandboxNetworkEgressConfigH\x00R\x06egress\x88\x01\x01\x12;\n" +
 	"\aingress\x18\x02 \x01(\v2\x1c.SandboxNetworkIngressConfigH\x01R\aingress\x88\x01\x01B\t\n" +

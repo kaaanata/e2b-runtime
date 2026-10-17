@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/gogo/status"
@@ -16,6 +17,8 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/orchestrator/nodemanager"
 	"github.com/e2b-dev/infra/packages/api/internal/sandbox"
 	"github.com/e2b-dev/infra/packages/db/pkg/dberrors"
+	"github.com/e2b-dev/infra/packages/db/pkg/types"
+	"github.com/e2b-dev/infra/packages/db/queries"
 	"github.com/e2b-dev/infra/packages/shared/pkg/featureflags"
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
@@ -134,6 +137,9 @@ func (o *Orchestrator) RemoveSandbox(ctx context.Context, teamID uuid.UUID, sand
 		o.sandboxStore.Remove(context.WithoutCancel(ctx), teamID, sandboxID)
 	}()
 	err = o.removeSandboxFromNode(ctx, sbx, opts.Action, opts.Reason, opts.FilesystemOnly, restoreOnRefusal)
+	if err == nil {
+		o.releaseBlockVolumeAttachments(ctx, sbx)
+	}
 	if err != nil {
 		if errors.Is(err, PauseQueueExhaustedError{}) {
 			if restoreOnRefusal {
@@ -380,4 +386,27 @@ func (o *Orchestrator) killSandboxOnNode(
 	})
 
 	return nil
+}
+
+// releaseBlockVolumeAttachments ends the execution's block volume
+// attachments once its node confirmed the VM is gone (killed, or paused and
+// snapshotted). A failed removal keeps them: the incarnation stays reserved
+// until the execution is known to be gone. The node's holder gate guards the
+// image independently of this row.
+func (o *Orchestrator) releaseBlockVolumeAttachments(ctx context.Context, sbx sandbox.Sandbox) {
+	if o.sqlcDB == nil || !slices.ContainsFunc(sbx.VolumeMounts, (*types.SandboxVolumeMountConfig).IsBlock) {
+		return
+	}
+
+	released, err := o.sqlcDB.ReleaseSandboxAttachments(context.WithoutCancel(ctx), queries.ReleaseSandboxAttachmentsParams{
+		SandboxID:   sbx.SandboxID,
+		ExecutionID: sbx.ExecutionID,
+	})
+	if err != nil {
+		logger.L().Error(ctx, "failed to release block volume attachments", zap.Error(err), logger.WithSandboxID(sbx.SandboxID))
+
+		return
+	}
+
+	logger.L().Debug(ctx, "released block volume attachments", logger.WithSandboxID(sbx.SandboxID), zap.Int("count", len(released)))
 }

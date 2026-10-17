@@ -49,6 +49,15 @@ sql:
               type: "PausedSandboxConfig"
               pointer: true
             nullable: true
+          - column: "public.volume_operations.params"
+            go_type:
+              import: "encoding/json"
+              type: "RawMessage"
+          - column: "public.volume_operations.result"
+            go_type:
+              import: "encoding/json"
+              type: "RawMessage"
+            nullable: true
           - db_type: "pg_catalog.numeric"
             go_type: "github.com/shopspring/decimal.Decimal"
           - db_type: "pg_catalog.numeric"

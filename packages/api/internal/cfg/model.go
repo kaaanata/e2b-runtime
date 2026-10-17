@@ -146,6 +146,17 @@ type Config struct {
 	DefaultPersistentVolumeTypeByRegion map[string]string `env:"DEFAULT_PERSISTENT_VOLUME_TYPE_BY_REGION"`
 
 	DomainName string `env:"DOMAIN_NAME" envDefault:""`
+
+	// OutboxMaxWorkers is how many River outbox jobs one API replica works at
+	// once.
+	OutboxMaxWorkers int `env:"OUTBOX_MAX_WORKERS" envDefault:"10"`
+	// OutboxBacklogInterval is how often the outbox backlog gauges are read
+	// from the database.
+	OutboxBacklogInterval time.Duration `env:"OUTBOX_BACKLOG_INTERVAL" envDefault:"30s"`
+
+	// BlockVolumeCapacityTiersGiB is the set of capacities (GiB) a block
+	// volume can be created with. Empty disables creating block volumes.
+	BlockVolumeCapacityTiersGiB []int64 `env:"BLOCK_VOLUME_CAPACITY_TIERS_GIB" envSeparator:","`
 }
 
 type FailureCondition string

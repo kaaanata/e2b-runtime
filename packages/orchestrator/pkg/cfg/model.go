@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -114,6 +115,50 @@ type Config struct {
 	// every new volume subvolume with a Btrfs qgroup limit of this many bytes.
 	// Quotas must already be enabled on the filesystem (`btrfs quota enable`).
 	VolumeBtrfsQgroupLimitBytes int64 `env:"VOLUME_BTRFS_QGROUP_LIMIT_BYTES" envDefault:"0"`
+
+	// BlockVolumeEnabled serves workspace block volumes (BlockVolumeService)
+	// from BlockVolumeRoot. Off by default: a node without it answers the
+	// service with UNIMPLEMENTED, which the control plane treats as "this node
+	// cannot own block volumes".
+	BlockVolumeEnabled bool `env:"BLOCK_VOLUME_ENABLED" envDefault:"false"`
+	// BlockVolumeRoot is the Btrfs directory holding every block volume of
+	// the node. Empty uses the blockvol package default.
+	BlockVolumeRoot string `env:"BLOCK_VOLUME_ROOT"`
+	// BlockVolumeCapacityTiersGiB, when set, is the exhaustive list of volume
+	// capacities (GiB) the node creates. Empty accepts any positive capacity
+	// the control plane asks for.
+	BlockVolumeCapacityTiersGiB []uint64 `env:"BLOCK_VOLUME_CAPACITY_TIERS_GIB"`
+	// BlockVolumeMinDataFreeBytes and BlockVolumeMinMetadataFreeBytes are the
+	// Btrfs free-space watermarks below which create, clone and seal are
+	// refused with RESOURCE_EXHAUSTED. Zero keeps the blockvol defaults.
+	BlockVolumeMinDataFreeBytes     uint64 `env:"BLOCK_VOLUME_MIN_DATA_FREE_BYTES"     envDefault:"0"`
+	BlockVolumeMinMetadataFreeBytes uint64 `env:"BLOCK_VOLUME_MIN_METADATA_FREE_BYTES" envDefault:"0"`
+}
+
+// blockVolumeNodeLabel is advertised while block volumes are enabled so the
+// control plane only places block volumes on nodes that serve them. The API
+// matches the same literal (packages/api/internal/labels.go).
+const blockVolumeNodeLabel = "volume-backend=block"
+
+// AdvertisedLabels is NodeLabels plus the capability labels the node derives
+// from its own configuration.
+func (c Config) AdvertisedLabels() []string {
+	labels := slices.Clone(c.NodeLabels)
+	if c.BlockVolumeEnabled && !slices.Contains(labels, blockVolumeNodeLabel) {
+		labels = append(labels, blockVolumeNodeLabel)
+	}
+
+	return labels
+}
+
+// BlockVolumeCapacityTiers returns BlockVolumeCapacityTiersGiB in bytes.
+func (c Config) BlockVolumeCapacityTiers() []uint64 {
+	tiers := make([]uint64, 0, len(c.BlockVolumeCapacityTiersGiB))
+	for _, gib := range c.BlockVolumeCapacityTiersGiB {
+		tiers = append(tiers, gib<<30)
+	}
+
+	return tiers
 }
 
 // AdditionalClickhouseEndpoints returns the non-blank entries from

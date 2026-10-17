@@ -692,8 +692,17 @@ type TemplateConfig struct {
 	// Optional during the rolling upgrade. When absent, the template manager
 	// uses diskSizeMB as the post-build free-space target.
 	FreeDiskSizeMB *int32 `protobuf:"varint,17,opt,name=freeDiskSizeMB,proto3,oneof" json:"freeDiskSizeMB,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// layout is the guest device layout of the template: empty (rootfs only) or
+	// "block-v1", whose base snapshot reserves workspace block slots so block
+	// volumes can be attached to its sandboxes. A build from another template
+	// inherits that template's layout when this is unset and must not change it.
+	Layout *string `protobuf:"bytes,18,opt,name=layout,proto3,oneof" json:"layout,omitempty"`
+	// workspaceSlotCapacityBytes is the size of each workspace slot of a
+	// "block-v1" build, one entry per slot; a block volume of exactly that size
+	// takes the slot at runtime.
+	WorkspaceSlotCapacityBytes []int64 `protobuf:"varint,19,rep,packed,name=workspaceSlotCapacityBytes,proto3" json:"workspaceSlotCapacityBytes,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *TemplateConfig) Reset() {
@@ -857,6 +866,20 @@ func (x *TemplateConfig) GetFreeDiskSizeMB() int32 {
 		return *x.FreeDiskSizeMB
 	}
 	return 0
+}
+
+func (x *TemplateConfig) GetLayout() string {
+	if x != nil && x.Layout != nil {
+		return *x.Layout
+	}
+	return ""
+}
+
+func (x *TemplateConfig) GetWorkspaceSlotCapacityBytes() []int64 {
+	if x != nil {
+		return x.WorkspaceSlotCapacityBytes
+	}
+	return nil
 }
 
 type isTemplateConfig_Source interface {
@@ -1399,7 +1422,7 @@ const file_template_manager_proto_rawDesc = "" +
 	"\x03aws\x18\x01 \x01(\v2\f.AWSRegistryH\x00R\x03aws\x12 \n" +
 	"\x03gcp\x18\x02 \x01(\v2\f.GCPRegistryH\x00R\x03gcp\x12,\n" +
 	"\ageneral\x18\x03 \x01(\v2\x10.GeneralRegistryH\x00R\ageneralB\x06\n" +
-	"\x04type\"\xd0\x05\n" +
+	"\x04type\"\xb8\x06\n" +
 	"\x0eTemplateConfig\x12\x1e\n" +
 	"\n" +
 	"templateID\x18\x01 \x01(\tR\n" +
@@ -1422,11 +1445,14 @@ const file_template_manager_proto_rawDesc = "" +
 	"\ffromTemplate\x18\x0e \x01(\v2\x13.FromTemplateConfigH\x00R\ffromTemplate\x12E\n" +
 	"\x11fromImageRegistry\x18\x0f \x01(\v2\x12.FromImageRegistryH\x02R\x11fromImageRegistry\x88\x01\x01\x12\x16\n" +
 	"\x06teamID\x18\x10 \x01(\tR\x06teamID\x12+\n" +
-	"\x0efreeDiskSizeMB\x18\x11 \x01(\x05H\x03R\x0efreeDiskSizeMB\x88\x01\x01B\b\n" +
+	"\x0efreeDiskSizeMB\x18\x11 \x01(\x05H\x03R\x0efreeDiskSizeMB\x88\x01\x01\x12\x1b\n" +
+	"\x06layout\x18\x12 \x01(\tH\x04R\x06layout\x88\x01\x01\x12>\n" +
+	"\x1aworkspaceSlotCapacityBytes\x18\x13 \x03(\x03R\x1aworkspaceSlotCapacityBytesB\b\n" +
 	"\x06sourceB\b\n" +
 	"\x06_forceB\x14\n" +
 	"\x12_fromImageRegistryB\x11\n" +
-	"\x0f_freeDiskSizeMB\"\xa3\x01\n" +
+	"\x0f_freeDiskSizeMBB\t\n" +
+	"\a_layout\"\xa3\x01\n" +
 	"\x15TemplateCreateRequest\x12+\n" +
 	"\btemplate\x18\x01 \x01(\v2\x0f.TemplateConfigR\btemplate\x12#\n" +
 	"\n" +

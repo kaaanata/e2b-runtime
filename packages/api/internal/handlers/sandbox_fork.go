@@ -161,7 +161,7 @@ func (a *APIStore) PostSandboxesSandboxIDFork(c *gin.Context, sandboxID api.Sand
 				forkedSandboxID,
 				forkTimeout,
 				teamInfo,
-				a.buildResumeSandboxDataFromSnapshot(sandboxID, forkedSandboxID, nil, nil),
+				a.buildResumeSandboxDataFromSnapshot(sandboxID, forkedSandboxID, nil, nil, sharedUtils.DerefOrDefault(body.AllowSharedIdentity, false)),
 				&c.Request.Header,
 				true,
 				false,

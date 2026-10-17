@@ -26,6 +26,7 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/cfg"
 	"github.com/e2b-dev/infra/packages/api/internal/clusters"
 	"github.com/e2b-dev/infra/packages/api/internal/orchestrator"
+	"github.com/e2b-dev/infra/packages/api/internal/outbox"
 	"github.com/e2b-dev/infra/packages/api/internal/sandbox"
 	managementv1 "github.com/e2b-dev/infra/packages/api/internal/secretsstore/management/v1"
 	template_manager "github.com/e2b-dev/infra/packages/api/internal/template-manager"
@@ -204,21 +205,27 @@ type APIStore struct {
 	teamSandboxCounter     teamRunningSandboxCounter
 	templateManager        *template_manager.TemplateManager
 	sqlcDB                 *sqlcdb.Client
-	authDB                 *authdb.Client
-	redisClient            redis.UniversalClient
-	templateCache          *templatecache.TemplateCache
-	templateBuildsCache    *templatecache.TemplatesBuildCache
-	snapshotCache          *snapshotcache.SnapshotCache
-	authService            sharedauth.Service
-	templateSpawnCounter   *utils.TemplateSpawnCounter
-	clickhouseStore        clickhouse.Clickhouse
-	sandboxLogsReader      *sandboxlogs.Reader
-	accessTokenGenerator   *sandbox.AccessTokenGenerator
-	featureFlags           *featureflags.Client
-	clusters               *clusters.Pool
-	snapshotUpsertSem      *sharedutils.AdjustableSemaphore
-	sandboxListSem         *sharedutils.AdjustableSemaphore
-	snapshotBuildQuerySem  *sharedutils.AdjustableSemaphore
+	// volumeNodes places block volumes; the orchestrator outside tests.
+	volumeNodes blockVolumeNodeSource
+	// volumeJobs enqueues block volume jobs; set by NewOutbox.
+	volumeJobs volumeJobEnqueuer
+	// volumeExecutor runs a block volume operation inline (the fork path).
+	volumeExecutor        *outbox.VolumeExecutor
+	authDB                *authdb.Client
+	redisClient           redis.UniversalClient
+	templateCache         *templatecache.TemplateCache
+	templateBuildsCache   *templatecache.TemplatesBuildCache
+	snapshotCache         *snapshotcache.SnapshotCache
+	authService           sharedauth.Service
+	templateSpawnCounter  *utils.TemplateSpawnCounter
+	clickhouseStore       clickhouse.Clickhouse
+	sandboxLogsReader     *sandboxlogs.Reader
+	accessTokenGenerator  *sandbox.AccessTokenGenerator
+	featureFlags          *featureflags.Client
+	clusters              *clusters.Pool
+	snapshotUpsertSem     *sharedutils.AdjustableSemaphore
+	sandboxListSem        *sharedutils.AdjustableSemaphore
+	snapshotBuildQuerySem *sharedutils.AdjustableSemaphore
 
 	// secretsConn and secretsManagement are nil when no secrets store backend
 	// address is configured. The routes stay registered either way and answer
@@ -375,6 +382,7 @@ func NewAPIStore(ctx context.Context, tel *telemetry.Client, redisClient redis.U
 	a := &APIStore{
 		config:                config,
 		orchestrator:          orch,
+		volumeNodes:           orch,
 		teamSandboxCounter:    sandboxcountscache.NewCountsCache(orch, redisClient),
 		templateManager:       templateManager,
 		sqlcDB:                sqlcDB,
@@ -420,6 +428,32 @@ func NewAPIStore(ctx context.Context, tel *telemetry.Client, redisClient redis.U
 	}()
 
 	return a
+}
+
+// NewOutbox builds the River client that works the API's outbox jobs on the
+// store's clients. Stop it before Close.
+func (a *APIStore) NewOutbox(l logger.Logger) (*outbox.River, error) {
+	a.volumeExecutor = outbox.NewVolumeExecutor(a.sqlcDB, a)
+
+	river, err := outbox.New(outbox.Dependencies{
+		Pool:      a.sqlcDB.Pool(),
+		Volumes:   a.volumeExecutor,
+		Sandboxes: a.orchestrator,
+		Teams:     a.authDB,
+		Logger:    l,
+		Telemetry: a.Telemetry,
+		Config: outbox.Config{
+			MaxWorkers:      a.config.OutboxMaxWorkers,
+			BacklogInterval: a.config.OutboxBacklogInterval,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	a.volumeJobs = river
+
+	return river, nil
 }
 
 func (a *APIStore) Close(ctx context.Context) error {

@@ -21,9 +21,10 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/ginutils"
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
+	sharedUtils "github.com/e2b-dev/infra/packages/shared/pkg/utils"
 )
 
-func (a *APIStore) PostVolumes(c *gin.Context) {
+func (a *APIStore) PostVolumes(c *gin.Context, params api.PostVolumesParams) {
 	ctx := c.Request.Context()
 
 	// get team
@@ -41,15 +42,6 @@ func (a *APIStore) PostVolumes(c *gin.Context) {
 
 	if !a.featureFlags.BoolFlag(ctx, featureflags.PersistentVolumesFlag) {
 		a.sendAPIStoreError(c, http.StatusForbidden, "use of volumes is not enabled")
-
-		return
-	}
-
-	// Fail fast before allocating any resources if token signing is not configured,
-	// otherwise we would persist a volume that we cannot mint a content token for.
-	if !a.config.VolumesToken.IsConfigured() {
-		a.sendAPIStoreError(c, http.StatusNotImplemented, ErrVolumesTokenNotConfigured.Error())
-		telemetry.ReportError(ctx, "volumes content token signing is not configured", ErrVolumesTokenNotConfigured)
 
 		return
 	}
@@ -78,6 +70,34 @@ func (a *APIStore) PostVolumes(c *gin.Context) {
 		featureflags.VolumeContext(body.Name),
 		featureflags.TeamContext(team.ID.String()),
 	)
+
+	switch backend := sharedUtils.DerefOrDefault(body.Backend, api.Nfs); backend {
+	case api.Nfs:
+	case api.Block:
+		// Block volumes have no content API, so they need no token signing.
+		a.postBlockVolume(c, team, body, params)
+
+		return
+	default:
+		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("Unknown volume backend '%s'", backend))
+
+		return
+	}
+
+	if body.CapacityGiB != nil {
+		a.sendAPIStoreError(c, http.StatusBadRequest, "capacityGiB only applies to block volumes")
+
+		return
+	}
+
+	// Fail fast before allocating any resources if token signing is not configured,
+	// otherwise we would persist a volume that we cannot mint a content token for.
+	if !a.config.VolumesToken.IsConfigured() {
+		a.sendAPIStoreError(c, http.StatusNotImplemented, ErrVolumesTokenNotConfigured.Error())
+		telemetry.ReportError(ctx, "volumes content token signing is not configured", ErrVolumesTokenNotConfigured)
+
+		return
+	}
 
 	volumeType := a.getVolumeType(ctx, team)
 	if volumeType == "" {
@@ -182,14 +202,7 @@ func (a *APIStore) PostVolumes(c *gin.Context) {
 		return
 	}
 
-	result := api.VolumeAndToken{
-		VolumeID: volume.ID.String(),
-		Name:     volume.Name,
-		Token:    token,
-		Domain:   domain,
-	}
-
-	c.JSON(http.StatusCreated, result)
+	c.JSON(http.StatusCreated, volumeAndTokenToAPI(volume, token, domain))
 }
 
 const (

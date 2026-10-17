@@ -222,6 +222,10 @@ func convertDatabaseMountsToOrchestratorMounts(volumes []*types.SandboxVolumeMou
 			Name:               item.Name,
 			Path:               item.Path,
 			ConsistencyProfile: item.ConsistencyProfile,
+			Backend:            item.Backend,
+			IncarnationId:      item.IncarnationID,
+			FsUuid:             item.FsUUID,
+			CapacityBytes:      item.CapacityBytes,
 		})
 	}
 
@@ -232,7 +236,7 @@ func convertDatabaseMountsToOrchestratorMounts(volumes []*types.SandboxVolumeMou
 // from its own snapshot. memory is the request's optional memory field; nil
 // (the implicit paths: auto-resume, fork) means a plain resume.
 func (a *APIStore) buildResumeSandboxData(sandboxID string, autoPauseOverride, memory *bool) orchestrator.SandboxDataFetcher {
-	return a.buildResumeSandboxDataFromSnapshot(sandboxID, sandboxID, autoPauseOverride, memory)
+	return a.buildResumeSandboxDataFromSnapshot(sandboxID, sandboxID, autoPauseOverride, memory, false)
 }
 
 const errCodeMemoryOverrideDisabled = "sandbox_memory_override_disabled"
@@ -312,7 +316,7 @@ func resolveFilesystemBoot(ctx context.Context, flags featureFlagsClient, memory
 // for resume operations. sandboxID is the ID the sandbox will run under — it
 // differs from snapshotSandboxID when forking — and scopes the envd access token.
 // The returned callback is called inside the sandbox lock to prevent race conditions.
-func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandboxID string, autoPauseOverride, memory *bool) orchestrator.SandboxDataFetcher {
+func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandboxID string, autoPauseOverride, memory *bool, allowSharedIdentity bool) orchestrator.SandboxDataFetcher {
 	return func(ctx context.Context) (orchestrator.SandboxMetadata, *api.APIError) {
 		lastSnapshot, err := a.snapshotCache.Get(ctx, snapshotSandboxID)
 		if err != nil {
@@ -375,6 +379,25 @@ func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandbox
 			iam = snap.Config.Iam
 		}
 
+		volumeMounts := convertDatabaseMountsToOrchestratorMounts(volumes)
+
+		// Block volumes bind to the revisions recorded with this snapshot
+		// build; resume and fork differ in which incarnation they write.
+		attacher, apiErr := a.planResumeBlockVolumes(ctx, snap.TeamID, build.ID, volumeMounts,
+			snapshotSandboxID != sandboxID, !snapshotIsFilesystemOnly(snap), filesystemBoot, allowSharedIdentity)
+		if apiErr != nil {
+			return orchestrator.SandboxMetadata{}, apiErr
+		}
+
+		var (
+			requiredNodeID *string
+			volumeAttacher orchestrator.VolumeAttacher
+		)
+		if attacher != nil {
+			requiredNodeID = &attacher.ownerNode
+			volumeAttacher = attacher
+		}
+
 		return orchestrator.SandboxMetadata{
 			Metadata:                snap.Metadata,
 			Build:                   build,
@@ -386,7 +409,9 @@ func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandbox
 			AutoPause:               autoPause,
 			AutoPauseFilesystemOnly: autoPauseFilesystemOnly,
 			AutoResume:              autoResume,
-			VolumeMounts:            convertDatabaseMountsToOrchestratorMounts(volumes),
+			VolumeMounts:            volumeMounts,
+			RequiredNodeID:          requiredNodeID,
+			VolumeAttacher:          volumeAttacher,
 			EnvdAccessToken:         envdAccessToken,
 			Iam:                     iam,
 			NodeID:                  &nodeID,

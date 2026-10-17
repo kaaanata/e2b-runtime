@@ -427,12 +427,25 @@ func (s *Server) Create(ctx context.Context, req *orchestrator.SandboxCreateRequ
 	}, nil
 }
 
+// volumeBackendNFS is the SandboxVolumeMount backend of shared NFS volumes.
+const volumeBackendNFS = "nfs"
+
 func createVolumeMountModelsFromAPI(volumeMounts []*orchestrator.SandboxVolumeMount) ([]sandbox.VolumeMountConfig, error) {
 	var errs []error
 
 	results := make([]sandbox.VolumeMountConfig, 0, len(volumeMounts))
 
 	for _, v := range volumeMounts {
+		// A block mount must never be treated as NFS. Binding workspace block
+		// volumes into the VM is not wired into sandbox create yet, so every
+		// node refuses them, which the API reports instead of starting a
+		// sandbox without its volume.
+		switch v.GetBackend() {
+		case "", volumeBackendNFS:
+		default:
+			return nil, status.Errorf(codes.Unimplemented, "volume %q: backend %q is not supported by this node", v.GetId(), v.GetBackend())
+		}
+
 		volumeID, err := uuid.Parse(v.GetId())
 		if err != nil {
 			errs = append(errs, fmt.Errorf("invalid volume id %q: %w", v.GetId(), err))

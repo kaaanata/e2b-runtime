@@ -30,6 +30,7 @@ func TestVolumeRoundTrip(t *testing.T) {
 	// create volume
 	createVolume, err := client.PostVolumesWithResponse(
 		t.Context(),
+		nil,
 		api.PostVolumesJSONRequestBody{Name: volumeName},
 		setup.WithAPIKey(),
 	)
@@ -43,6 +44,7 @@ func TestVolumeRoundTrip(t *testing.T) {
 	// fail to create volume again
 	createVolumeFailure, err := client.PostVolumesWithResponse(
 		t.Context(),
+		nil,
 		api.PostVolumesJSONRequestBody{Name: volumeName},
 		setup.WithAPIKey(),
 	)
