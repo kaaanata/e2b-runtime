@@ -287,11 +287,11 @@ func (a *APIStore) PostSandboxes(c *gin.Context) {
 		}
 	}
 
-	sbxVolumeMounts, err := convertAPIVolumesToOrchestratorVolumes(
+	sbxVolumeMounts, blockMounts, err := convertAPIVolumesToOrchestratorVolumes(
 		ctx, a.sqlcDB, a.featureFlags, teamInfo.ID, apiVolumeMounts, build,
 	)
 	if err != nil {
-		if errors.Is(err, errVolumesNotSupported) || errors.Is(err, errNoEnvdVersion) {
+		if errors.Is(err, errVolumesNotSupported) || errors.Is(err, errBlockVolumesNotSupported) || errors.Is(err, errNoEnvdVersion) {
 			a.sendAPIStoreError(c, http.StatusBadRequest, err.Error())
 
 			return
@@ -316,6 +316,21 @@ func (a *APIStore) PostSandboxes(c *gin.Context) {
 		return
 	}
 
+	var (
+		requiredNodeID *string
+		volumeAttacher apiorch.VolumeAttacher
+	)
+	if blockMounts != nil {
+		requiredNodeID = &blockMounts.ownerNode
+		volumeAttacher = &blockVolumeAttacher{
+			a:         a,
+			teamID:    teamInfo.ID,
+			ownerNode: blockMounts.ownerNode,
+			mounts:    sbxVolumeMounts,
+			plans:     blockMounts.plans,
+		}
+	}
+
 	getSandboxData := func(_ context.Context) (apiorch.SandboxMetadata, *api.APIError) {
 		// The data can't be influenced by action on the same sandbox as other operations,
 		// so it's safe to reuse the data
@@ -334,6 +349,8 @@ func (a *APIStore) PostSandboxes(c *gin.Context) {
 			VolumeMounts:            sbxVolumeMounts,
 			EnvdAccessToken:         envdAccessToken,
 			Iam:                     iamCfg,
+			RequiredNodeID:          requiredNodeID,
+			VolumeAttacher:          volumeAttacher,
 		}, nil
 	}
 
@@ -478,6 +495,14 @@ const minEnvdVersionForNetworkRules = "0.5.13"
 
 const minEnvdVersionForVolumes = "0.5.14"
 
+// minEnvdVersionForBlockVolumes is the first envd with typed (NFS or block)
+// volume mounts and per-mount NFS consistency profiles. An older envd rejects
+// the extra mount fields, so block mounts and an explicit consistencyProfile
+// are refused for templates built with it.
+const minEnvdVersionForBlockVolumes = "0.10.0"
+
+var errBlockVolumesNotSupported = errors.New("block volumes and volume consistency profiles are not supported")
+
 // checkEnvdVersionRequirement returns errNoEnvdVersion when buildVersion is empty, a parse
 // error when the version string is invalid, or a wrapped featureErr when the build does not
 // meet requiredMinVersion. The caller decides how to convert the returned error into an API
@@ -499,28 +524,49 @@ func checkEnvdVersionRequirement(buildVersion, requiredMinVersion string, featur
 	return nil
 }
 
-func convertAPIVolumesToOrchestratorVolumes(ctx context.Context, sqlClient *sqlcdb.Client, featureFlags featureFlagsClient, teamID uuid.UUID, volumeMounts []api.SandboxVolumeMount, env *queries.EnvBuild) ([]*orchestrator.SandboxVolumeMount, error) {
+// blockVolumeMounts is what a new sandbox needs to bind its block volumes:
+// all on one owner node, each attached to its volume's head incarnation once
+// the execution starts.
+type blockVolumeMounts struct {
+	ownerNode string
+	plans     []blockMountPlan
+}
+
+func convertAPIVolumesToOrchestratorVolumes(ctx context.Context, sqlClient *sqlcdb.Client, featureFlags featureFlagsClient, teamID uuid.UUID, volumeMounts []api.SandboxVolumeMount, env *queries.EnvBuild) ([]*orchestrator.SandboxVolumeMount, *blockVolumeMounts, error) {
 	// are any volumes configured?
 	if len(volumeMounts) == 0 {
-		return []*orchestrator.SandboxVolumeMount{}, nil // only b/c you should never return (nil, nil)
+		return []*orchestrator.SandboxVolumeMount{}, nil, nil // only b/c you should never return (nil, nil)
 	}
 
 	// are volumes enabled?
 	if !featureFlags.BoolFlag(ctx, featureflags.PersistentVolumesFlag) {
-		return nil, ErrVolumeMountsDisabled
+		return nil, nil, ErrVolumeMountsDisabled
 	}
 
 	// does your envd version support volumes?
 	envdVersion := sharedUtils.DerefOrDefault(env.EnvdVersion, "")
 	if err := checkEnvdVersionRequirement(envdVersion, minEnvdVersionForVolumes, errVolumesNotSupported); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// get volumes from the database
 	dbVolumesMap, err := getDBVolumesMap(ctx, sqlClient, teamID, volumeMounts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get db volumes map: %w", err)
+		return nil, nil, fmt.Errorf("failed to get db volumes map: %w", err)
 	}
+
+	// block mounts and explicit NFS profiles need the typed-mount envd
+	for _, v := range volumeMounts {
+		if actual, ok := dbVolumesMap[v.Name]; ok && (actual.Backend == volumeBackendBlock || v.ConsistencyProfile != nil) {
+			if err := checkEnvdVersionRequirement(envdVersion, minEnvdVersionForBlockVolumes, errBlockVolumesNotSupported); err != nil {
+				return nil, nil, err
+			}
+
+			break
+		}
+	}
+
+	var blocks *blockVolumeMounts
 
 	invalidVolumeMounts := make([]InvalidMount, 0)
 	results := make([]*orchestrator.SandboxVolumeMount, 0, len(volumeMounts))
@@ -548,19 +594,76 @@ func convertAPIVolumesToOrchestratorVolumes(ctx context.Context, sqlClient *sqlc
 		}
 		usedPaths[v.Path] = struct{}{}
 
-		results = append(results, &orchestrator.SandboxVolumeMount{
+		mount := &orchestrator.SandboxVolumeMount{
 			Id:   actualVolume.ID.String(),
 			Path: v.Path,
 			Type: actualVolume.VolumeType,
 			Name: actualVolume.Name,
-		})
+		}
+
+		if actualVolume.Backend != volumeBackendBlock {
+			if v.ConsistencyProfile != nil {
+				mount.ConsistencyProfile = string(*v.ConsistencyProfile)
+			}
+
+			results = append(results, mount)
+
+			continue
+		}
+
+		if reason, ok := blockMountProblem(v, actualVolume, blocks); !ok {
+			invalidVolumeMounts = append(invalidVolumeMounts, InvalidMount{Index: index, Reason: reason})
+
+			continue
+		}
+
+		if blocks == nil {
+			blocks = &blockVolumeMounts{ownerNode: *actualVolume.OwnerNodeID}
+		}
+
+		mount.Backend = volumeBackendBlock
+		blocks.plans = append(blocks.plans, blockMountPlan{mount: mount, volume: actualVolume, binding: bindHead})
+		results = append(results, mount)
 	}
 
 	if len(invalidVolumeMounts) > 0 {
-		return nil, InvalidVolumeMountsError{InvalidMounts: invalidVolumeMounts}
+		return nil, nil, InvalidVolumeMountsError{InvalidMounts: invalidVolumeMounts}
 	}
 
-	return results, nil
+	return results, blocks, nil
+}
+
+// blockMountProblem validates one block mount of a new sandbox against the
+// ones accepted before it.
+func blockMountProblem(v api.SandboxVolumeMount, volume queries.Volume, blocks *blockVolumeMounts) (string, bool) {
+	switch {
+	case v.ConsistencyProfile != nil:
+		return fmt.Sprintf("consistencyProfile does not apply to block volume '%s'", v.Name), false
+	case volume.Lifecycle != volumeLifecycleReady:
+		return fmt.Sprintf("block volume '%s' is %s", v.Name, volume.Lifecycle), false
+	case volume.OwnerNodeID == nil:
+		return fmt.Sprintf("block volume '%s' has no owner node", v.Name), false
+	case blocks != nil && blocks.ownerNode != *volume.OwnerNodeID:
+		return "block volumes on different nodes cannot be mounted together", false
+	case blocks != nil && len(blocks.plans) >= maxBlockVolumeMounts:
+		return fmt.Sprintf("at most %d block volumes can be mounted", maxBlockVolumeMounts), false
+	}
+
+	for _, p := range plansOf(blocks) {
+		if p.volume.ID == volume.ID {
+			return fmt.Sprintf("block volume '%s' is mounted twice", v.Name), false
+		}
+	}
+
+	return "", true
+}
+
+func plansOf(b *blockVolumeMounts) []blockMountPlan {
+	if b == nil {
+		return nil
+	}
+
+	return b.plans
 }
 
 func isValidMountPath(path string) (string, bool) {

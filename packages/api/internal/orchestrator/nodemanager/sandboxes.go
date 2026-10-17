@@ -102,6 +102,10 @@ func ConvertOrchestratorMountsToDatabaseMounts(mounts []*orchestrator.SandboxVol
 			Name:               item.GetName(),
 			Path:               item.GetPath(),
 			ConsistencyProfile: item.GetConsistencyProfile(),
+			Backend:            item.GetBackend(),
+			IncarnationID:      item.GetIncarnationId(),
+			FsUUID:             item.GetFsUuid(),
+			CapacityBytes:      item.GetCapacityBytes(),
 		})
 	}
 

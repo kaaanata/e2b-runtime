@@ -132,6 +132,25 @@ type SandboxVolumeMountConfig struct {
 	// ConsistencyProfile is the mount's VolumeConsistencyProfile. Rows written
 	// before the field existed omit the key and decode to "", the legacy options.
 	ConsistencyProfile VolumeConsistencyProfile `json:"consistencyProfile,omitempty"`
+
+	// Backend is "block" for a workspace block volume and empty for NFS
+	// (rows written before block volumes existed are all NFS).
+	Backend string `json:"backend,omitempty"`
+	// IncarnationID is the writable image a block mount was bound to; the
+	// execution's attachment row records the same binding.
+	IncarnationID string `json:"incarnationId,omitempty"`
+	// FsUUID is the ext4 UUID of that image.
+	FsUUID string `json:"fsUuid,omitempty"`
+	// CapacityBytes is the image size.
+	CapacityBytes uint64 `json:"capacityBytes,omitempty"`
+}
+
+// VolumeBackendBlock is SandboxVolumeMountConfig.Backend of a block volume.
+const VolumeBackendBlock = "block"
+
+// IsBlock reports whether the mount is a workspace block volume.
+func (m *SandboxVolumeMountConfig) IsBlock() bool {
+	return m != nil && m.Backend == VolumeBackendBlock
 }
 
 type SandboxAutoResumePolicy string

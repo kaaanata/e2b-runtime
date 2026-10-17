@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
@@ -76,6 +77,20 @@ type SandboxMetadata struct {
 	// rootfs. Unlike FilesystemBoot it describes the stored artifact rather than
 	// the request, so every path that resumes such a snapshot sets it.
 	FilesystemOnlySnapshot bool
+	// RequiredNodeID pins placement to one node with no fallback: block
+	// volumes exist only on their owner node. An unavailable node fails the
+	// start with 503.
+	RequiredNodeID *string
+	// VolumeAttacher, when set, records the execution's block volume
+	// attachments once the execution ID is known and returns the mounts to
+	// send; it is released again when the start fails.
+	VolumeAttacher VolumeAttacher
+}
+
+// VolumeAttacher binds a starting sandbox execution to its block volumes.
+type VolumeAttacher interface {
+	Attach(ctx context.Context, clusterID uuid.UUID, sandboxID, executionID string) ([]*orchestrator.SandboxVolumeMount, *api.APIError)
+	Release(ctx context.Context, sandboxID, executionID string)
 }
 
 // iamToProto maps the sandbox workload identity configuration into the
@@ -271,6 +286,34 @@ func (o *Orchestrator) CreateSandbox(
 		return sandbox.Sandbox{}, fetchErr
 	}
 
+	var requiredNode *nodemanager.Node
+	if sbxData.RequiredNodeID != nil {
+		requiredNode = o.GetNode(clusters.WithClusterFallback(team.ClusterID), *sbxData.RequiredNodeID)
+		if requiredNode == nil || !requiredNode.CanAcceptNewRequests() {
+			return sandbox.Sandbox{}, &api.APIError{
+				Code:      http.StatusServiceUnavailable,
+				ClientMsg: "The node holding the sandbox's block volumes is unavailable, please retry later",
+				Err:       fmt.Errorf("required node %s for sandbox %s is unavailable", *sbxData.RequiredNodeID, sandboxID),
+			}
+		}
+	}
+
+	if sbxData.VolumeAttacher != nil {
+		mounts, attachErr := sbxData.VolumeAttacher.Attach(ctx, clusters.WithClusterFallback(team.ClusterID), sandboxID, executionID)
+		if attachErr != nil {
+			return sandbox.Sandbox{}, attachErr
+		}
+
+		sbxData.VolumeMounts = mounts
+		attacher := sbxData.VolumeAttacher
+
+		defer func() {
+			if apiErr != nil {
+				attacher.Release(context.WithoutCancel(ctx), sandboxID, executionID)
+			}
+		}()
+	}
+
 	fcSemver, err := fcversion.New(sbxData.Build.FirecrackerVersion)
 	if err != nil {
 		errMsg := fmt.Errorf("failed to get fcSemver for firecracker fcSemver '%s': %w", sbxData.Build.FirecrackerVersion, err)
@@ -382,6 +425,10 @@ func (o *Orchestrator) CreateSandbox(
 
 	nodeClusterID := clusters.WithClusterFallback(team.ClusterID)
 	clusterNodes := o.GetClusterNodes(nodeClusterID)
+	if requiredNode != nil {
+		node = requiredNode
+		clusterNodes = []*nodemanager.Node{requiredNode}
+	}
 
 	allLabels, labelFilteringEnabled := o.generateRequiredNodeLabels(ctx, sandboxID, team, sbxData)
 
