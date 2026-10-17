@@ -21,6 +21,16 @@ var ErrVolumesTokenNotConfigured = errors.New("volumes content token signing is 
 // content API. audience is the origin the token is valid for
 // (`https://api.<domain>`, see volumeTokenAudience).
 func generateVolumeContentToken(config cfg.VolumesTokenConfig, volume queries.Volume, team *types.Team, audience string) (string, *api.APIError) {
+	// Block volumes have no content API; a token for one would authorize
+	// nothing and must never be minted.
+	if volume.Backend == volumeBackendBlock {
+		return "", &api.APIError{
+			Err:       errors.New("content token requested for a block volume"),
+			ClientMsg: "Block volumes have no content API",
+			Code:      http.StatusBadRequest,
+		}
+	}
+
 	if !config.IsConfigured() {
 		return "", &api.APIError{
 			Err:       ErrVolumesTokenNotConfigured,
