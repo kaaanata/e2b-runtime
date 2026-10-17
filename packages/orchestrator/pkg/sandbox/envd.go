@@ -471,9 +471,15 @@ func (s *Sandbox) convertMounts(mounts []VolumeMountConfig) []envd.VolumeMount {
 	results := make([]envd.VolumeMount, 0, len(mounts))
 
 	for _, mount := range mounts {
+		// source_type is left unset: envd reads an absent discriminator as nfs, so
+		// the legacy shape is the compatible one. mount_options is omitted when
+		// there is no profile. An envd predating mount_options decodes /init with
+		// encoding/json and ignores the field, so it keeps its built-in options
+		// (no nolock); gating profiles on the envd version is the API's job.
 		results = append(results, envd.VolumeMount{
-			NfsTarget: fmt.Sprintf("%s:/%s", s.config.NetworkConfig.OrchestratorInSandboxIPAddress, mount.Name),
-			Path:      mount.Path,
+			NfsTarget:    fmt.Sprintf("%s:/%s", s.config.NetworkConfig.OrchestratorInSandboxIPAddress, mount.Name),
+			Path:         mount.Path,
+			MountOptions: nfsMountOptionsForProfile(mount.ConsistencyProfile),
 		})
 	}
 

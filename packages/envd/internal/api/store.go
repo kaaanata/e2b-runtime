@@ -63,12 +63,15 @@ type API struct {
 	logFlusher      LogFlusher
 
 	isMountingNFS atomic.Bool
-	mountedPaths  sync.Map // map[path]lifecycleID - tracks which lifecycle each path was mounted for
+	mountedPaths  sync.Map // map[path]mountRecord - what /init mounted where, and for which lifecycle (see mounts.go)
 
 	// fsFreezer freezes/thaws the guest rootfs for filesystem-only pauses;
 	// fsFreezeLock serializes /fsfreeze and /fsthaw.
 	fsFreezer    fsfreeze.Freezer
 	fsFreezeLock *semaphore.Weighted
+	// freezeOps records mount-set freezes by operation token (see fsfreeze_set.go);
+	// guarded by fsFreezeLock.
+	freezeOps freezeOps
 
 	// handover, when non-nil, is the outcome of the live-upgrade handover this
 	// envd booted from; PostInit advertises it to the orchestrator via the

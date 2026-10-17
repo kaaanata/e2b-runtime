@@ -68,6 +68,13 @@ message HandoverDefaults {
 message MountEntry {
   string path = 1;
   string lifecycle_id = 2;
+  // source_type is "nfs" or "block" (the /init VolumeMount discriminator). An
+  // older envd omits it; the reader treats absent as nfs, which is all it mounted.
+  string source_type = 3;
+  // device is the guest block device a block volume was mounted from, so the new
+  // envd can serve /volumes/resize and the mount-set freeze without re-resolving
+  // the UUID. Empty for nfs.
+  string device = 4;
 }
 
 // ForwardedPort is one active port-forward. The socat child survives execve;

@@ -458,6 +458,28 @@ sequenceDiagram
   token on every content request. Its `aud` claim is `https://api.<domain>`, so a token minted for
   one cluster's origin is not accepted by another.
 
+#### Volume mounts inside the sandbox
+
+The orchestrator passes each sandbox's volumes to envd in `/init` (`VolumeMount`, discriminated by
+`source_type`; an absent discriminator is the original NFS-only shape).
+
+- **NFS (directory-backed) volumes** are exported by the orchestrator's NFS proxy
+  (`pkg/nfsproxy`, NFSv3 over TCP) and mounted by envd. A per-mount `consistency_profile`
+  (`SandboxVolumeMount.consistency_profile`, persisted in `SandboxVolumeMountConfig`) becomes
+  `mount_options`: `strict` keeps envd's built-in `noac,lookupcache=none` set, `cto` drops those
+  two for close-to-open caching; both add `nolock` because the proxy has no lock manager. envd
+  validates the options against a whitelist; no profile keeps the built-in options. With
+  `VOLUME_BTRFS_SUBVOLUMES` (off by default) each volume directory is a Btrfs subvolume, optionally
+  capped by a qgroup (`VOLUME_BTRFS_QGROUP_LIMIT_BYTES`), and is deleted with
+  `btrfs subvolume delete`.
+- **Block volumes** (`volume_type` `block`) are ext4 images attached as guest drives; envd finds
+  the device by filesystem UUID and mounts it, and `/volumes/resize` grows it online. They have no
+  host directory, so `VolumeService` answers `FailedPrecondition` for every directory/file RPC.
+- **Checkpoint freeze.** `/fsfreeze-set` freezes the mount set envd derives from its own mount
+  ledger (block volumes deepest first, then `/`) under a caller-chosen operation token, rolling back
+  on partial failure; `GET /fsfreeze-set` reports a recorded outcome whose response was lost and
+  `/fsthaw-set` thaws in reverse. The rootfs-only `/fsfreeze`/`/fsthaw` pair is unchanged.
+
 ### Pause and resume
 
 - **Pause**: API records a snapshot row in Postgres, then gRPC `Pause` to the node. The

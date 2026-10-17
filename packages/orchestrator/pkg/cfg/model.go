@@ -105,6 +105,15 @@ type Config struct {
 	NBDPoolSize                 int               `env:"NBD_POOL_SIZE"                 envDefault:"64"`
 	Services                    []string          `env:"ORCHESTRATOR_SERVICES"         envDefault:"orchestrator"`
 	PersistentVolumeMounts      map[string]string `env:"PERSISTENT_VOLUME_MOUNTS"`
+	// VolumeBtrfsSubvolumes creates each persistent (shared NFS) volume directory
+	// as a Btrfs subvolume instead of a plain directory, so a volume can be
+	// snapshotted and quota-limited on the host. Requires the volume roots in
+	// PersistentVolumeMounts to be on Btrfs; off by default.
+	VolumeBtrfsSubvolumes bool `env:"VOLUME_BTRFS_SUBVOLUMES" envDefault:"false"`
+	// VolumeBtrfsQgroupLimitBytes, when > 0 and VolumeBtrfsSubvolumes is on, caps
+	// every new volume subvolume with a Btrfs qgroup limit of this many bytes.
+	// Quotas must already be enabled on the filesystem (`btrfs quota enable`).
+	VolumeBtrfsQgroupLimitBytes int64 `env:"VOLUME_BTRFS_QGROUP_LIMIT_BYTES" envDefault:"0"`
 }
 
 // AdditionalClickhouseEndpoints returns the non-blank entries from

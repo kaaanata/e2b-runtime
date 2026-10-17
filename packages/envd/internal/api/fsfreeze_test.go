@@ -19,6 +19,10 @@ type fakeFreezer struct {
 	thawed    []string
 	freezeErr error
 	thawErr   error
+	// freezeFailOn / thawFailOn fail only the named mountpoints, for the
+	// partial-failure paths of the mount-set freeze.
+	freezeFailOn map[string]error
+	thawFailOn   map[string]error
 }
 
 func (f *fakeFreezer) Freeze(mountpoint string) error {
@@ -26,6 +30,9 @@ func (f *fakeFreezer) Freeze(mountpoint string) error {
 	defer f.mu.Unlock()
 	if f.freezeErr != nil {
 		return f.freezeErr
+	}
+	if err := f.freezeFailOn[mountpoint]; err != nil {
+		return err
 	}
 	f.frozen = append(f.frozen, mountpoint)
 
@@ -37,6 +44,9 @@ func (f *fakeFreezer) Thaw(mountpoint string) error {
 	defer f.mu.Unlock()
 	if f.thawErr != nil {
 		return f.thawErr
+	}
+	if err := f.thawFailOn[mountpoint]; err != nil {
+		return err
 	}
 	f.thawed = append(f.thawed, mountpoint)
 

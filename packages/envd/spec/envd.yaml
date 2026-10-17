@@ -226,6 +226,124 @@ paths:
         "503":
           description: Freeze lock is held by another operation
 
+  /fsfreeze-set:
+    post:
+      summary: Freeze the mount set {every block volume envd mounted (deepest path first), then /} before a checkpoint. The server derives the set from its own ledger; the caller only names the operation.
+      description: |
+        Freezes each mountpoint in order and records the result under the request's
+        operation token. On a partial failure the mountpoints that had frozen are
+        thawed again in reverse order, and the 500 body is the same FsFreezeSetResult
+        with state=failed saying which ones froze and which one failed, so the caller
+        never has to guess what is still frozen. Idempotent per token: a repeated POST
+        with a token whose set is already frozen returns the recorded result.
+      x-internal: true
+      security:
+        - AccessTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FsFreezeSetRequest"
+      responses:
+        "200":
+          description: The whole set is frozen
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FsFreezeSetResult"
+        "400":
+          $ref: "#/components/responses/InvalidPath"
+        "500":
+          description: The freeze did not complete; what had frozen was thawed again
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FsFreezeSetResult"
+        "503":
+          description: Freeze lock is held by another operation
+    get:
+      summary: Report the recorded outcome of a mount-set freeze, for a caller whose POST response was lost.
+      x-internal: true
+      parameters:
+        - name: operation_token
+          in: query
+          required: true
+          schema:
+            type: string
+      security:
+        - AccessTokenAuth: []
+        - {}
+      responses:
+        "200":
+          description: The recorded result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FsFreezeSetResult"
+        "404":
+          description: No freeze with this token is recorded (never ran, or evicted after many later operations)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /fsthaw-set:
+    post:
+      summary: Thaw the mount set a /fsfreeze-set froze, in reverse order (/ first). The orchestrator's rollback path; a successful checkpoint reboots or destroys the VM instead.
+      description: |
+        With a known token, thaws exactly the mountpoints that froze. With an unknown
+        token (the freeze POST was lost before the server recorded it, or the record
+        was evicted) it thaws the whole current mount set, which is safe because the
+        kernel treats thawing an unfrozen filesystem as a no-op.
+      x-internal: true
+      security:
+        - AccessTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FsFreezeSetRequest"
+      responses:
+        "200":
+          description: Thaw attempted on every mountpoint; thaw_errors lists the ones that failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FsFreezeSetResult"
+        "503":
+          description: Freeze lock is held by another operation
+
+  /volumes/resize:
+    post:
+      summary: Grow the ext4 filesystem of a mounted block volume to its device size (online resize2fs). Used after the host enlarged the backing image of a paused sandbox and re-attached it.
+      x-internal: true
+      security:
+        - AccessTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VolumeResizeRequest"
+      responses:
+        "200":
+          description: resize2fs completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolumeResizeResult"
+        "400":
+          $ref: "#/components/responses/InvalidPath"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+        "503":
+          description: Freeze lock is held by another operation
+
   /envs:
     get:
       summary: Environment variables
@@ -635,15 +753,135 @@ components:
           description: User for setting ownership and resolving relative paths
     VolumeMount:
       type: object
-      description: Volume mount configuration
+      description: |
+        One volume to mount inside the sandbox. The union is discriminated by
+        `source_type`; it stays wire-compatible with the original NFS-only shape,
+        so an orchestrator predating block volumes keeps sending
+        `{nfs_target, path}` and is read as `source_type: nfs`.
+
+        - `nfs`: `nfs_target` is required; `mount_options`, when present, replaces
+          envd's built-in option set after whitelist validation (see the field).
+        - `block`: `fs_uuid` is required; envd resolves the guest block device by
+          filesystem UUID, checks `capacity_bytes` when supplied and mounts it as
+          ext4 at `path`.
       additionalProperties: false
       properties:
+        source_type:
+          type: string
+          enum: [nfs, block]
+          description: Which kind of volume this is. Omitted means nfs.
         nfs_target:
           type: string
-          description: Server target address
+          description: Server target address (`host:/export`). NFS only; required when source_type is nfs or omitted.
         path:
           type: string
           description: Mount path inside the sandbox
+        mount_options:
+          type: array
+          items:
+            type: string
+          description: |
+            NFS only. Mount options (one `key` or `key=value` per entry) that replace
+            envd's built-in option set. Every entry must pass envd's whitelist (sync,
+            async, rsize, wsize, proto=tcp, mountproto=tcp, port, mountport, nfsvers=3,
+            noacl, noac, ac, lookupcache, actimeo, acregmin, acregmax, acdirmin,
+            acdirmax, retry, fg, hard, nolock, local_lock); an entry outside it fails
+            the whole /init. `nolock` is forced when neither `nolock` nor `local_lock`
+            is given, because the NFS proxy has no lock manager. Absent means envd's
+            built-in options, exactly as before this field existed.
+        fs_uuid:
+          type: string
+          description: Block only. Filesystem UUID the guest device is found by (`blkid -U`).
+        device_id:
+          type: string
+          description: Block only. The host-side drive id of the attached device; informational, carried into logs.
+        format_version:
+          type: integer
+          description: Block only. Version of the on-disk layout the host formatted the volume with.
+        capacity_bytes:
+          type: integer
+          format: int64
+          description: Block only. Expected device size. When supplied, a device smaller than this fails the mount.
       required:
-        - nfs_target
         - path
+    VolumeResizeRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - path
+      properties:
+        path:
+          type: string
+          description: Mount path of a block volume envd mounted through /init. Only paths from envd's own ledger are accepted.
+    VolumeResizeResult:
+      type: object
+      required:
+        - path
+        - device
+      properties:
+        path:
+          type: string
+          description: The mount path that was grown
+        device:
+          type: string
+          description: The guest block device resize2fs ran against
+        output:
+          type: string
+          description: resize2fs combined output, for the orchestrator's log
+    FsFreezeSetRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - operation_token
+      properties:
+        operation_token:
+          type: string
+          description: |
+            Caller-chosen opaque token naming this freeze. A later GET /fsfreeze-set
+            with the same token reports what happened when the HTTP response was
+            lost, and POST /fsthaw-set with it thaws exactly the set that froze.
+            Repeating a POST /fsfreeze-set with a token that already froze is a no-op
+            that returns the recorded result.
+    FsFreezeSetResult:
+      type: object
+      required:
+        - operation_token
+        - state
+        - frozen
+      properties:
+        operation_token:
+          type: string
+        state:
+          type: string
+          enum: [frozen, thawed, failed]
+          description: |
+            frozen: every mountpoint in the set is frozen. thawed: the set has been
+            thawed (by /fsthaw-set, or by the rollback after a partial failure).
+            failed: the freeze did not complete; the mountpoints that had frozen were
+            thawed again in reverse order before this was reported.
+        mountpoints:
+          type: array
+          items:
+            type: string
+          description: The mount set the server derived for this operation, in freeze order (block volumes deepest path first, then /)
+        frozen:
+          type: array
+          items:
+            type: string
+          description: Mountpoints that froze, in the order they froze. On state=failed this is what was rolled back.
+        thawed:
+          type: array
+          items:
+            type: string
+          description: Mountpoints that have since been thawed, in the order they thawed
+        failed_mountpoint:
+          type: string
+          description: On state=failed, the mountpoint whose freeze failed
+        error:
+          type: string
+          description: On state=failed, the freeze error
+        thaw_errors:
+          type: array
+          items:
+            type: string
+          description: Mountpoints whose thaw failed (the set may be partially frozen; the orchestrator must not resume the VM until this is empty)

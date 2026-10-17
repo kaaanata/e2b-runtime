@@ -32,7 +32,11 @@ func (s *Service) CreateVolume(
 		attribute.String("path", fullPath),
 	))
 
-	if err := os.MkdirAll(fullPath, 0o700); err != nil {
+	if s.config.VolumeBtrfsSubvolumes {
+		if err := createBtrfsVolume(ctx, fullPath, s.config.VolumeBtrfsQgroupLimitBytes); err != nil {
+			return nil, fmt.Errorf("failed to create volume: %w", err)
+		}
+	} else if err := os.MkdirAll(fullPath, 0o700); err != nil {
 		return nil, fmt.Errorf("failed to create volume: %w", err)
 	}
 

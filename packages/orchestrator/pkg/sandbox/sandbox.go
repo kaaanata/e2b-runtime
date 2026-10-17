@@ -188,6 +188,10 @@ type VolumeMountConfig struct {
 	Name string
 	Path string
 	Type string
+	// ConsistencyProfile selects the NFS mount options envd uses for this mount
+	// (VolumeConsistencyStrict or VolumeConsistencyCto). Empty keeps envd's
+	// built-in options.
+	ConsistencyProfile string
 }
 
 type EnvdMetadata struct {
