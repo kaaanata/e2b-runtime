@@ -135,3 +135,62 @@ func TestFinishTemplateBuild_PreservesSingleVersionWhenOnlyOneEmpty(t *testing.T
 	assert.Equal(t, reportedKernel, kernel, "kernel_version should be overwritten when a non-empty value is provided")
 	assert.Equal(t, seededFC, firecracker, "firecracker_version should fall back to the seeded value when only kernel was reported")
 }
+
+// getBuildLayout returns the layout columns of an env_builds row.
+func getBuildLayout(t *testing.T, ctx context.Context, db *testutils.Database, buildID uuid.UUID) (layout *string, slots []int64) {
+	t.Helper()
+
+	err := db.SqlcClient.TestsRawSQLQuery(ctx,
+		"SELECT layout, workspace_slot_capacity_bytes FROM public.env_builds WHERE id = $1",
+		func(rows pgx.Rows) error {
+			if !rows.Next() {
+				return nil
+			}
+
+			return rows.Scan(&layout, &slots)
+		},
+		buildID,
+	)
+	require.NoError(t, err, "Failed to query build layout")
+
+	return layout, slots
+}
+
+func TestFinishTemplateBuild_RecordsReportedLayout(t *testing.T) {
+	t.Parallel()
+	db := testutils.SetupDatabase(t)
+	ctx := t.Context()
+
+	teamID := testutils.CreateTestTeam(t, db)
+	templateID := testutils.CreateTestTemplate(t, db, teamID)
+	finish := func(buildID uuid.UUID, layout *string, slots []int64) {
+		t.Helper()
+
+		require.NoError(t, db.SqlcClient.FinishTemplateBuild(ctx, queries.FinishTemplateBuildParams{
+			BuildID:                    buildID,
+			Status:                     types.BuildStatusUploaded,
+			Layout:                     layout,
+			WorkspaceSlotCapacityBytes: slots,
+		}))
+	}
+
+	block := testutils.CreateTestBuild(t, ctx, db, templateID, "building")
+	finish(block, new("block-v1"), []int64{10 << 30, 20 << 30})
+	layout, slots := getBuildLayout(t, ctx, db, block)
+	require.NotNil(t, layout)
+	assert.Equal(t, "block-v1", *layout)
+	assert.Equal(t, []int64{10 << 30, 20 << 30}, slots)
+
+	rootfs := testutils.CreateTestBuild(t, ctx, db, templateID, "building")
+	finish(rootfs, new(""), nil)
+	layout, slots = getBuildLayout(t, ctx, db, rootfs)
+	require.NotNil(t, layout, "a reported rootfs-only layout is recorded")
+	assert.Empty(t, *layout)
+	assert.Empty(t, slots)
+
+	unknown := testutils.CreateTestBuild(t, ctx, db, templateID, "building")
+	finish(unknown, nil, []int64{1})
+	layout, slots = getBuildLayout(t, ctx, db, unknown)
+	assert.Nil(t, layout, "an unreported layout stays unknown")
+	assert.Nil(t, slots, "slots are only recorded with a layout")
+}

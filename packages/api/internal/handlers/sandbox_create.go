@@ -316,6 +316,14 @@ func (a *APIStore) PostSandboxes(c *gin.Context) {
 		return
 	}
 
+	if blockMounts != nil {
+		if apiErr := checkBlockMountsFitTemplate(build, blockMounts.plans); apiErr != nil {
+			apierrors.SendAPIError(c, apiErr)
+
+			return
+		}
+	}
+
 	var (
 		requiredNodeID *string
 		volumeAttacher apiorch.VolumeAttacher

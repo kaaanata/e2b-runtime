@@ -16,6 +16,9 @@ const (
 	// errCodeVolumeCreating: the volume's first image does not exist yet
 	// (409 on delete).
 	errCodeVolumeCreating = "volume_creating"
+	// errCodeTemplateLayoutMismatch: the template build has no workspace slot
+	// that can hold a block mount (409 on sandbox create).
+	errCodeTemplateLayoutMismatch = "template_layout_mismatch"
 )
 
 const errMsgSharedIdentityRequired = "Forking a sandbox with block volumes resumes the same memory and filesystem identity in every fork; " +

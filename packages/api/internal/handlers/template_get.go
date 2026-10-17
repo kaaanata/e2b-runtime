@@ -106,16 +106,19 @@ func (a *APIStore) GetTemplatesTemplateID(c *gin.Context, templateID api.Templat
 	}
 
 	for _, item := range builds {
+		layout, slotsGiB := templateBuildLayoutToAPI(item.Layout, item.WorkspaceSlotCapacityBytes)
 		res.Builds = append(res.Builds, api.TemplateBuild{
-			BuildID:     item.ID,
-			Status:      getCorrespondingTemplateBuildStatus(ctx, item.StatusGroup),
-			CreatedAt:   item.CreatedAt,
-			UpdatedAt:   item.UpdatedAt,
-			FinishedAt:  item.FinishedAt,
-			CpuCount:    api.CPUCount(item.Vcpu),
-			MemoryMB:    api.MemoryMB(item.RamMb),
-			DiskSizeMB:  sharedUtils.CastPtr(item.TotalDiskSizeMb, func(v int64) api.DiskSizeMB { return api.DiskSizeMB(v) }),
-			EnvdVersion: item.EnvdVersion,
+			Layout:                   layout,
+			WorkspaceSlotCapacityGiB: slotsGiB,
+			BuildID:                  item.ID,
+			Status:                   getCorrespondingTemplateBuildStatus(ctx, item.StatusGroup),
+			CreatedAt:                item.CreatedAt,
+			UpdatedAt:                item.UpdatedAt,
+			FinishedAt:               item.FinishedAt,
+			CpuCount:                 api.CPUCount(item.Vcpu),
+			MemoryMB:                 api.MemoryMB(item.RamMb),
+			DiskSizeMB:               sharedUtils.CastPtr(item.TotalDiskSizeMb, func(v int64) api.DiskSizeMB { return api.DiskSizeMB(v) }),
+			EnvdVersion:              item.EnvdVersion,
 		})
 	}
 

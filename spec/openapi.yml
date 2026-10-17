@@ -1301,6 +1301,17 @@ components:
           $ref: "#/components/schemas/EnvdVersion"
         buildStatus:
           $ref: "#/components/schemas/TemplateBuildStatus"
+        layout:
+          $ref: "#/components/schemas/TemplateBuildLayout"
+        workspaceSlotCapacityGiB:
+          description: >
+            Capacity of each workspace slot of the last successful build when it is `block-v1`, in GiB, one
+            entry per slot; a sandbox's block mounts take the slots in mount
+            order. Omitted for other layouts.
+          type: array
+          items:
+            type: integer
+            format: int64
 
     TemplateRequestResponseV3:
       required:
@@ -1437,6 +1448,17 @@ components:
           $ref: "#/components/schemas/DiskSizeMB"
         envdVersion:
           $ref: "#/components/schemas/EnvdVersion"
+        layout:
+          $ref: "#/components/schemas/TemplateBuildLayout"
+        workspaceSlotCapacityGiB:
+          description: >
+            Capacity of each workspace slot of a `block-v1` build, in GiB, one
+            entry per slot; a sandbox's block mounts take the slots in mount
+            order. Omitted for other layouts.
+          type: array
+          items:
+            type: integer
+            format: int64
 
     TemplateWithBuilds:
       required:
@@ -1689,8 +1711,10 @@ components:
         workspaceSlotCapacityGiB:
           description: >
             Capacity of each workspace block slot of a `block-v1` template, one
-            entry per slot (at most 4). A block volume mounts into a slot of
-            exactly its capacity. Required with `layout: block-v1`; a build from
+            entry per slot (at most 4). A block volume mounts into a slot whose
+            capacity is at most the volume's (the slot capacity is a minimum,
+            so build with the smallest tier the template should host).
+            Required with `layout: block-v1`; a build from
             another template inherits that template's slots when both fields are
             omitted.
           type: array
@@ -1709,6 +1733,18 @@ components:
         another template, inherits that template's layout, which cannot be
         changed).
       enum:
+        - block-v1
+
+    TemplateBuildLayout:
+      type: string
+      description: >
+        Guest device layout a build was made with (after inheritance from its
+        base template): `rootfs` (no workspace slots; block volumes cannot be
+        mounted) or `block-v1`. Omitted when the build did not record it
+        (builds from before layouts were recorded); creating a sandbox with
+        block mounts from such a template is then decided by its node.
+      enum:
+        - rootfs
         - block-v1
 
     TemplateBuildFileUpload:

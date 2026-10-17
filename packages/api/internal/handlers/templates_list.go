@@ -68,7 +68,7 @@ func (a *APIStore) GetTemplates(c *gin.Context, params api.GetTemplatesParams) {
 			diskMB = *item.BuildTotalDiskSizeMb
 		}
 
-		templates = append(templates, &api.Template{
+		tpl := &api.Template{
 			TemplateID:    item.ActiveEnv.ID,
 			BuildID:       item.BuildID.String(),
 			CpuCount:      api.CPUCount(item.BuildVcpu),
@@ -85,7 +85,9 @@ func (a *APIStore) GetTemplates(c *gin.Context, params api.GetTemplatesParams) {
 			BuildStatus:   getCorrespondingTemplateBuildStatus(ctx, item.BuildStatus),
 			CreatedBy:     createdBy,
 			EnvdVersion:   envdVersion,
-		})
+		}
+		tpl.Layout, tpl.WorkspaceSlotCapacityGiB = templateBuildLayoutToAPI(item.BuildLayout, item.BuildWorkspaceSlotCapacityBytes)
+		templates = append(templates, tpl)
 	}
 
 	c.JSON(http.StatusOK, templates)

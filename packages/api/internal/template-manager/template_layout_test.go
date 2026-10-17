@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
+	templatemanagergrpc "github.com/e2b-dev/infra/packages/shared/pkg/grpc/template-manager"
 )
 
 func TestTemplateLayoutFromAPI(t *testing.T) {
@@ -16,7 +17,7 @@ func TestTemplateLayoutFromAPI(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, TemplateLayout{}, none, "no layout fields ask for nothing (rootfs-only or inherited)")
 
-	block, err := TemplateLayoutFromAPI(new(api.BlockV1), &[]int64{10, 20})
+	block, err := TemplateLayoutFromAPI(new(api.TemplateLayoutBlockV1), &[]int64{10, 20})
 	require.NoError(t, err)
 	require.NotNil(t, block.Layout)
 	assert.Equal(t, "block-v1", *block.Layout)
@@ -25,9 +26,26 @@ func TestTemplateLayoutFromAPI(t *testing.T) {
 	_, err = TemplateLayoutFromAPI(new(api.TemplateLayout("block-v2")), nil)
 	require.Error(t, err)
 
-	_, err = TemplateLayoutFromAPI(new(api.BlockV1), &[]int64{0})
+	_, err = TemplateLayoutFromAPI(new(api.TemplateLayoutBlockV1), &[]int64{0})
 	require.Error(t, err)
 
-	_, err = TemplateLayoutFromAPI(new(api.BlockV1), &[]int64{1 << 40})
+	_, err = TemplateLayoutFromAPI(new(api.TemplateLayoutBlockV1), &[]int64{1 << 40})
 	require.Error(t, err, "a capacity that overflows bytes is refused")
+}
+
+func TestTemplateLayoutFromBuildMetadata(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, TemplateLayout{}, TemplateLayoutFromBuildMetadata(nil))
+	assert.Equal(t, TemplateLayout{}, TemplateLayoutFromBuildMetadata(&templatemanagergrpc.TemplateBuildMetadata{}),
+		"an unreported layout stays unknown")
+
+	legacy := TemplateLayoutFromBuildMetadata(&templatemanagergrpc.TemplateBuildMetadata{Layout: new("")})
+	require.NotNil(t, legacy.Layout)
+	assert.Empty(t, *legacy.Layout, "a reported rootfs-only layout is recorded as such")
+
+	block := TemplateLayoutFromBuildMetadata(&templatemanagergrpc.TemplateBuildMetadata{Layout: new("block-v1"), WorkspaceSlotCapacityBytes: []int64{10 << 30}})
+	require.NotNil(t, block.Layout)
+	assert.Equal(t, "block-v1", *block.Layout)
+	assert.Equal(t, []int64{10 << 30}, block.WorkspaceSlotCapacityBytes)
 }

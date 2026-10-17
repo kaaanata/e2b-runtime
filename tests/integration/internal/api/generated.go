@@ -208,6 +208,24 @@ func (e SandboxState) Valid() bool {
 	}
 }
 
+// Defines values for TemplateBuildLayout.
+const (
+	TemplateBuildLayoutBlockV1 TemplateBuildLayout = "block-v1"
+	TemplateBuildLayoutRootfs  TemplateBuildLayout = "rootfs"
+)
+
+// Valid indicates whether the value is a known member of the TemplateBuildLayout enum.
+func (e TemplateBuildLayout) Valid() bool {
+	switch e {
+	case TemplateBuildLayoutBlockV1:
+		return true
+	case TemplateBuildLayoutRootfs:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TemplateBuildStatus.
 const (
 	TemplateBuildStatusBuilding TemplateBuildStatus = "building"
@@ -234,13 +252,13 @@ func (e TemplateBuildStatus) Valid() bool {
 
 // Defines values for TemplateLayout.
 const (
-	BlockV1 TemplateLayout = "block-v1"
+	TemplateLayoutBlockV1 TemplateLayout = "block-v1"
 )
 
 // Valid indicates whether the value is a known member of the TemplateLayout enum.
 func (e TemplateLayout) Valid() bool {
 	switch e {
-	case BlockV1:
+	case TemplateLayoutBlockV1:
 		return true
 	default:
 		return false
@@ -1399,6 +1417,9 @@ type Template struct {
 	// LastSpawnedAt Time when the template was last used
 	LastSpawnedAt *time.Time `json:"lastSpawnedAt"`
 
+	// Layout Guest device layout a build was made with (after inheritance from its base template): `rootfs` (no workspace slots; block volumes cannot be mounted) or `block-v1`. Omitted when the build did not record it (builds from before layouts were recorded); creating a sandbox with block mounts from such a template is then decided by its node.
+	Layout *TemplateBuildLayout `json:"layout,omitempty"`
+
 	// MemoryMB Memory for the sandbox in MiB
 	MemoryMB MemoryMB `json:"memoryMB"`
 
@@ -1416,6 +1437,9 @@ type Template struct {
 
 	// UpdatedAt Time when the template was last updated
 	UpdatedAt time.Time `json:"updatedAt"`
+
+	// WorkspaceSlotCapacityGiB Capacity of each workspace slot of the last successful build when it is `block-v1`, in GiB, one entry per slot; a sandbox's block mounts take the slots in mount order. Omitted for other layouts.
+	WorkspaceSlotCapacityGiB *[]int64 `json:"workspaceSlotCapacityGiB,omitempty"`
 }
 
 // TemplateAliasResponse defines model for TemplateAliasResponse.
@@ -1447,6 +1471,9 @@ type TemplateBuild struct {
 	// FinishedAt Time when the build was finished
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 
+	// Layout Guest device layout a build was made with (after inheritance from its base template): `rootfs` (no workspace slots; block volumes cannot be mounted) or `block-v1`. Omitted when the build did not record it (builds from before layouts were recorded); creating a sandbox with block mounts from such a template is then decided by its node.
+	Layout *TemplateBuildLayout `json:"layout,omitempty"`
+
 	// MemoryMB Memory for the sandbox in MiB
 	MemoryMB MemoryMB `json:"memoryMB"`
 
@@ -1455,6 +1482,9 @@ type TemplateBuild struct {
 
 	// UpdatedAt Time when the build was last updated
 	UpdatedAt time.Time `json:"updatedAt"`
+
+	// WorkspaceSlotCapacityGiB Capacity of each workspace slot of a `block-v1` build, in GiB, one entry per slot; a sandbox's block mounts take the slots in mount order. Omitted for other layouts.
+	WorkspaceSlotCapacityGiB *[]int64 `json:"workspaceSlotCapacityGiB,omitempty"`
 }
 
 // TemplateBuildFileUpload defines model for TemplateBuildFileUpload.
@@ -1484,6 +1514,9 @@ type TemplateBuildInfo struct {
 	// TemplateID Identifier of the template
 	TemplateID string `json:"templateID"`
 }
+
+// TemplateBuildLayout Guest device layout a build was made with (after inheritance from its base template): `rootfs` (no workspace slots; block volumes cannot be mounted) or `block-v1`. Omitted when the build did not record it (builds from before layouts were recorded); creating a sandbox with block mounts from such a template is then decided by its node.
+type TemplateBuildLayout string
 
 // TemplateBuildLogsResponse defines model for TemplateBuildLogsResponse.
 type TemplateBuildLogsResponse struct {
@@ -1581,7 +1614,7 @@ type TemplateBuildStartV2 struct {
 	// Steps List of steps to execute in the template build
 	Steps *[]TemplateStep `json:"steps,omitempty"`
 
-	// WorkspaceSlotCapacityGiB Capacity of each workspace block slot of a `block-v1` template, one entry per slot (at most 4). A block volume mounts into a slot of exactly its capacity. Required with `layout: block-v1`; a build from another template inherits that template's slots when both fields are omitted.
+	// WorkspaceSlotCapacityGiB Capacity of each workspace block slot of a `block-v1` template, one entry per slot (at most 4). A block volume mounts into a slot whose capacity is at most the volume's (the slot capacity is a minimum, so build with the smallest tier the template should host). Required with `layout: block-v1`; a build from another template inherits that template's slots when both fields are omitted.
 	WorkspaceSlotCapacityGiB *[]int64 `json:"workspaceSlotCapacityGiB,omitempty"`
 }
 

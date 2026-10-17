@@ -67,7 +67,7 @@ func blockSandbox() sandbox.Sandbox {
 	return sandbox.Sandbox{
 		EnvdVersion: minEnvdVersionForBlockVolumes,
 		VolumeMounts: []*types.SandboxVolumeMountConfig{
-			{ID: uuid.NewString(), Name: "shared", Path: "/shared", },
+			{ID: uuid.NewString(), Name: "shared", Path: "/shared"},
 			{ID: uuid.NewString(), Name: "ws", Path: "/workspace", Backend: types.VolumeBackendBlock},
 		},
 	}

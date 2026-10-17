@@ -30,7 +30,7 @@ func (f fakeTemplateManagerClient) DeleteBuild(context.Context, uuid.UUID, strin
 	return nil
 }
 
-func (f fakeTemplateManagerClient) SetFinished(context.Context, uuid.UUID, int64, string, string, string) error {
+func (f fakeTemplateManagerClient) SetFinished(context.Context, uuid.UUID, int64, string, string, string, TemplateLayout) error {
 	return f.setFinishedError
 }
 

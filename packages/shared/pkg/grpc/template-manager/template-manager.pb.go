@@ -1122,8 +1122,16 @@ type TemplateBuildMetadata struct {
 	// Shared with the orchestrator so the API can match the build's scheduling
 	// metadata against create/resume responses without a separate format.
 	SchedulingMetadata *orchestrator.SchedulingMetadata `protobuf:"bytes,5,opt,name=schedulingMetadata,proto3" json:"schedulingMetadata,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Device layout the template was built with, after inheritance from a base
+	// template: empty (rootfs only) or "block-v1". Always set by
+	// template-managers that know layouts; unset means the template-manager
+	// predates them and the layout is unknown. The API persists it so it can
+	// report and pre-check a template's layout without reading its metadata.
+	Layout *string `protobuf:"bytes,6,opt,name=layout,proto3,oneof" json:"layout,omitempty"`
+	// Capacity of each workspace slot of a "block-v1" template, in bytes.
+	WorkspaceSlotCapacityBytes []int64 `protobuf:"varint,7,rep,packed,name=workspaceSlotCapacityBytes,proto3" json:"workspaceSlotCapacityBytes,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *TemplateBuildMetadata) Reset() {
@@ -1187,6 +1195,20 @@ func (x *TemplateBuildMetadata) GetFirecrackerVersion() string {
 func (x *TemplateBuildMetadata) GetSchedulingMetadata() *orchestrator.SchedulingMetadata {
 	if x != nil {
 		return x.SchedulingMetadata
+	}
+	return nil
+}
+
+func (x *TemplateBuildMetadata) GetLayout() string {
+	if x != nil && x.Layout != nil {
+		return *x.Layout
+	}
+	return ""
+}
+
+func (x *TemplateBuildMetadata) GetWorkspaceSlotCapacityBytes() []int64 {
+	if x != nil {
+		return x.WorkspaceSlotCapacityBytes
 	}
 	return nil
 }
@@ -1484,13 +1506,16 @@ const file_template_manager_proto_rawDesc = "" +
 	"\abuildID\x18\x01 \x01(\tR\abuildID\x12\x1e\n" +
 	"\n" +
 	"templateID\x18\x02 \x01(\tR\n" +
-	"templateID\"\x80\x02\n" +
+	"templateID\"\xe8\x02\n" +
 	"\x15TemplateBuildMetadata\x12$\n" +
 	"\rrootfsSizeKey\x18\x01 \x01(\x05R\rrootfsSizeKey\x12&\n" +
 	"\x0eenvdVersionKey\x18\x02 \x01(\tR\x0eenvdVersionKey\x12$\n" +
 	"\rkernelVersion\x18\x03 \x01(\tR\rkernelVersion\x12.\n" +
 	"\x12firecrackerVersion\x18\x04 \x01(\tR\x12firecrackerVersion\x12C\n" +
-	"\x12schedulingMetadata\x18\x05 \x01(\v2\x13.SchedulingMetadataR\x12schedulingMetadata\"\x83\x02\n" +
+	"\x12schedulingMetadata\x18\x05 \x01(\v2\x13.SchedulingMetadataR\x12schedulingMetadata\x12\x1b\n" +
+	"\x06layout\x18\x06 \x01(\tH\x00R\x06layout\x88\x01\x01\x12>\n" +
+	"\x1aworkspaceSlotCapacityBytes\x18\a \x03(\x03R\x1aworkspaceSlotCapacityBytesB\t\n" +
+	"\a_layout\"\x83\x02\n" +
 	"\x15TemplateBuildLogEntry\x128\n" +
 	"\ttimestamp\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1f\n" +
@@ -1623,6 +1648,7 @@ func file_template_manager_proto_init() {
 	}
 	file_template_manager_proto_msgTypes[9].OneofWrappers = []any{}
 	file_template_manager_proto_msgTypes[10].OneofWrappers = []any{}
+	file_template_manager_proto_msgTypes[12].OneofWrappers = []any{}
 	file_template_manager_proto_msgTypes[14].OneofWrappers = []any{}
 	file_template_manager_proto_msgTypes[15].OneofWrappers = []any{}
 	type x struct{}

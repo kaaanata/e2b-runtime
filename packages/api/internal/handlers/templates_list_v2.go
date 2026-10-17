@@ -97,7 +97,7 @@ func (a *APIStore) GetV2Templates(c *gin.Context, params api.GetV2TemplatesParam
 			diskMB = *item.BuildTotalDiskSizeMb
 		}
 
-		templates = append(templates, &api.Template{
+		tpl := &api.Template{
 			TemplateID:    item.TemplateID,
 			BuildID:       item.BuildID.String(),
 			CpuCount:      api.CPUCount(item.BuildVcpu),
@@ -114,7 +114,9 @@ func (a *APIStore) GetV2Templates(c *gin.Context, params api.GetV2TemplatesParam
 			BuildStatus:   getCorrespondingTemplateBuildStatus(ctx, item.BuildStatus),
 			CreatedBy:     createdBy,
 			EnvdVersion:   envdVersion,
-		})
+		}
+		tpl.Layout, tpl.WorkspaceSlotCapacityGiB = templateBuildLayoutToAPI(item.BuildLayout, item.BuildWorkspaceSlotCapacityBytes)
+		templates = append(templates, tpl)
 	}
 
 	templates = pagination.ProcessResultsWithHeader(c, templates, func(t *api.Template) (time.Time, string) {
