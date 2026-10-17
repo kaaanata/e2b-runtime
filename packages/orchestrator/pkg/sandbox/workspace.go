@@ -148,6 +148,8 @@ type workspaceSet struct {
 	layout      metadata.WorkspaceLayout
 	bound       []*boundWorkspace
 	drives      []fc.WorkspaceDrive
+	// releaseWait overrides workspaceReleaseWait (tests).
+	releaseWait time.Duration
 
 	mu sync.Mutex
 }
@@ -440,13 +442,18 @@ func (w *workspaceSet) release(ctx context.Context, exited <-chan struct{}) erro
 		return nil
 	}
 
-	timer := time.NewTimer(workspaceReleaseWait)
+	wait := workspaceReleaseWait
+	if w.releaseWait > 0 {
+		wait = w.releaseWait
+	}
+
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 
 	select {
 	case <-exited:
 	case <-timer.C:
-		return fmt.Errorf("firecracker of sandbox %s did not exit within %s; keeping %d workspace holder record(s)", w.sandboxID, workspaceReleaseWait, len(held))
+		return fmt.Errorf("firecracker of sandbox %s did not exit within %s; keeping %d workspace holder record(s)", w.sandboxID, wait, len(held))
 	}
 
 	var errs []error
