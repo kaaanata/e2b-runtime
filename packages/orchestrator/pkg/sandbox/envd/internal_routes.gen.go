@@ -9,7 +9,10 @@ var specInternalPaths = []string{
 	"/collapse",
 	"/freeze",
 	"/fsfreeze",
+	"/fsfreeze-set",
 	"/fsthaw",
+	"/fsthaw-set",
 	"/init",
 	"/unfreeze",
+	"/volumes/resize",
 }

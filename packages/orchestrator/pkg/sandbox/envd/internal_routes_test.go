@@ -102,6 +102,9 @@ func TestIsInternalPath(t *testing.T) {
 		{name: "collapse", path: "/collapse", internal: true},
 		{name: "fsfreeze", path: "/fsfreeze", internal: true},
 		{name: "fsthaw", path: "/fsthaw", internal: true},
+		{name: "fsfreeze-set", path: "/fsfreeze-set", internal: true},
+		{name: "fsthaw-set", path: "/fsthaw-set", internal: true},
+		{name: "volumes resize", path: "/volumes/resize", internal: true},
 		// Absent from the spec, so only the hand-maintained list covers it.
 		{name: "upgrade", path: "/upgrade", internal: true},
 

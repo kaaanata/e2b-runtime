@@ -18,18 +18,32 @@ func TestMountLedger_HandoverRoundTrip(t *testing.T) {
 	a := &API{}
 	a.ImportMounts([]*upgrade.MountEntry{
 		{Path: "/mnt/a", LifecycleId: "lc-1"},
-		{Path: "/mnt/b", LifecycleId: "lc-2"},
+		{Path: "/mnt/b", LifecycleId: "lc-2", SourceType: "nfs"},
+		{Path: "/mnt/c", LifecycleId: "lc-3", SourceType: "block", Device: "/dev/vdb"},
 	})
 
-	got := map[string]string{}
+	got := map[string]*upgrade.MountEntry{}
 	for _, m := range a.ExportMounts() {
-		got[m.GetPath()] = m.GetLifecycleId()
+		got[m.GetPath()] = m
 	}
-	assert.Equal(t, map[string]string{"/mnt/a": "lc-1", "/mnt/b": "lc-2"}, got)
+	require.Len(t, got, 3)
+	// An entry from an envd predating source_type is exported as nfs: that is the
+	// only kind it could have mounted, and the new envd must not treat it as a
+	// block volume (which would put it in the freeze set).
+	assert.Equal(t, "lc-1", got["/mnt/a"].GetLifecycleId())
+	assert.Equal(t, "nfs", got["/mnt/a"].GetSourceType())
+	assert.Empty(t, got["/mnt/a"].GetDevice())
+	assert.Equal(t, "nfs", got["/mnt/b"].GetSourceType())
+	assert.Equal(t, "lc-3", got["/mnt/c"].GetLifecycleId())
+	assert.Equal(t, "block", got["/mnt/c"].GetSourceType())
+	assert.Equal(t, "/dev/vdb", got["/mnt/c"].GetDevice())
+
+	// Only the block mount is in the freeze set.
+	assert.Equal(t, []string{"/mnt/c"}, a.blockMountpoints())
 }
 
 // TestImportedMountLedger_SkipsRemountForSameLifecycle is the point of carrying
-// the ledger: setupNFS consults it (mountedPaths.Load + shouldRemountNFS), and a
+// the ledger: setupVolumes consults it (loadMount + shouldRemountNFS), and a
 // path carried across the upgrade with an unchanged lifecycle must NOT be
 // remounted — leaving the still-live kernel mount in place (no ESTALE). A changed
 // lifecycle still triggers a remount.
@@ -39,9 +53,9 @@ func TestImportedMountLedger_SkipsRemountForSameLifecycle(t *testing.T) {
 	a := &API{}
 	a.ImportMounts([]*upgrade.MountEntry{{Path: "/mnt/a", LifecycleId: "lc-1"}})
 
-	v, ok := a.mountedPaths.Load("/mnt/a")
+	record, ok := a.loadMount("/mnt/a")
 	require.True(t, ok, "carried mount must be present in the ledger")
-	mountedLifecycle, _ := v.(string)
+	mountedLifecycle := record.LifecycleID
 
 	assert.False(t, shouldRemountNFS(true, mountedLifecycle, "lc-1"),
 		"a live mount carried across the upgrade must not be remounted for the same lifecycle")

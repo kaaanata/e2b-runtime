@@ -47,6 +47,45 @@ func (e FreezeResultMode) Valid() bool {
 	}
 }
 
+// Defines values for FsFreezeSetResultState.
+const (
+	Failed FsFreezeSetResultState = "failed"
+	Frozen FsFreezeSetResultState = "frozen"
+	Thawed FsFreezeSetResultState = "thawed"
+)
+
+// Valid indicates whether the value is a known member of the FsFreezeSetResultState enum.
+func (e FsFreezeSetResultState) Valid() bool {
+	switch e {
+	case Failed:
+		return true
+	case Frozen:
+		return true
+	case Thawed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VolumeMountSourceType.
+const (
+	Block VolumeMountSourceType = "block"
+	Nfs   VolumeMountSourceType = "nfs"
+)
+
+// Valid indicates whether the value is a known member of the VolumeMountSourceType enum.
+func (e VolumeMountSourceType) Valid() bool {
+	switch e {
+	case Block:
+		return true
+	case Nfs:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PostFreezeParamsMode.
 const (
 	PostFreezeParamsModeHierarchy PostFreezeParamsMode = "hierarchy"
@@ -173,6 +212,50 @@ type FreezeResult struct {
 // FreezeResultMode Which sweep actually ran. Echoed back rather than inferred from the flag, so a caller can tell that envd honoured what it asked for
 type FreezeResultMode string
 
+// FsFreezeSetRequest defines model for FsFreezeSetRequest.
+type FsFreezeSetRequest struct {
+	// OperationToken Caller-chosen opaque token naming this freeze. A later GET /fsfreeze-set
+	// with the same token reports what happened when the HTTP response was
+	// lost, and POST /fsthaw-set with it thaws exactly the set that froze.
+	// Repeating a POST /fsfreeze-set with a token that already froze is a no-op
+	// that returns the recorded result.
+	OperationToken string `json:"operation_token"`
+}
+
+// FsFreezeSetResult defines model for FsFreezeSetResult.
+type FsFreezeSetResult struct {
+	// Error On state=failed, the freeze error
+	Error *string `json:"error,omitempty"`
+
+	// FailedMountpoint On state=failed, the mountpoint whose freeze failed
+	FailedMountpoint *string `json:"failed_mountpoint,omitempty"`
+
+	// Frozen Mountpoints that froze, in the order they froze. On state=failed this is what was rolled back.
+	Frozen []string `json:"frozen"`
+
+	// Mountpoints The mount set the server derived for this operation, in freeze order (block volumes deepest path first, then /)
+	Mountpoints    *[]string `json:"mountpoints,omitempty"`
+	OperationToken string    `json:"operation_token"`
+
+	// State frozen: every mountpoint in the set is frozen. thawed: the set has been
+	// thawed (by /fsthaw-set, or by the rollback after a partial failure).
+	// failed: the freeze did not complete; the mountpoints that had frozen were
+	// thawed again in reverse order before this was reported.
+	State FsFreezeSetResultState `json:"state"`
+
+	// ThawErrors Mountpoints whose thaw failed (the set may be partially frozen; the orchestrator must not resume the VM until this is empty)
+	ThawErrors *[]string `json:"thaw_errors,omitempty"`
+
+	// Thawed Mountpoints that have since been thawed, in the order they thawed
+	Thawed *[]string `json:"thawed,omitempty"`
+}
+
+// FsFreezeSetResultState frozen: every mountpoint in the set is frozen. thawed: the set has been
+// thawed (by /fsthaw-set, or by the rollback after a partial failure).
+// failed: the freeze did not complete; the mountpoints that had frozen were
+// thawed again in reverse order before this was reported.
+type FsFreezeSetResultState string
+
 // Metrics Resource usage metrics
 type Metrics struct {
 	// CpuCount Number of CPU cores
@@ -206,12 +289,67 @@ type Metrics struct {
 	Ts *int64 `json:"ts,omitempty"`
 }
 
-// VolumeMount Volume mount configuration
+// VolumeMount One volume to mount inside the sandbox. The union is discriminated by
+// `source_type`; it stays wire-compatible with the original NFS-only shape,
+// so an orchestrator predating block volumes keeps sending
+// `{nfs_target, path}` and is read as `source_type: nfs`.
+//
+//   - `nfs`: `nfs_target` is required; `mount_options`, when present, replaces
+//     envd's built-in option set after whitelist validation (see the field).
+//   - `block`: `fs_uuid` is required; envd resolves the guest block device by
+//     filesystem UUID, checks `capacity_bytes` when supplied and mounts it as
+//     ext4 at `path`.
 type VolumeMount struct {
-	// NfsTarget Server target address
-	NfsTarget string `json:"nfs_target"`
+	// CapacityBytes Block only. Expected device size. When supplied, a device smaller than this fails the mount.
+	CapacityBytes *int64 `json:"capacity_bytes,omitempty"`
+
+	// DeviceId Block only. The host-side drive id of the attached device; informational, carried into logs.
+	DeviceId *string `json:"device_id,omitempty"`
+
+	// FormatVersion Block only. Version of the on-disk layout the host formatted the volume with.
+	FormatVersion *int `json:"format_version,omitempty"`
+
+	// FsUuid Block only. Filesystem UUID the guest device is found by (`blkid -U`).
+	FsUuid *string `json:"fs_uuid,omitempty"`
+
+	// MountOptions NFS only. Mount options (one `key` or `key=value` per entry) that replace
+	// envd's built-in option set. Every entry must pass envd's whitelist (sync,
+	// async, rsize, wsize, proto=tcp, mountproto=tcp, port, mountport, nfsvers=3,
+	// noacl, noac, ac, lookupcache, actimeo, acregmin, acregmax, acdirmin,
+	// acdirmax, retry, fg, hard, nolock, local_lock); an entry outside it fails
+	// the whole /init. `nolock` is forced when neither `nolock` nor `local_lock`
+	// is given, because the NFS proxy has no lock manager. Absent means envd's
+	// built-in options, exactly as before this field existed.
+	MountOptions *[]string `json:"mount_options,omitempty"`
+
+	// NfsTarget Server target address (`host:/export`). NFS only; required when source_type is nfs or omitted.
+	NfsTarget *string `json:"nfs_target,omitempty"`
 
 	// Path Mount path inside the sandbox
+	Path string `json:"path"`
+
+	// SourceType Which kind of volume this is. Omitted means nfs.
+	SourceType *VolumeMountSourceType `json:"source_type,omitempty"`
+}
+
+// VolumeMountSourceType Which kind of volume this is. Omitted means nfs.
+type VolumeMountSourceType string
+
+// VolumeResizeRequest defines model for VolumeResizeRequest.
+type VolumeResizeRequest struct {
+	// Path Mount path of a block volume envd mounted through /init. Only paths from envd's own ledger are accepted.
+	Path string `json:"path"`
+}
+
+// VolumeResizeResult defines model for VolumeResizeResult.
+type VolumeResizeResult struct {
+	// Device The guest block device resize2fs ran against
+	Device string `json:"device"`
+
+	// Output resize2fs combined output, for the orchestrator's log
+	Output *string `json:"output,omitempty"`
+
+	// Path The mount path that was grown
 	Path string `json:"path"`
 }
 
@@ -317,6 +455,11 @@ type PostFreezeParams struct {
 // PostFreezeParamsMode defines parameters for PostFreeze.
 type PostFreezeParamsMode string
 
+// GetFsfreezeSetParams defines parameters for GetFsfreezeSet.
+type GetFsfreezeSetParams struct {
+	OperationToken string `form:"operation_token" json:"operation_token"`
+}
+
 // PostInitJSONBody defines parameters for PostInit.
 type PostInitJSONBody struct {
 	// AccessToken Access token for secure access to envd service
@@ -351,8 +494,17 @@ type PostFilesMultipartRequestBody PostFilesMultipartBody
 // PostFilesComposeJSONRequestBody defines body for PostFilesCompose for application/json ContentType.
 type PostFilesComposeJSONRequestBody = ComposeRequest
 
+// PostFsfreezeSetJSONRequestBody defines body for PostFsfreezeSet for application/json ContentType.
+type PostFsfreezeSetJSONRequestBody = FsFreezeSetRequest
+
+// PostFsthawSetJSONRequestBody defines body for PostFsthawSet for application/json ContentType.
+type PostFsthawSetJSONRequestBody = FsFreezeSetRequest
+
 // PostInitJSONRequestBody defines body for PostInit for application/json ContentType.
 type PostInitJSONRequestBody PostInitJSONBody
+
+// PostVolumesResizeJSONRequestBody defines body for PostVolumesResize for application/json ContentType.
+type PostVolumesResizeJSONRequestBody = VolumeResizeRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -377,9 +529,18 @@ type ServerInterface interface {
 	// PostFsfreeze Freeze the guest rootfs (FIFREEZE) before a filesystem-only pause so it is flushed to a consistent on-disk state, closing the sync->pause race. Idempotent. On a successful filesystem-only pause the VM is rebooted, so no thaw is needed; the orchestrator thaws only on the pause-failure path.
 	// (POST /fsfreeze)
 	PostFsfreeze(w http.ResponseWriter, r *http.Request)
+	// GetFsfreezeSet Report the recorded outcome of a mount-set freeze, for a caller whose POST response was lost.
+	// (GET /fsfreeze-set)
+	GetFsfreezeSet(w http.ResponseWriter, r *http.Request, params GetFsfreezeSetParams)
+	// PostFsfreezeSet Freeze the mount set {every block volume envd mounted (deepest path first), then /} before a checkpoint. The server derives the set from its own ledger; the caller only names the operation.
+	// (POST /fsfreeze-set)
+	PostFsfreezeSet(w http.ResponseWriter, r *http.Request)
 	// PostFsthaw Thaw the guest rootfs (FITHAW). Intended ONLY for the orchestrator's pause-failure rollback path, so a frozen filesystem cannot leave the live VM deadlocked. Idempotent.
 	// (POST /fsthaw)
 	PostFsthaw(w http.ResponseWriter, r *http.Request)
+	// PostFsthawSet Thaw the mount set a /fsfreeze-set froze, in reverse order (/ first). The orchestrator's rollback path; a successful checkpoint reboots or destroys the VM instead.
+	// (POST /fsthaw-set)
+	PostFsthawSet(w http.ResponseWriter, r *http.Request)
 	// GetHealth Check the health of the service
 	// (GET /health)
 	GetHealth(w http.ResponseWriter, r *http.Request)
@@ -392,6 +553,9 @@ type ServerInterface interface {
 	// PostUnfreeze Unfreeze user/pty cgroups. Intended ONLY for the orchestrator's pause-failure rollback path; the normal resume thaw happens via /init's deferred unfreeze, not here.
 	// (POST /unfreeze)
 	PostUnfreeze(w http.ResponseWriter, r *http.Request)
+	// PostVolumesResize Grow the ext4 filesystem of a mounted block volume to its device size (online resize2fs). Used after the host enlarged the backing image of a paused sandbox and re-attached it.
+	// (POST /volumes/resize)
+	PostVolumesResize(w http.ResponseWriter, r *http.Request)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -440,9 +604,27 @@ func (_ Unimplemented) PostFsfreeze(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// GetFsfreezeSet Report the recorded outcome of a mount-set freeze, for a caller whose POST response was lost.
+// (GET /fsfreeze-set)
+func (_ Unimplemented) GetFsfreezeSet(w http.ResponseWriter, r *http.Request, params GetFsfreezeSetParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// PostFsfreezeSet Freeze the mount set {every block volume envd mounted (deepest path first), then /} before a checkpoint. The server derives the set from its own ledger; the caller only names the operation.
+// (POST /fsfreeze-set)
+func (_ Unimplemented) PostFsfreezeSet(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // PostFsthaw Thaw the guest rootfs (FITHAW). Intended ONLY for the orchestrator's pause-failure rollback path, so a frozen filesystem cannot leave the live VM deadlocked. Idempotent.
 // (POST /fsthaw)
 func (_ Unimplemented) PostFsthaw(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// PostFsthawSet Thaw the mount set a /fsfreeze-set froze, in reverse order (/ first). The orchestrator's rollback path; a successful checkpoint reboots or destroys the VM instead.
+// (POST /fsthaw-set)
+func (_ Unimplemented) PostFsthawSet(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -467,6 +649,12 @@ func (_ Unimplemented) GetMetrics(w http.ResponseWriter, r *http.Request) {
 // PostUnfreeze Unfreeze user/pty cgroups. Intended ONLY for the orchestrator's pause-failure rollback path; the normal resume thaw happens via /init's deferred unfreeze, not here.
 // (POST /unfreeze)
 func (_ Unimplemented) PostUnfreeze(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// PostVolumesResize Grow the ext4 filesystem of a mounted block volume to its device size (online resize2fs). Used after the host enlarged the backing image of a paused sandbox and re-attached it.
+// (POST /volumes/resize)
+func (_ Unimplemented) PostVolumesResize(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -738,11 +926,72 @@ func (siw *ServerInterfaceWrapper) PostFsfreeze(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// GetFsfreezeSet operation middleware
+func (siw *ServerInterfaceWrapper) GetFsfreezeSet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetFsfreezeSetParams
+
+	// ------------- Required query parameter "operation_token" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "operation_token", r.URL.Query(), &params.OperationToken, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "operation_token"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "operation_token", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetFsfreezeSet(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PostFsfreezeSet operation middleware
+func (siw *ServerInterfaceWrapper) PostFsfreezeSet(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PostFsfreezeSet(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // PostFsthaw operation middleware
 func (siw *ServerInterfaceWrapper) PostFsthaw(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.PostFsthaw(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PostFsthawSet operation middleware
+func (siw *ServerInterfaceWrapper) PostFsthawSet(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PostFsthawSet(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -799,6 +1048,20 @@ func (siw *ServerInterfaceWrapper) PostUnfreeze(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.PostUnfreeze(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PostVolumesResize operation middleware
+func (siw *ServerInterfaceWrapper) PostVolumesResize(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PostVolumesResize(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -944,6 +1207,18 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/fsthaw", wrapper.PostFsthaw)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/fsfreeze-set", wrapper.GetFsfreezeSet)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/fsfreeze-set", wrapper.PostFsfreezeSet)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/fsthaw-set", wrapper.PostFsthawSet)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/volumes/resize", wrapper.PostVolumesResize)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/envs", wrapper.GetEnvs)
