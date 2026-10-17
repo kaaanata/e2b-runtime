@@ -173,7 +173,7 @@ func (f *fakeRunner) exec(name string, args []string) ([]byte, error) {
 		return nil, errors.New("mkfs.ext4 without -U")
 	case "tune2fs":
 		return nil, writeFakeSB(last, uuid.NewString())
-	case "e2fsck":
+	case "e2fsck", "resize2fs":
 		return nil, nil
 	case "blkid":
 		raw := make([]byte, 36)

@@ -43,36 +43,36 @@ func TestWorkspaceSlots(t *testing.T) {
 	}{
 		"none": {drives: nil, wantSlots: []int{}},
 		"in order": {
-			drives:    []WorkspaceDrive{{"workspace0", "/a"}, {"workspace1", "/b"}},
+			drives:    []WorkspaceDrive{{DriveID: "workspace0", PathOnHost: "/a"}, {DriveID: "workspace1", PathOnHost: "/b"}},
 			wantSlots: []int{0, 1},
 		},
 		"any order, sparse": {
-			drives:    []WorkspaceDrive{{"workspace3", "/a"}, {"workspace1", "/b"}},
+			drives:    []WorkspaceDrive{{DriveID: "workspace3", PathOnHost: "/a"}, {DriveID: "workspace1", PathOnHost: "/b"}},
 			wantSlots: []int{3, 1},
 		},
 		"unknown id": {
-			drives:  []WorkspaceDrive{{"rootfs", "/a"}},
+			drives:  []WorkspaceDrive{{DriveID: "rootfs", PathOnHost: "/a"}},
 			wantErr: "unknown workspace drive id",
 		},
 		"past the last slot": {
-			drives:  []WorkspaceDrive{{WorkspaceDriveID(MaxWorkspaceSlots), "/a"}},
+			drives:  []WorkspaceDrive{{DriveID: WorkspaceDriveID(MaxWorkspaceSlots), PathOnHost: "/a"}},
 			wantErr: "unknown workspace drive id",
 		},
 		"duplicate": {
-			drives:  []WorkspaceDrive{{"workspace0", "/a"}, {"workspace0", "/b"}},
+			drives:  []WorkspaceDrive{{DriveID: "workspace0", PathOnHost: "/a"}, {DriveID: "workspace0", PathOnHost: "/b"}},
 			wantErr: "bound twice",
 		},
 		"relative path": {
-			drives:  []WorkspaceDrive{{"workspace0", "a"}},
+			drives:  []WorkspaceDrive{{DriveID: "workspace0", PathOnHost: "a"}},
 			wantErr: "absolute host path",
 		},
 		"empty path": {
-			drives:  []WorkspaceDrive{{"workspace0", ""}},
+			drives:  []WorkspaceDrive{{DriveID: "workspace0", PathOnHost: ""}},
 			wantErr: "absolute host path",
 		},
 		"too many": {
 			drives: []WorkspaceDrive{
-				{"workspace0", "/a"}, {"workspace1", "/a"}, {"workspace2", "/a"}, {"workspace3", "/a"}, {"workspace0", "/a"},
+				{DriveID: "workspace0", PathOnHost: "/a"}, {DriveID: "workspace1", PathOnHost: "/a"}, {DriveID: "workspace2", PathOnHost: "/a"}, {DriveID: "workspace3", PathOnHost: "/a"}, {DriveID: "workspace0", PathOnHost: "/a"},
 			},
 			wantErr: "exceed",
 		},
@@ -97,10 +97,10 @@ func TestWorkspaceSlots(t *testing.T) {
 func TestSortWorkspaceDrives(t *testing.T) {
 	t.Parallel()
 
-	in := []WorkspaceDrive{{"workspace3", "/d"}, {"bogus", "/x"}, {"workspace0", "/a"}, {"workspace2", "/c"}}
+	in := []WorkspaceDrive{{DriveID: "workspace3", PathOnHost: "/d"}, {DriveID: "bogus", PathOnHost: "/x"}, {DriveID: "workspace0", PathOnHost: "/a"}, {DriveID: "workspace2", PathOnHost: "/c"}}
 	got := sortWorkspaceDrives(in)
 
-	assert.Equal(t, []WorkspaceDrive{{"workspace0", "/a"}, {"workspace2", "/c"}, {"workspace3", "/d"}, {"bogus", "/x"}}, got)
+	assert.Equal(t, []WorkspaceDrive{{DriveID: "workspace0", PathOnHost: "/a"}, {DriveID: "workspace2", PathOnHost: "/c"}, {DriveID: "workspace3", PathOnHost: "/d"}, {DriveID: "bogus", PathOnHost: "/x"}}, got)
 	assert.Equal(t, "workspace3", in[0].DriveID, "the caller's slice is not reordered")
 	assert.Empty(t, sortWorkspaceDrives(nil))
 }
@@ -169,4 +169,42 @@ func TestSetWorkspaceDrive(t *testing.T) {
 	assert.Equal(t, rootfs["is_read_only"], ws["is_read_only"])
 	assert.Equal(t, "Sync", ws["io_engine"])
 	assert.Equal(t, rootfs["rate_limiter"], ws["rate_limiter"], "the slot gets the same limiter as the rootfs")
+}
+
+// TestPatchDrivePath pins the size refresh of a grown workspace volume: a
+// PATCH naming the same in-namespace path, and nothing else (no rate limiter,
+// which would reset the one set right after).
+func TestPatchDrivePath(t *testing.T) {
+	t.Parallel()
+
+	dir, err := os.MkdirTemp("", "fc") //nolint:usetesting // sun_path limit, see newDriveAPIStub
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := dir + "/fc.sock"
+	ln, err := new(net.ListenConfig).Listen(t.Context(), "unix", socket)
+	require.NoError(t, err)
+
+	var got map[string]any
+	var gotID string
+	mux := http.NewServeMux()
+	mux.HandleFunc("PATCH /drives/{id}", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) || !assert.NoError(t, json.Unmarshal(body, &got)) {
+			w.WriteHeader(http.StatusBadRequest)
+
+			return
+		}
+		gotID = r.PathValue("id")
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	c := newApiClient(socket)
+	require.NoError(t, c.patchDrivePath(t.Context(), WorkspaceDriveID(2), "/fc-vm/workspace2.ext4"))
+
+	assert.Equal(t, "workspace2", gotID)
+	assert.Equal(t, map[string]any{"drive_id": "workspace2", "path_on_host": "/fc-vm/workspace2.ext4"}, got)
 }

@@ -357,6 +357,29 @@ func (c *apiClient) setDriveRateLimit(ctx context.Context, driveID string, confi
 	return nil
 }
 
+// patchDrivePath re-points a drive at pathOnHost with PATCH /drives/{id}. With
+// the same path it makes Firecracker re-open the backing file and pick up its
+// current size (a virtio-blk config-change interrupt tells the guest); it is
+// how a workspace volume grown while paused is presented to the restored VM.
+// Mirrors setDriveRateLimit, which PATCHes the same drive after a load.
+func (c *apiClient) patchDrivePath(ctx context.Context, driveID string, pathOnHost string) error {
+	params := operations.PatchGuestDriveByIDParams{
+		Context: ctx,
+		DriveID: driveID,
+		Body: &models.PartialDrive{
+			DriveID:    &driveID,
+			PathOnHost: pathOnHost,
+		},
+	}
+
+	_, err := c.client.Operations.PatchGuestDriveByID(&params)
+	if err != nil {
+		return fmt.Errorf("error patching drive %q path: %w", driveID, err)
+	}
+
+	return nil
+}
+
 func (c *apiClient) setNetworkInterface(ctx context.Context, ifaceID string, tapName string, tapMac string, txRateLimiter *models.RateLimiter) error {
 	networkConfig := operations.PutGuestNetworkInterfaceByIDParams{
 		Context: ctx,
