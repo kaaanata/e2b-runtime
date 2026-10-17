@@ -2,7 +2,6 @@ package metadata
 
 import (
 	"bytes"
-	"errors"
 	"path/filepath"
 	"testing"
 
@@ -177,7 +176,7 @@ func TestUnsupportedLayoutError_Message(t *testing.T) {
 	t.Parallel()
 
 	err := error(&UnsupportedLayoutError{Layout: "block-v9", Capabilities: []string{"x"}})
-	assert.True(t, errors.Is(err, ErrUnsupportedLayout))
+	require.ErrorIs(t, err, ErrUnsupportedLayout)
 	assert.Contains(t, err.Error(), `layout "block-v9"`)
 	assert.Contains(t, err.Error(), "[x]")
 }

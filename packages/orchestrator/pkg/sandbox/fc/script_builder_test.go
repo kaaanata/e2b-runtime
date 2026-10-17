@@ -177,7 +177,7 @@ func TestStartScriptBuilder_Build_WorkspaceDrives(t *testing.T) {
 		assert.Equal(t, "/fc-vm/rootfs.ext4", result.RootfsPath)
 
 		// Still one well-formed command chain.
-		for _, line := range strings.Split(strings.TrimSpace(result.Value), "\n") {
+		for line := range strings.SplitSeq(strings.TrimSpace(result.Value), "\n") {
 			if line == "" || strings.HasPrefix(line, "ip netns exec") {
 				continue
 			}

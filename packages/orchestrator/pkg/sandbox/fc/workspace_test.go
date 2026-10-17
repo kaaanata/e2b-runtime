@@ -121,9 +121,12 @@ func newDriveAPIStub(t *testing.T) (*apiClient, map[string]map[string]any) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT /drives/{id}", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
 		var drive map[string]any
-		require.NoError(t, json.Unmarshal(body, &drive))
+		if !assert.NoError(t, err) || !assert.NoError(t, json.Unmarshal(body, &drive)) {
+			w.WriteHeader(http.StatusBadRequest)
+
+			return
+		}
 		drives[r.PathValue("id")] = drive
 		w.WriteHeader(http.StatusNoContent)
 	})

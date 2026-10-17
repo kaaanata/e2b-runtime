@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
 
@@ -141,14 +142,14 @@ func baseLayerKey(indexVersion, provisionVersion, baseSource string, buildContex
 	// versa. Appended only for a non-legacy layout so every existing legacy key
 	// stays byte-identical.
 	if buildContext.Config.Layout != metadata.LayoutLegacy {
-		key := "layout:" + buildContext.Config.Layout
+		parts := []string{"layout", buildContext.Config.Layout}
 		if ws := buildContext.Config.Workspace; ws != nil {
-			key += ":" + strconv.Itoa(ws.Slots)
+			parts = append(parts, strconv.Itoa(ws.Slots))
 			for _, c := range ws.SlotCapacityBytes {
-				key += ":" + strconv.FormatInt(c, 10)
+				parts = append(parts, strconv.FormatInt(c, 10))
 			}
 		}
-		keys = append(keys, key)
+		keys = append(keys, strings.Join(parts, ":"))
 	}
 
 	// The rendered files differ between on and off while the template file set,
