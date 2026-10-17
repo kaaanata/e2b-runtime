@@ -17,6 +17,8 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/sandbox"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
 	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
+	"github.com/e2b-dev/infra/packages/db/pkg/types"
+	"github.com/e2b-dev/infra/packages/shared/pkg/apierrors"
 	"github.com/e2b-dev/infra/packages/shared/pkg/ginutils"
 	"github.com/e2b-dev/infra/packages/shared/pkg/id"
 	sbxlogger "github.com/e2b-dev/infra/packages/shared/pkg/logger/sandbox"
@@ -28,12 +30,30 @@ import (
 // bounding the parallel boots (and the result allocation) per request.
 const maxForkCount = 100
 
+// forkOrchestrator is the slice of *orchestrator.Orchestrator the fork handler
+// uses before the forks start: the record read and the in-place checkpoint.
+type forkOrchestrator interface {
+	GetSandbox(ctx context.Context, teamID uuid.UUID, sandboxID string) (sandbox.Sandbox, error)
+	CheckpointSandbox(ctx context.Context, teamID uuid.UUID, sandboxID string) error
+}
+
+func (a *APIStore) forkBackend() forkOrchestrator {
+	if a.forkBackendOverride != nil {
+		return a.forkBackendOverride
+	}
+
+	return a.orchestrator
+}
+
 // PostSandboxesSandboxIDFork forks a running sandbox: it checkpoints the
 // sandbox in place (snapshot it and resume it on its node, so the original
 // keeps running with its ID and expiration untouched) and creates count new
 // sandboxes from that snapshot under fresh IDs. Each fork succeeds or fails
 // independently: the response carries one result per requested fork, holding
 // either the created sandbox or the error that prevented it from starting.
+// Everything that refuses the whole request (bad input, a sandbox that is not
+// running, block volumes without allowSharedIdentity) is decided before the
+// checkpoint, so a refused fork leaves no snapshot or volume revision behind.
 func (a *APIStore) PostSandboxesSandboxIDFork(c *gin.Context, sandboxID api.SandboxID) {
 	ctx := c.Request.Context()
 
@@ -92,7 +112,9 @@ func (a *APIStore) PostSandboxesSandboxIDFork(c *gin.Context, sandboxID api.Sand
 		return
 	}
 
-	original, err := a.orchestrator.GetSandbox(ctx, teamID, sandboxID)
+	backend := a.forkBackend()
+
+	original, err := backend.GetSandbox(ctx, teamID, sandboxID)
 	if err != nil {
 		if errors.Is(err, sandbox.ErrNotFound) {
 			apiErr := forkHandleNotRunningSandbox(ctx, a, sandboxID, teamID)
@@ -113,10 +135,25 @@ func (a *APIStore) PostSandboxesSandboxIDFork(c *gin.Context, sandboxID api.Sand
 		return
 	}
 
+	// The checkpoint is a memory snapshot, so every fork of a sandbox with
+	// block volumes resumes the same memory and filesystem identity. Refuse
+	// that before checkpointing: the checkpoint would seal a revision of
+	// every block volume for forks that can never start.
+	allowSharedIdentity := sharedUtils.DerefOrDefault(body.AllowSharedIdentity, false)
+	if !allowSharedIdentity && hasBlockVolumeMounts(original.VolumeMounts) {
+		apierrors.SendAPIError(c, &api.APIError{
+			Code:      http.StatusConflict,
+			ErrorCode: errCodeSharedIdentityRequired,
+			ClientMsg: errMsgSharedIdentityRequired,
+		})
+
+		return
+	}
+
 	// Checkpoint the sandbox in place: it is briefly paused on its node,
 	// snapshotted, and resumed under the same execution ID, so the original
 	// keeps its ID, expiration, and concurrency slot.
-	err = a.orchestrator.CheckpointSandbox(ctx, teamID, sandboxID)
+	err = backend.CheckpointSandbox(ctx, teamID, sandboxID)
 	var transErr *sandbox.InvalidStateTransitionError
 
 	switch {
@@ -161,7 +198,7 @@ func (a *APIStore) PostSandboxesSandboxIDFork(c *gin.Context, sandboxID api.Sand
 				forkedSandboxID,
 				forkTimeout,
 				teamInfo,
-				a.buildResumeSandboxDataFromSnapshot(sandboxID, forkedSandboxID, nil, nil, sharedUtils.DerefOrDefault(body.AllowSharedIdentity, false)),
+				a.buildResumeSandboxDataFromSnapshot(sandboxID, forkedSandboxID, nil, nil, allowSharedIdentity, nil),
 				&c.Request.Header,
 				true,
 				false,
@@ -197,4 +234,15 @@ func forkHandleNotRunningSandbox(ctx context.Context, a *APIStore, sandboxID str
 	}
 
 	return apiErr
+}
+
+// hasBlockVolumeMounts reports whether a sandbox record mounts a block volume.
+func hasBlockVolumeMounts(mounts []*types.SandboxVolumeMountConfig) bool {
+	for _, m := range mounts {
+		if m.IsBlock() {
+			return true
+		}
+	}
+
+	return false
 }

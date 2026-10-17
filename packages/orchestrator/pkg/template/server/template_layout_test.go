@@ -93,3 +93,21 @@ func TestResolveTemplateLayout(t *testing.T) {
 		assert.Equal(t, codes.FailedPrecondition, status.Code(err))
 	})
 }
+
+func TestWithBuildLayout(t *testing.T) {
+	t.Parallel()
+
+	legacy := withBuildLayout(&templatemanager.TemplateBuildMetadata{EnvdVersionKey: "0.10.0"}, metadata.LayoutLegacy, nil)
+	require.NotNil(t, legacy.Layout, "a rootfs-only build still reports its layout")
+	assert.Empty(t, legacy.GetLayout())
+	assert.Empty(t, legacy.GetWorkspaceSlotCapacityBytes())
+	assert.Equal(t, "0.10.0", legacy.GetEnvdVersionKey())
+
+	ws := &metadata.WorkspaceLayout{Slots: 2, SlotCapacityBytes: []int64{1 << 30, 2 << 30}}
+	block := withBuildLayout(&templatemanager.TemplateBuildMetadata{}, metadata.LayoutBlockV1, ws)
+	assert.Equal(t, metadata.LayoutBlockV1, block.GetLayout())
+	assert.Equal(t, []int64{1 << 30, 2 << 30}, block.GetWorkspaceSlotCapacityBytes())
+
+	ws.SlotCapacityBytes[0] = 0
+	assert.Equal(t, int64(1<<30), block.GetWorkspaceSlotCapacityBytes()[0], "the metadata owns its copy")
+}

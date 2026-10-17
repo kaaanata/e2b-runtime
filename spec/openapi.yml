@@ -764,8 +764,8 @@ components:
         sandboxes are visible immediately. `cto` is close-to-open: a writer's
         changes are visible to a reader that opens the file after the writer
         closed it, at a fraction of the metadata cost. Omitted keeps the
-        sandbox's built-in options. Not accepted for block volumes, which have
-        a single writer.
+        sandbox's built-in options. Chosen per mount, not per volume. Rejected
+        with 400 for block volumes, which have a single writer.
       enum:
         - strict
         - cto
@@ -1032,6 +1032,14 @@ components:
             may be lost. A no-op for snapshots that contain no memory. Rejected with
             an error in environments where this capability is not enabled, never
             silently downgraded to a memory restore.
+        volumeMounts:
+          type: array
+          description: >-
+            Grow block volumes of a paused sandbox before it runs again, one
+            entry per volume (by name; at most one entry per volume). Omitted
+            volumes keep their capacity. See `ResumeVolumeMount`.
+          items:
+            $ref: "#/components/schemas/ResumeVolumeMount"
 
     ConnectSandbox:
       type: object
@@ -1052,6 +1060,41 @@ components:
             flushed before the pause may be lost. A no-op for snapshots that contain
             no memory. Rejected with an error in environments where this capability
             is not enabled, never silently downgraded to a memory restore.
+        volumeMounts:
+          type: array
+          description: >-
+            Grow block volumes of a paused sandbox before it is resumed; refused with 409 (`error_code` `volume_resize_invalid`) when the sandbox is running, one
+            entry per volume (by name; at most one entry per volume). Omitted
+            volumes keep their capacity. See `ResumeVolumeMount`.
+          items:
+            $ref: "#/components/schemas/ResumeVolumeMount"
+
+    ResumeVolumeMount:
+      type: object
+      description: >-
+        A new capacity for one block volume of a paused sandbox, applied when
+        the sandbox resumes. `capacityGiB` must be one of the deployment's
+        capacity tiers (400 otherwise) and at least the volume's current
+        capacity (409 `volume_resize_invalid` when smaller; equal is a no-op).
+        Volumes only grow. Resuming a memory snapshot grows the disk device and
+        the guest grows the mounted filesystem online; resuming a
+        filesystem-only snapshot grows the filesystem before boot. The new
+        capacity is recorded on the volume once the sandbox runs, and the next
+        pause seals revisions of that size. If the resume fails, retry it with
+        the same capacity. Shared (NFS) volumes and names the snapshot does not
+        mount as block volumes are refused with 400.
+      required:
+        - name
+        - capacityGiB
+      properties:
+        name:
+          type: string
+          description: Name of a block volume the sandbox mounts
+        capacityGiB:
+          type: integer
+          format: int64
+          minimum: 1
+          description: New capacity of the volume in GiB
 
     SandboxTimeoutRequest:
       type: object
@@ -1123,7 +1166,8 @@ components:
             taken at that instant, so the forks share everything that was in
             memory: tokens, sessions, open connections and filesystem
             identities. Upstream services see the forks as the same client.
-            Without it such a fork is rejected with 409.
+            Without it the whole request is rejected with 409 before the
+            sandbox is checkpointed.
 
     SandboxForkResult:
       type: object
@@ -1300,6 +1344,17 @@ components:
           $ref: "#/components/schemas/EnvdVersion"
         buildStatus:
           $ref: "#/components/schemas/TemplateBuildStatus"
+        layout:
+          $ref: "#/components/schemas/TemplateBuildLayout"
+        workspaceSlotCapacityGiB:
+          description: >
+            Capacity of each workspace slot of the last successful build when it is `block-v1`, in GiB, one
+            entry per slot; a sandbox's block mounts take the slots in mount
+            order. Omitted for other layouts.
+          type: array
+          items:
+            type: integer
+            format: int64
 
     TemplateRequestResponseV3:
       required:
@@ -1436,6 +1491,17 @@ components:
           $ref: "#/components/schemas/DiskSizeMB"
         envdVersion:
           $ref: "#/components/schemas/EnvdVersion"
+        layout:
+          $ref: "#/components/schemas/TemplateBuildLayout"
+        workspaceSlotCapacityGiB:
+          description: >
+            Capacity of each workspace slot of a `block-v1` build, in GiB, one
+            entry per slot; a sandbox's block mounts take the slots in mount
+            order. Omitted for other layouts.
+          type: array
+          items:
+            type: integer
+            format: int64
 
     TemplateWithBuilds:
       required:
@@ -1688,8 +1754,10 @@ components:
         workspaceSlotCapacityGiB:
           description: >
             Capacity of each workspace block slot of a `block-v1` template, one
-            entry per slot (at most 4). A block volume mounts into a slot of
-            exactly its capacity. Required with `layout: block-v1`; a build from
+            entry per slot (at most 4). A block volume mounts into a slot whose
+            capacity is at most the volume's (the slot capacity is a minimum,
+            so build with the smallest tier the template should host).
+            Required with `layout: block-v1`; a build from
             another template inherits that template's slots when both fields are
             omitted.
           type: array
@@ -1708,6 +1776,18 @@ components:
         another template, inherits that template's layout, which cannot be
         changed).
       enum:
+        - block-v1
+
+    TemplateBuildLayout:
+      type: string
+      description: >
+        Guest device layout a build was made with (after inheritance from its
+        base template): `rootfs` (no workspace slots; block volumes cannot be
+        mounted) or `block-v1`. Omitted when the build did not record it
+        (builds from before layouts were recorded); creating a sandbox with
+        block mounts from such a template is then decided by its node.
+      enum:
+        - rootfs
         - block-v1
 
     TemplateBuildFileUpload:
@@ -2251,6 +2331,9 @@ components:
             Machine-readable semantic error code. Not a closed set; initial values:
             sandbox_capacity_unavailable, sandbox_placement_timeout,
             sandbox_no_compatible_node, sandbox_create_failed, internal_server_error.
+            Block volume refusals (409): block_volume_shared_identity_required,
+            volume_attached, volume_referenced_by_snapshot, volume_creating,
+            template_layout_mismatch, volume_resize_invalid.
         message:
           type: string
           description: Error
@@ -2292,12 +2375,16 @@ components:
       description: >
         `creating` until the volume's first image exists (block volumes only),
         `ready` once it can be mounted, `failed` if creation failed, `deleting`
-        while its images are being removed.
+        while its images are being removed. Once they are gone the volume is
+        `deleted`: `GET /volumes/{volumeID}` answers 404 from then on, and
+        `deleted` is only reported where a past request is replayed (an
+        `Idempotency-Key` repeat of the create or clone that made the volume).
       enum:
         - creating
         - ready
         - failed
         - deleting
+        - deleted
 
     Volume:
       type: object
@@ -2369,6 +2456,10 @@ components:
 
     NewVolume:
       type: object
+      description: >
+        A volume has no consistency profile of its own: `consistencyProfile`
+        is chosen per mount (`SandboxVolumeMount`) and only for shared (NFS)
+        volumes. Fields not listed here are ignored.
       properties:
         name:
           type: string
@@ -2742,7 +2833,17 @@ paths:
           $ref: "#/components/responses/500"
     post:
       summary: Create sandbox
-      description: Create a sandbox from the template
+      description: >
+        Create a sandbox from the template. Volume mounts are validated before
+        anything starts: an unknown volume, a bad or repeated path, a
+        `consistencyProfile` on a block volume, a block volume that is not
+        `ready`, block volumes on different nodes, or more than 4 block mounts
+        answer 400. 409 when a block volume is already mounted by another
+        sandbox (`error_code` `volume_attached`), or when the template build
+        (see `Template.layout`) has no workspace slot for a block mount: a
+        `rootfs` layout, fewer slots than block mounts, or a slot larger than
+        its volume (`template_layout_mismatch`; block mounts take the slots in
+        mount order).
       tags: [sandboxes]
       security:
         - ApiKeyAuth: []
@@ -2769,6 +2870,8 @@ paths:
           $ref: "#/components/responses/401"
         "400":
           $ref: "#/components/responses/400"
+        "409":
+          $ref: "#/components/responses/409"
         "500":
           $ref: "#/components/responses/500"
         "503":
@@ -3184,7 +3287,11 @@ paths:
         new sandboxes from that snapshot. Returns one result per requested
         fork, each carrying either the created sandbox or the error that
         prevented it from starting. A non-201 status means the request failed
-        before any fork was attempted.
+        before any fork was attempted, and before the checkpoint: a refused
+        fork leaves no snapshot and no block volume revision behind. 409 when
+        the sandbox is not running (e.g. paused) or when it mounts block
+        volumes and `allowSharedIdentity` is not true (`error_code`
+        `block_volume_shared_identity_required`).
       tags: [sandboxes]
       security:
         - ApiKeyAuth: []
@@ -3213,6 +3320,8 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/SandboxForkResult"
+        "400":
+          $ref: "#/components/responses/400"
         "409":
           $ref: "#/components/responses/409"
         "404":
@@ -4519,7 +4628,9 @@ paths:
   /volumes/{volumeID}:
     get:
       summary: Team volume
-      description: Get team volume info
+      description: >
+        Get team volume info. A block volume being deleted is still returned
+        (`state: deleting`) until its images are removed; after that, 404.
       tags: [volumes]
       security:
         - ApiKeyAuth: []
@@ -4547,7 +4658,12 @@ paths:
 
     delete:
       summary: Delete team volume
-      description: Delete a team volume
+      description: >
+        Delete a team volume. A block volume is refused with 409 while a
+        sandbox mounts it (`error_code` `volume_attached`), while a paused
+        sandbox's snapshot references one of its revisions
+        (`volume_referenced_by_snapshot`; killing that sandbox releases the
+        reference) or while it is still being created (`volume_creating`).
       tags: [volumes]
       security:
         - ApiKeyAuth: []

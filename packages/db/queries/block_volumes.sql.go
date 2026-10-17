@@ -429,6 +429,44 @@ func (q *Queries) GetVolumeRevision(ctx context.Context, arg GetVolumeRevisionPa
 	return i, err
 }
 
+const growBlockVolumeCapacity = `-- name: GrowBlockVolumeCapacity :exec
+UPDATE volumes SET capacity_bytes = $1
+WHERE id = $2 AND backend = 'block' AND head_incarnation_id = $3
+  AND capacity_bytes < $1
+`
+
+type GrowBlockVolumeCapacityParams struct {
+	CapacityBytes *int64
+	VolumeID      uuid.UUID
+	IncarnationID *uuid.UUID
+}
+
+// GrowBlockVolumeCapacity records a grown head incarnation's capacity as the
+// volume's. A grown incarnation that is not the head (none today) leaves the
+// volume's capacity as it is.
+func (q *Queries) GrowBlockVolumeCapacity(ctx context.Context, arg GrowBlockVolumeCapacityParams) error {
+	_, err := q.db.Exec(ctx, growBlockVolumeCapacity, arg.CapacityBytes, arg.VolumeID, arg.IncarnationID)
+	return err
+}
+
+const growVolumeIncarnationCapacity = `-- name: GrowVolumeIncarnationCapacity :exec
+UPDATE volume_incarnations SET capacity_bytes = $1
+WHERE id = $2 AND volume_id = $3 AND capacity_bytes < $1
+`
+
+type GrowVolumeIncarnationCapacityParams struct {
+	CapacityBytes int64
+	ID            uuid.UUID
+	VolumeID      uuid.UUID
+}
+
+// GrowVolumeIncarnationCapacity records that a resume grew an incarnation's
+// image. Capacities only grow, so a smaller value is a no-op.
+func (q *Queries) GrowVolumeIncarnationCapacity(ctx context.Context, arg GrowVolumeIncarnationCapacityParams) error {
+	_, err := q.db.Exec(ctx, growVolumeIncarnationCapacity, arg.CapacityBytes, arg.ID, arg.VolumeID)
+	return err
+}
+
 const incarnationAttachedSince = `-- name: IncarnationAttachedSince :one
 SELECT EXISTS (
     SELECT 1 FROM volume_attachments
@@ -973,6 +1011,28 @@ func (q *Queries) ReleaseSandboxAttachments(ctx context.Context, arg ReleaseSand
 		return nil, err
 	}
 	return items, nil
+}
+
+const releaseTemplateSnapshotVolumeRefs = `-- name: ReleaseTemplateSnapshotVolumeRefs :execrows
+DELETE FROM snapshot_volume_refs
+WHERE snapshot_build_id IN (
+    SELECT eba.build_id FROM env_build_assignments eba WHERE eba.env_id = $1
+    UNION
+    SELECT eb.id FROM env_builds eb WHERE eb.env_id = $1
+)
+`
+
+// ReleaseTemplateSnapshotVolumeRefs drops the block volume references of
+// every build of a template that is being deleted (a killed paused sandbox's
+// snapshot, or a discarded checkpoint): nothing can resume those builds, so
+// their revisions must no longer keep the volumes from being deleted. The
+// revisions themselves stay until the volume is deleted.
+func (q *Queries) ReleaseTemplateSnapshotVolumeRefs(ctx context.Context, templateID string) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseTemplateSnapshotVolumeRefs, templateID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const releaseVolumeAttachment = `-- name: ReleaseVolumeAttachment :exec

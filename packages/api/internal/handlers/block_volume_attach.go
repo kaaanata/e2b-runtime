@@ -65,6 +65,9 @@ type blockMountPlan struct {
 	revision queries.VolumeRevision
 	// cloneMode is the dboutbox clone mode (bindClone).
 	cloneMode string
+	// resizeToBytes, when non-zero, is the capacity a resume grows the
+	// volume to (bindExact only).
+	resizeToBytes int64
 }
 
 // blockVolumeAttacher implements orchestrator.VolumeAttacher.
@@ -77,9 +80,13 @@ type blockVolumeAttacher struct {
 	// clones are the incarnations Attach cloned for a fork (volume ->
 	// incarnation), deleted again by Release.
 	clones map[uuid.UUID]uuid.UUID
+	// bound are the slot bindings Attach returned, for Started.
+	bound []*orchestrator.SandboxWorkspaceSlot
 }
 
-type attachConflictError struct{ msg string }
+// attachConflictError refuses an attach with 409; code, when set, is the
+// response's error_code.
+type attachConflictError struct{ msg, code string }
 
 func (e attachConflictError) Error() string { return e.msg }
 
@@ -135,7 +142,7 @@ func (b *blockVolumeAttacher) Attach(ctx context.Context, clusterID uuid.UUID, s
 	case errors.As(err, &conflict):
 		b.discardForkClones(context.WithoutCancel(ctx), sandboxID, clones)
 
-		return nil, &api.APIError{Code: http.StatusConflict, ClientMsg: conflict.msg, Err: err}
+		return nil, &api.APIError{Code: http.StatusConflict, ErrorCode: conflict.code, ClientMsg: conflict.msg, Err: err}
 	case err != nil:
 		b.discardForkClones(context.WithoutCancel(ctx), sandboxID, clones)
 
@@ -148,6 +155,8 @@ func (b *blockVolumeAttacher) Attach(ctx context.Context, clusterID uuid.UUID, s
 	}
 
 	slices.SortFunc(slots, func(x, y *orchestrator.SandboxWorkspaceSlot) int { return int(x.GetSlot()) - int(y.GetSlot()) })
+
+	b.bound = slots
 
 	return slots, nil
 }
@@ -163,7 +172,7 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 	}
 
 	if vol.Lifecycle != volumeLifecycleReady || vol.DeletedAt.Valid {
-		return nil, attachConflictError{fmt.Sprintf("Volume '%s' is %s", vol.Name, vol.Lifecycle)}
+		return nil, attachConflictError{msg: fmt.Sprintf("Volume '%s' is %s", vol.Name, vol.Lifecycle)}
 	}
 
 	var incarnationID uuid.UUID
@@ -171,7 +180,7 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 	switch p.binding {
 	case bindHead:
 		if vol.HeadIncarnationID == nil {
-			return nil, attachConflictError{fmt.Sprintf("Volume '%s' has no image yet", vol.Name)}
+			return nil, attachConflictError{msg: fmt.Sprintf("Volume '%s' has no image yet", vol.Name)}
 		}
 
 		incarnationID = *vol.HeadIncarnationID
@@ -192,7 +201,7 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 		}
 
 		if advanced || latest.ID != p.revision.ID {
-			return nil, attachConflictError{fmt.Sprintf(
+			return nil, attachConflictError{msg: fmt.Sprintf(
 				"Volume '%s' was used by another sandbox after this snapshot was taken; fork the snapshot instead of resuming it", vol.Name)}
 		}
 	case bindClone:
@@ -205,7 +214,21 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 	}
 
 	if inc.State != volumeLifecycleReady {
-		return nil, attachConflictError{fmt.Sprintf("Volume '%s' image is %s", vol.Name, inc.State)}
+		return nil, attachConflictError{msg: fmt.Sprintf("Volume '%s' image is %s", vol.Name, inc.State)}
+	}
+
+	var resizeToBytes uint64
+	if p.resizeToBytes != 0 {
+		if p.resizeToBytes < inc.CapacityBytes {
+			return nil, attachConflictError{
+				msg:  fmt.Sprintf("Volume '%s' is %d GiB and cannot shrink to %d GiB", vol.Name, inc.CapacityBytes>>30, p.resizeToBytes>>30),
+				code: errCodeVolumeResizeInvalid,
+			}
+		}
+
+		if p.resizeToBytes > inc.CapacityBytes {
+			resizeToBytes = uint64(p.resizeToBytes) //nolint:gosec // a positive tier size
+		}
 	}
 
 	_, err = q.CreateVolumeAttachment(ctx, queries.CreateVolumeAttachmentParams{
@@ -219,7 +242,7 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 		GuestPath:     p.mount.GetPath(),
 	})
 	if dberrors.IsUniqueConstraintViolation(err) {
-		return nil, attachConflictError{fmt.Sprintf("Volume '%s' is mounted by another sandbox", vol.Name)}
+		return nil, attachConflictError{msg: fmt.Sprintf("Volume '%s' is mounted by another sandbox", vol.Name), code: errCodeVolumeAttached}
 	}
 
 	if err != nil {
@@ -233,6 +256,7 @@ func (b *blockVolumeAttacher) attachOne(ctx context.Context, q *sqlcdb.Client, s
 		MountPath:     p.mount.GetPath(),
 		FsUuid:        inc.FsUuid.String(),
 		CapacityBytes: uint64(inc.CapacityBytes), //nolint:gosec // a positive tier size (CHECK constraint)
+		ResizeToBytes: resizeToBytes,
 	}, nil
 }
 
@@ -317,6 +341,45 @@ func (b *blockVolumeAttacher) Release(ctx context.Context, sandboxID, executionI
 	b.discardForkClones(ctx, sandboxID, b.clones)
 }
 
+// Started records the capacity of every volume the start grew: the node has
+// grown the image (and the guest or the host its filesystem), so the
+// incarnation and, for the head, the volume are now that size. A failure is
+// logged; the next pause still seals revisions of the new size, but a later
+// resume of this incarnation would see the old capacity and be refused.
+func (b *blockVolumeAttacher) Started(ctx context.Context, sandboxID, _ string) {
+	for _, slot := range b.bound {
+		if slot.GetResizeToBytes() == 0 {
+			continue
+		}
+
+		volumeID, volErr := uuid.Parse(slot.GetVolumeId())
+		incarnationID, incErr := uuid.Parse(slot.GetIncarnationId())
+		if err := errors.Join(volErr, incErr); err != nil {
+			logger.L().Error(ctx, "block volume slot with an unparsable id after a resize", zap.Error(err), logger.WithSandboxID(sandboxID))
+
+			continue
+		}
+
+		capacity := int64(slot.GetResizeToBytes()) //nolint:gosec // a tier size
+
+		err := b.a.inTx(ctx, func(q *sqlcdb.Client, _ pgx.Tx) error {
+			if err := q.GrowVolumeIncarnationCapacity(ctx, queries.GrowVolumeIncarnationCapacityParams{
+				ID: incarnationID, VolumeID: volumeID, CapacityBytes: capacity,
+			}); err != nil {
+				return err
+			}
+
+			return q.GrowBlockVolumeCapacity(ctx, queries.GrowBlockVolumeCapacityParams{
+				VolumeID: volumeID, IncarnationID: &incarnationID, CapacityBytes: &capacity,
+			})
+		})
+		if err != nil {
+			logger.L().Error(ctx, "failed to record the new capacity of a resized block volume",
+				zap.Error(err), logger.WithSandboxID(sandboxID), zap.Stringer("volume_id", volumeID), zap.Int64("capacity_bytes", capacity))
+		}
+	}
+}
+
 // discardForkClones schedules the deletion of incarnations cloned for a fork
 // whose start failed. It reuses the volume.delete job, scoped to those
 // incarnations (VolumeDeleteParams), so it retries like any other volume
@@ -362,7 +425,11 @@ func (b *blockVolumeAttacher) discardForkClones(ctx context.Context, sandboxID s
 //     refused if another execution used it since;
 //   - a fork clones each revision into a new incarnation; from a memory
 //     snapshot it keeps the filesystem identity and requires
-//     allowSharedIdentity.
+//     allowSharedIdentity;
+//   - a resume may grow volumes (resize: volume name -> capacity in bytes,
+//     already checked against the capacity tiers); every name must be a
+//     block mount of the snapshot and no capacity smaller than the
+//     snapshot's.
 //
 // It returns nil when the snapshot has no block volumes.
 func (a *APIStore) planResumeBlockVolumes(
@@ -371,8 +438,20 @@ func (a *APIStore) planResumeBlockVolumes(
 	snapshotBuildID uuid.UUID,
 	mounts []*orchestrator.SandboxVolumeMount,
 	fork, memorySnapshot, filesystemBoot, allowSharedIdentity bool,
+	resize map[string]int64,
 ) (*blockVolumeAttacher, *api.APIError) {
+	if fork && len(resize) > 0 {
+		return nil, &api.APIError{Code: http.StatusBadRequest, ClientMsg: "Volumes cannot be resized by a fork"}
+	}
+
 	blockMounts := slices.DeleteFunc(slices.Clone(mounts), func(m *orchestrator.SandboxVolumeMount) bool { return m.GetBackend() != types.VolumeBackendBlock })
+
+	for name := range resize {
+		if !slices.ContainsFunc(blockMounts, func(m *orchestrator.SandboxVolumeMount) bool { return m.GetName() == name }) {
+			return nil, &api.APIError{Code: http.StatusBadRequest, ClientMsg: fmt.Sprintf("Volume '%s' is not a block volume of this sandbox and cannot be resized", name)}
+		}
+	}
+
 	if len(blockMounts) == 0 {
 		return nil, nil
 	}
@@ -419,9 +498,9 @@ func (a *APIStore) planResumeBlockVolumes(
 
 		if fork && memorySnapshot && !allowSharedIdentity {
 			return nil, &api.APIError{
-				Code: http.StatusConflict,
-				ClientMsg: "Forking a sandbox with block volumes resumes the same memory and filesystem identity in every fork; " +
-					"set allowSharedIdentity to true to accept that",
+				Code:      http.StatusConflict,
+				ErrorCode: errCodeSharedIdentityRequired,
+				ClientMsg: errMsgSharedIdentityRequired,
 			}
 		}
 
@@ -440,13 +519,29 @@ func (a *APIStore) planResumeBlockVolumes(
 			binding = bindClone
 		}
 
+		var resizeToBytes int64
+		if want, ok := resize[m.GetName()]; ok {
+			if want < ref.VolumeRevision.SizeBytes {
+				return nil, &api.APIError{
+					Code:      http.StatusConflict,
+					ErrorCode: errCodeVolumeResizeInvalid,
+					ClientMsg: fmt.Sprintf("Volume '%s' is %d GiB; volumes only grow, so it cannot be resized to %d GiB", m.GetName(), ref.VolumeRevision.SizeBytes>>30, want>>30),
+				}
+			}
+
+			if want > ref.VolumeRevision.SizeBytes {
+				resizeToBytes = want
+			}
+		}
+
 		attacher.plans = append(attacher.plans, blockMountPlan{
-			mount:     m,
-			volume:    ref.Volume,
-			binding:   binding,
-			slot:      int(ref.Slot),
-			revision:  ref.VolumeRevision,
-			cloneMode: cloneMode,
+			mount:         m,
+			volume:        ref.Volume,
+			binding:       binding,
+			slot:          int(ref.Slot),
+			revision:      ref.VolumeRevision,
+			cloneMode:     cloneMode,
+			resizeToBytes: resizeToBytes,
 		})
 	}
 

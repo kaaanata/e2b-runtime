@@ -108,32 +108,34 @@ type EnvAlias struct {
 }
 
 type EnvBuild struct {
-	ID                 uuid.UUID
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	FinishedAt         *time.Time
-	Status             string
-	Dockerfile         pgtype.Text
-	StartCmd           pgtype.Text
-	Vcpu               int64
-	RamMb              int64
-	FreeDiskSizeMb     int64
-	TotalDiskSizeMb    pgtype.Int8
-	KernelVersion      string
-	FirecrackerVersion string
-	EnvID              pgtype.Text
-	EnvdVersion        pgtype.Text
-	ReadyCmd           pgtype.Text
-	ClusterNodeID      pgtype.Text
-	Reason             []byte
-	Version            pgtype.Text
-	CpuArchitecture    pgtype.Text
-	CpuFamily          pgtype.Text
-	CpuModel           pgtype.Text
-	CpuModelName       pgtype.Text
-	CpuFlags           []string
-	StatusGroup        string
-	TeamID             *uuid.UUID
+	ID                         uuid.UUID
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
+	FinishedAt                 *time.Time
+	Status                     string
+	Dockerfile                 pgtype.Text
+	StartCmd                   pgtype.Text
+	Vcpu                       int64
+	RamMb                      int64
+	FreeDiskSizeMb             int64
+	TotalDiskSizeMb            pgtype.Int8
+	KernelVersion              string
+	FirecrackerVersion         string
+	EnvID                      pgtype.Text
+	EnvdVersion                pgtype.Text
+	ReadyCmd                   pgtype.Text
+	ClusterNodeID              pgtype.Text
+	Reason                     []byte
+	Version                    pgtype.Text
+	CpuArchitecture            pgtype.Text
+	CpuFamily                  pgtype.Text
+	CpuModel                   pgtype.Text
+	CpuModelName               pgtype.Text
+	CpuFlags                   []string
+	StatusGroup                string
+	TeamID                     *uuid.UUID
+	Layout                     pgtype.Text
+	WorkspaceSlotCapacityBytes []int64
 }
 
 type EnvBuildAssignment struct {

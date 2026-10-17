@@ -134,4 +134,8 @@ func TestWorkspaceSlotTransport(t *testing.T) {
 	assert.Equal(t, "inc", configs[1].IncarnationID)
 	assert.Equal(t, "fs", configs[1].FsUUID)
 	assert.EqualValues(t, 1<<30, configs[1].CapacityBytes)
+
+	slots[0].ResizeToBytes = 2 << 30
+	grown := sandboxMountConfigs(mounts, slots)
+	assert.EqualValues(t, 2<<30, grown[1].CapacityBytes, "a resumed sandbox that grows a volume records the new size")
 }

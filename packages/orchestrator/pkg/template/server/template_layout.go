@@ -70,3 +70,16 @@ func sameWorkspace(a, b *metadata.WorkspaceLayout) bool {
 
 	return a.Slots == b.Slots && slices.Equal(a.SlotCapacityBytes, b.SlotCapacityBytes)
 }
+
+// withBuildLayout records on a successful build's metadata the layout the
+// build was made with (after inheritance), which the API persists and
+// reports. The layout is always set, empty for rootfs only, so the API can
+// tell it from a template-manager that does not report one.
+func withBuildLayout(meta *templatemanager.TemplateBuildMetadata, layout string, ws *metadata.WorkspaceLayout) *templatemanager.TemplateBuildMetadata {
+	meta.Layout = &layout
+	if ws != nil {
+		meta.WorkspaceSlotCapacityBytes = slices.Clone(ws.SlotCapacityBytes)
+	}
+
+	return meta
+}

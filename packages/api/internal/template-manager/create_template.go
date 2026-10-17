@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -68,6 +69,19 @@ func TemplateLayoutFromAPI(layout *api.TemplateLayout, slotCapacityGiB *[]int64)
 	}
 
 	return out, nil
+}
+
+// TemplateLayoutFromBuildMetadata is the layout a finished build reports;
+// Layout is nil when the template-manager predates layouts.
+func TemplateLayoutFromBuildMetadata(meta *templatemanagergrpc.TemplateBuildMetadata) TemplateLayout {
+	if meta == nil || meta.Layout == nil {
+		return TemplateLayout{}
+	}
+
+	return TemplateLayout{
+		Layout:                     new(meta.GetLayout()),
+		WorkspaceSlotCapacityBytes: slices.Clone(meta.GetWorkspaceSlotCapacityBytes()),
+	}
 }
 
 func (tm *TemplateManager) CreateTemplate(

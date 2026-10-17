@@ -616,3 +616,51 @@ func TestSnapshotWorkspaceReady(t *testing.T) {
 	incomplete.Revision.SubvolUUID = ""
 	require.ErrorIs(t, (&Snapshot{workspaceSlots: []int{0}, WorkspaceSeals: []SealedWorkspace{incomplete}, WorkspaceRevisions: []metadata.WorkspaceRevisionRef{incomplete.Revision}}).WorkspaceReady(), ErrWorkspaceNotSealed)
 }
+
+// TestWorkspace_RetriedResize: a resume whose node grew the image but whose
+// start then failed leaves the control plane's record at the old size. A
+// retry of the same resize finds the image already grown and is accepted;
+// the remaining grow steps run again (they are idempotent), a plain resume
+// is still refused.
+func TestWorkspace_RetriedResize(t *testing.T) {
+	t.Parallel()
+
+	t.Run("memory restore", func(t *testing.T) {
+		t.Parallel()
+
+		fx := newWorkspaceFixture(t)
+		grown := fx.backend.add(fx.team, fx.volume, fx.fsUUID, 3*gib)
+		vol := fx.volumeFor(0, grown)
+		vol.ExpectedCapacityBytes = gib
+		vol.ResizeToBytes = 3 * gib
+
+		ws, err := fx.plan(t, blockTemplate(1, pairedRevision(0, fx.fsUUID)), []WorkspaceVolume{vol}, workspaceMemoryRestore)
+		require.NoError(t, err)
+		assert.True(t, ws.drives[0].RefreshSize, "the restored guest still has the recorded size")
+		assert.Equal(t, []string{"/workspace0"}, ws.onlineResizePaths(), "the guest grows the filesystem again")
+
+		require.NoError(t, ws.admit(t.Context(), 1))
+		assert.Equal(t, []string{"bind " + grown.Incarnation.String() + " pid=1"}, fx.log, "the image is already at the target size")
+
+		plain := vol
+		plain.ResizeToBytes = 0
+		_, err = fx.plan(t, blockTemplate(1, pairedRevision(0, fx.fsUUID)), []WorkspaceVolume{plain}, workspaceMemoryRestore)
+		require.ErrorIs(t, err, ErrWorkspaceRestore, "without the resize the record mismatch is refused")
+	})
+
+	t.Run("cold boot", func(t *testing.T) {
+		t.Parallel()
+
+		fx := newWorkspaceFixture(t)
+		grown := fx.backend.add(fx.team, fx.volume, fx.fsUUID, 2*gib)
+		vol := fx.volumeFor(0, grown)
+		vol.ExpectedCapacityBytes = gib
+		vol.ResizeToBytes = 2 * gib
+
+		ws, err := fx.plan(t, blockTemplate(1), []WorkspaceVolume{vol}, workspaceColdBoot)
+		require.NoError(t, err)
+		require.NoError(t, ws.prepareColdBoot(t.Context()))
+		assert.Equal(t, []string{fmt.Sprintf("grow-offline %s to=%d", grown.Incarnation, 2*gib)}, fx.log,
+			"the filesystem grow runs again: the earlier attempt may have stopped after growing the image")
+	})
+}

@@ -262,7 +262,7 @@ func (s *SandboxService) ResumeSandbox(ctx context.Context, req *proxygrpc.Sandb
 		timeout,
 		team,
 		// Auto-resume never demands a cold boot: no memory override exists here.
-		s.api.buildResumeSandboxData(sandboxID, nil, nil),
+		s.api.buildResumeSandboxData(sandboxID, nil, nil, nil),
 		&headers,
 		true,
 		false,

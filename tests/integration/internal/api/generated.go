@@ -208,6 +208,24 @@ func (e SandboxState) Valid() bool {
 	}
 }
 
+// Defines values for TemplateBuildLayout.
+const (
+	TemplateBuildLayoutBlockV1 TemplateBuildLayout = "block-v1"
+	TemplateBuildLayoutRootfs  TemplateBuildLayout = "rootfs"
+)
+
+// Valid indicates whether the value is a known member of the TemplateBuildLayout enum.
+func (e TemplateBuildLayout) Valid() bool {
+	switch e {
+	case TemplateBuildLayoutBlockV1:
+		return true
+	case TemplateBuildLayoutRootfs:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TemplateBuildStatus.
 const (
 	TemplateBuildStatusBuilding TemplateBuildStatus = "building"
@@ -234,13 +252,13 @@ func (e TemplateBuildStatus) Valid() bool {
 
 // Defines values for TemplateLayout.
 const (
-	BlockV1 TemplateLayout = "block-v1"
+	TemplateLayoutBlockV1 TemplateLayout = "block-v1"
 )
 
 // Valid indicates whether the value is a known member of the TemplateLayout enum.
 func (e TemplateLayout) Valid() bool {
 	switch e {
-	case BlockV1:
+	case TemplateLayoutBlockV1:
 		return true
 	default:
 		return false
@@ -322,6 +340,7 @@ func (e VolumeRevisionConsistency) Valid() bool {
 // Defines values for VolumeState.
 const (
 	VolumeStateCreating VolumeState = "creating"
+	VolumeStateDeleted  VolumeState = "deleted"
 	VolumeStateDeleting VolumeState = "deleting"
 	VolumeStateFailed   VolumeState = "failed"
 	VolumeStateReady    VolumeState = "ready"
@@ -331,6 +350,8 @@ const (
 func (e VolumeState) Valid() bool {
 	switch e {
 	case VolumeStateCreating:
+		return true
+	case VolumeStateDeleted:
 		return true
 	case VolumeStateDeleting:
 		return true
@@ -466,6 +487,9 @@ type ConnectSandbox struct {
 
 	// Timeout Timeout in seconds from the current time after which the sandbox should expire
 	Timeout int32 `json:"timeout"`
+
+	// VolumeMounts Grow block volumes of a paused sandbox before it is resumed; refused with 409 (`error_code` `volume_resize_invalid`) when the sandbox is running, one entry per volume (by name; at most one entry per volume). Omitted volumes keep their capacity. See `ResumeVolumeMount`.
+	VolumeMounts *[]ResumeVolumeMount `json:"volumeMounts,omitempty"`
 }
 
 // CreatedTeamAPIKey defines model for CreatedTeamAPIKey.
@@ -529,7 +553,7 @@ type Error struct {
 	// Code Error code
 	Code int32 `json:"code"`
 
-	// ErrorCode Machine-readable semantic error code. Not a closed set; initial values: sandbox_capacity_unavailable, sandbox_placement_timeout, sandbox_no_compatible_node, sandbox_create_failed, internal_server_error.
+	// ErrorCode Machine-readable semantic error code. Not a closed set; initial values: sandbox_capacity_unavailable, sandbox_placement_timeout, sandbox_no_compatible_node, sandbox_create_failed, internal_server_error. Block volume refusals (409): block_volume_shared_identity_required, volume_attached, volume_referenced_by_snapshot, volume_creating, template_layout_mismatch, volume_resize_invalid.
 	ErrorCode *string `json:"error_code,omitempty"`
 
 	// Message Error
@@ -720,7 +744,7 @@ type NewTeamAPIKey struct {
 	Name string `json:"name"`
 }
 
-// NewVolume defines model for NewVolume.
+// NewVolume A volume has no consistency profile of its own: `consistencyProfile` is chosen per mount (`SandboxVolumeMount`) and only for shared (NFS) volumes. Fields not listed here are ignored.
 type NewVolume struct {
 	// Backend `nfs` volumes are shared directories any number of sandboxes can mount and write at once. `block` volumes are workspace disks: a fixed-size filesystem on one node with a single writing sandbox at a time, sealed into revisions together with paused sandboxes and cloneable from those revisions.
 	Backend *VolumeBackend `json:"backend,omitempty"`
@@ -870,6 +894,15 @@ type NodeStatusChange struct {
 // OrderDirection Sort direction
 type OrderDirection string
 
+// ResumeVolumeMount A new capacity for one block volume of a paused sandbox, applied when the sandbox resumes. `capacityGiB` must be one of the deployment's capacity tiers (400 otherwise) and at least the volume's current capacity (409 `volume_resize_invalid` when smaller; equal is a no-op). Volumes only grow. Resuming a memory snapshot grows the disk device and the guest grows the mounted filesystem online; resuming a filesystem-only snapshot grows the filesystem before boot. The new capacity is recorded on the volume once the sandbox runs, and the next pause seals revisions of that size. If the resume fails, retry it with the same capacity. Shared (NFS) volumes and names the snapshot does not mount as block volumes are refused with 400.
+type ResumeVolumeMount struct {
+	// CapacityGiB New capacity of the volume in GiB
+	CapacityGiB int64 `json:"capacityGiB"`
+
+	// Name Name of a block volume the sandbox mounts
+	Name string `json:"name"`
+}
+
 // ResumedSandbox defines model for ResumedSandbox.
 type ResumedSandbox struct {
 	// AutoPause Automatically pauses the sandbox after the timeout
@@ -881,6 +914,9 @@ type ResumedSandbox struct {
 
 	// Timeout Time to live for the sandbox in seconds.
 	Timeout *int32 `json:"timeout,omitempty"`
+
+	// VolumeMounts Grow block volumes of a paused sandbox before it runs again, one entry per volume (by name; at most one entry per volume). Omitted volumes keep their capacity. See `ResumeVolumeMount`.
+	VolumeMounts *[]ResumeVolumeMount `json:"volumeMounts,omitempty"`
 }
 
 // Rig An orchestrator node pool backed by one cloud scaling group
@@ -1049,7 +1085,7 @@ type SandboxEgressProxyConfig struct {
 
 // SandboxForkRequest defines model for SandboxForkRequest.
 type SandboxForkRequest struct {
-	// AllowSharedIdentity Required to fork a sandbox that mounts block volumes. Every fork resumes the same memory snapshot and a copy of each block volume taken at that instant, so the forks share everything that was in memory: tokens, sessions, open connections and filesystem identities. Upstream services see the forks as the same client. Without it such a fork is rejected with 409.
+	// AllowSharedIdentity Required to fork a sandbox that mounts block volumes. Every fork resumes the same memory snapshot and a copy of each block volume taken at that instant, so the forks share everything that was in memory: tokens, sessions, open connections and filesystem identities. Upstream services see the forks as the same client. Without it the whole request is rejected with 409 before the sandbox is checkpointed.
 	AllowSharedIdentity *bool `json:"allowSharedIdentity,omitempty"`
 
 	// Count Number of forked sandboxes to create. All forks boot from the same snapshot, so the snapshot is captured once regardless of count. Each fork succeeds or fails independently; the outcome of each is reported in its entry of the response list.
@@ -1250,7 +1286,7 @@ type SandboxTimeoutRequest struct {
 
 // SandboxVolumeMount defines model for SandboxVolumeMount.
 type SandboxVolumeMount struct {
-	// ConsistencyProfile How a shared (NFS) volume is mounted. `strict` sends every operation to the server with no attribute or name caching, so changes from other sandboxes are visible immediately. `cto` is close-to-open: a writer's changes are visible to a reader that opens the file after the writer closed it, at a fraction of the metadata cost. Omitted keeps the sandbox's built-in options. Not accepted for block volumes, which have a single writer.
+	// ConsistencyProfile How a shared (NFS) volume is mounted. `strict` sends every operation to the server with no attribute or name caching, so changes from other sandboxes are visible immediately. `cto` is close-to-open: a writer's changes are visible to a reader that opens the file after the writer closed it, at a fraction of the metadata cost. Omitted keeps the sandbox's built-in options. Chosen per mount, not per volume. Rejected with 400 for block volumes, which have a single writer.
 	ConsistencyProfile *VolumeConsistencyProfile `json:"consistencyProfile,omitempty"`
 
 	// Name Name of the volume
@@ -1396,6 +1432,9 @@ type Template struct {
 	// LastSpawnedAt Time when the template was last used
 	LastSpawnedAt *time.Time `json:"lastSpawnedAt"`
 
+	// Layout Guest device layout a build was made with (after inheritance from its base template): `rootfs` (no workspace slots; block volumes cannot be mounted) or `block-v1`. Omitted when the build did not record it (builds from before layouts were recorded); creating a sandbox with block mounts from such a template is then decided by its node.
+	Layout *TemplateBuildLayout `json:"layout,omitempty"`
+
 	// MemoryMB Memory for the sandbox in MiB
 	MemoryMB MemoryMB `json:"memoryMB"`
 
@@ -1413,6 +1452,9 @@ type Template struct {
 
 	// UpdatedAt Time when the template was last updated
 	UpdatedAt time.Time `json:"updatedAt"`
+
+	// WorkspaceSlotCapacityGiB Capacity of each workspace slot of the last successful build when it is `block-v1`, in GiB, one entry per slot; a sandbox's block mounts take the slots in mount order. Omitted for other layouts.
+	WorkspaceSlotCapacityGiB *[]int64 `json:"workspaceSlotCapacityGiB,omitempty"`
 }
 
 // TemplateAliasResponse defines model for TemplateAliasResponse.
@@ -1444,6 +1486,9 @@ type TemplateBuild struct {
 	// FinishedAt Time when the build was finished
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 
+	// Layout Guest device layout a build was made with (after inheritance from its base template): `rootfs` (no workspace slots; block volumes cannot be mounted) or `block-v1`. Omitted when the build did not record it (builds from before layouts were recorded); creating a sandbox with block mounts from such a template is then decided by its node.
+	Layout *TemplateBuildLayout `json:"layout,omitempty"`
+
 	// MemoryMB Memory for the sandbox in MiB
 	MemoryMB MemoryMB `json:"memoryMB"`
 
@@ -1452,6 +1497,9 @@ type TemplateBuild struct {
 
 	// UpdatedAt Time when the build was last updated
 	UpdatedAt time.Time `json:"updatedAt"`
+
+	// WorkspaceSlotCapacityGiB Capacity of each workspace slot of a `block-v1` build, in GiB, one entry per slot; a sandbox's block mounts take the slots in mount order. Omitted for other layouts.
+	WorkspaceSlotCapacityGiB *[]int64 `json:"workspaceSlotCapacityGiB,omitempty"`
 }
 
 // TemplateBuildFileUpload defines model for TemplateBuildFileUpload.
@@ -1481,6 +1529,9 @@ type TemplateBuildInfo struct {
 	// TemplateID Identifier of the template
 	TemplateID string `json:"templateID"`
 }
+
+// TemplateBuildLayout Guest device layout a build was made with (after inheritance from its base template): `rootfs` (no workspace slots; block volumes cannot be mounted) or `block-v1`. Omitted when the build did not record it (builds from before layouts were recorded); creating a sandbox with block mounts from such a template is then decided by its node.
+type TemplateBuildLayout string
 
 // TemplateBuildLogsResponse defines model for TemplateBuildLogsResponse.
 type TemplateBuildLogsResponse struct {
@@ -1578,7 +1629,7 @@ type TemplateBuildStartV2 struct {
 	// Steps List of steps to execute in the template build
 	Steps *[]TemplateStep `json:"steps,omitempty"`
 
-	// WorkspaceSlotCapacityGiB Capacity of each workspace block slot of a `block-v1` template, one entry per slot (at most 4). A block volume mounts into a slot of exactly its capacity. Required with `layout: block-v1`; a build from another template inherits that template's slots when both fields are omitted.
+	// WorkspaceSlotCapacityGiB Capacity of each workspace block slot of a `block-v1` template, one entry per slot (at most 4). A block volume mounts into a slot whose capacity is at most the volume's (the slot capacity is a minimum, so build with the smallest tier the template should host). Required with `layout: block-v1`; a build from another template inherits that template's slots when both fields are omitted.
 	WorkspaceSlotCapacityGiB *[]int64 `json:"workspaceSlotCapacityGiB,omitempty"`
 }
 
@@ -1743,7 +1794,7 @@ type Volume struct {
 	// OwnerNode ID of the node holding a block volume; sandboxes mounting it run there
 	OwnerNode *string `json:"ownerNode,omitempty"`
 
-	// State `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed.
+	// State `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed. Once they are gone the volume is `deleted`: `GET /volumes/{volumeID}` answers 404 from then on, and `deleted` is only reported where a past request is replayed (an `Idempotency-Key` repeat of the create or clone that made the volume).
 	State *VolumeState `json:"state,omitempty"`
 
 	// VolumeID ID of the volume
@@ -1773,7 +1824,7 @@ type VolumeAndToken struct {
 	// OwnerNode ID of the node holding a block volume
 	OwnerNode *string `json:"ownerNode,omitempty"`
 
-	// State `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed.
+	// State `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed. Once they are gone the volume is `deleted`: `GET /volumes/{volumeID}` answers 404 from then on, and `deleted` is only reported where a past request is replayed (an `Idempotency-Key` repeat of the create or clone that made the volume).
 	State *VolumeState `json:"state,omitempty"`
 
 	// Token Auth token to use for interacting with volume content
@@ -1789,7 +1840,7 @@ type VolumeAndTokenContentApi string
 // VolumeBackend `nfs` volumes are shared directories any number of sandboxes can mount and write at once. `block` volumes are workspace disks: a fixed-size filesystem on one node with a single writing sandbox at a time, sealed into revisions together with paused sandboxes and cloneable from those revisions.
 type VolumeBackend string
 
-// VolumeConsistencyProfile How a shared (NFS) volume is mounted. `strict` sends every operation to the server with no attribute or name caching, so changes from other sandboxes are visible immediately. `cto` is close-to-open: a writer's changes are visible to a reader that opens the file after the writer closed it, at a fraction of the metadata cost. Omitted keeps the sandbox's built-in options. Not accepted for block volumes, which have a single writer.
+// VolumeConsistencyProfile How a shared (NFS) volume is mounted. `strict` sends every operation to the server with no attribute or name caching, so changes from other sandboxes are visible immediately. `cto` is close-to-open: a writer's changes are visible to a reader that opens the file after the writer closed it, at a fraction of the metadata cost. Omitted keeps the sandbox's built-in options. Chosen per mount, not per volume. Rejected with 400 for block volumes, which have a single writer.
 type VolumeConsistencyProfile string
 
 // VolumeOperation A block volume change carried out in the background. Poll it until `state` is `succeeded` or `failed`.
@@ -1833,7 +1884,7 @@ type VolumeRevision struct {
 // VolumeRevisionConsistency `filesystem-quiesced` revisions were sealed with the sandbox's filesystems frozen and can be cloned into new volumes; `paired-memory` revisions belong to a memory snapshot and are only usable by resuming or forking that snapshot.
 type VolumeRevisionConsistency string
 
-// VolumeState `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed.
+// VolumeState `creating` until the volume's first image exists (block volumes only), `ready` once it can be mounted, `failed` if creation failed, `deleting` while its images are being removed. Once they are gone the volume is `deleted`: `GET /volumes/{volumeID}` answers 404 from then on, and `deleted` is only reported where a past request is replayed (an `Idempotency-Key` repeat of the create or clone that made the volume).
 type VolumeState string
 
 // ApiKeyID defines model for apiKeyID.
@@ -2609,7 +2660,7 @@ type ClientInterface interface {
 
 	// PostSandboxesWithBody Create sandbox
 	//
-	// Create a sandbox from the template.
+	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -2618,7 +2669,7 @@ type ClientInterface interface {
 
 	// PostSandboxes Create sandbox
 	//
-	// Create a sandbox from the template.
+	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -2666,7 +2717,7 @@ type ClientInterface interface {
 
 	// PostSandboxesSandboxIDForkWithBody Fork sandbox
 	//
-	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -2675,7 +2726,7 @@ type ClientInterface interface {
 
 	// PostSandboxesSandboxIDFork Fork sandbox
 	//
-	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -3184,14 +3235,14 @@ type ClientInterface interface {
 
 	// DeleteVolumesVolumeID Delete team volume
 	//
-	// Delete a team volume.
+	// Delete a team volume. A block volume is refused with 409 while a sandbox mounts it (`error_code` `volume_attached`), while a paused sandbox's snapshot references one of its revisions (`volume_referenced_by_snapshot`; killing that sandbox releases the reference) or while it is still being created (`volume_creating`).
 	//
 	// Corresponds with DELETE /volumes/{volumeID} (the `DeleteVolumesVolumeID` operationId).
 	DeleteVolumesVolumeID(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetVolumesVolumeID Team volume
 	//
-	// Get team volume info.
+	// Get team volume info. A block volume being deleted is still returned (`state: deleting`) until its images are removed; after that, 404.
 	//
 	// Corresponds with GET /volumes/{volumeID} (the `GetVolumesVolumeID` operationId).
 	GetVolumesVolumeID(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -3669,7 +3720,7 @@ func (c *Client) GetSandboxes(ctx context.Context, params *GetSandboxesParams, r
 
 // PostSandboxesWithBody Create sandbox
 //
-// Create a sandbox from the template.
+// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 //
 // Takes any type of body and a specified content type.
 //
@@ -3688,7 +3739,7 @@ func (c *Client) PostSandboxesWithBody(ctx context.Context, contentType string, 
 
 // PostSandboxes Create sandbox
 //
-// Create a sandbox from the template.
+// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 //
 // Takes a body of the `application/json` content type.
 //
@@ -3796,7 +3847,7 @@ func (c *Client) PostSandboxesSandboxIDConnect(ctx context.Context, sandboxID Sa
 
 // PostSandboxesSandboxIDForkWithBody Fork sandbox
 //
-// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 //
 // Takes any type of body and a specified content type.
 //
@@ -3815,7 +3866,7 @@ func (c *Client) PostSandboxesSandboxIDForkWithBody(ctx context.Context, sandbox
 
 // PostSandboxesSandboxIDFork Fork sandbox
 //
-// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 //
 // Takes a body of the `application/json` content type.
 //
@@ -4901,7 +4952,7 @@ func (c *Client) PostVolumes(ctx context.Context, params *PostVolumesParams, bod
 
 // DeleteVolumesVolumeID Delete team volume
 //
-// Delete a team volume.
+// Delete a team volume. A block volume is refused with 409 while a sandbox mounts it (`error_code` `volume_attached`), while a paused sandbox's snapshot references one of its revisions (`volume_referenced_by_snapshot`; killing that sandbox releases the reference) or while it is still being created (`volume_creating`).
 //
 // Corresponds with DELETE /volumes/{volumeID} (the `DeleteVolumesVolumeID` operationId).
 func (c *Client) DeleteVolumesVolumeID(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -4918,7 +4969,7 @@ func (c *Client) DeleteVolumesVolumeID(ctx context.Context, volumeID VolumeID, r
 
 // GetVolumesVolumeID Team volume
 //
-// Get team volume info.
+// Get team volume info. A block volume being deleted is still returned (`state: deleting`) until its images are removed; after that, 404.
 //
 // Corresponds with GET /volumes/{volumeID} (the `GetVolumesVolumeID` operationId).
 func (c *Client) GetVolumesVolumeID(ctx context.Context, volumeID VolumeID, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -8778,7 +8829,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostSandboxesWithBodyWithResponse Create sandbox
 	//
-	// Create a sandbox from the template.
+	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -8787,7 +8838,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostSandboxesWithResponse Create sandbox
 	//
-	// Create a sandbox from the template.
+	// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -8841,7 +8892,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostSandboxesSandboxIDForkWithBodyWithResponse Fork sandbox
 	//
-	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -8850,7 +8901,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostSandboxesSandboxIDForkWithResponse Fork sandbox
 	//
-	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -9403,7 +9454,7 @@ type ClientWithResponsesInterface interface {
 
 	// DeleteVolumesVolumeIDWithResponse Delete team volume
 	//
-	// Delete a team volume.
+	// Delete a team volume. A block volume is refused with 409 while a sandbox mounts it (`error_code` `volume_attached`), while a paused sandbox's snapshot references one of its revisions (`volume_referenced_by_snapshot`; killing that sandbox releases the reference) or while it is still being created (`volume_creating`).
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -9412,7 +9463,7 @@ type ClientWithResponsesInterface interface {
 
 	// GetVolumesVolumeIDWithResponse Team volume
 	//
-	// Get team volume info.
+	// Get team volume info. A block volume being deleted is still returned (`state: deleting`) until its images are removed; after that, 404.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -10717,6 +10768,8 @@ type PostSandboxesResponse struct {
 	JSON400 *N400
 	// JSON401 the response for an HTTP 401 `application/json` response
 	JSON401 *N401
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *N409
 	// JSON500 the response for an HTTP 500 `application/json` response
 	JSON500 *N500
 	// JSON503 the response for an HTTP 503 `application/json` response
@@ -10738,6 +10791,11 @@ func (r PostSandboxesResponse) GetJSON400() *N400 {
 // GetJSON401 returns the response for an HTTP 401 `application/json` response
 func (r PostSandboxesResponse) GetJSON401() *N401 {
 	return r.JSON401
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r PostSandboxesResponse) GetJSON409() *N409 {
+	return r.JSON409
 }
 
 // GetJSON500 returns the response for an HTTP 500 `application/json` response
@@ -11065,6 +11123,8 @@ type PostSandboxesSandboxIDForkResponse struct {
 	HTTPResponse *http.Response
 	// JSON201 the response for an HTTP 201 `application/json` response
 	JSON201 *[]SandboxForkResult
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *N400
 	// JSON401 the response for an HTTP 401 `application/json` response
 	JSON401 *N401
 	// JSON404 the response for an HTTP 404 `application/json` response
@@ -11080,6 +11140,11 @@ type PostSandboxesSandboxIDForkResponse struct {
 // GetJSON201 returns the response for an HTTP 201 `application/json` response
 func (r PostSandboxesSandboxIDForkResponse) GetJSON201() *[]SandboxForkResult {
 	return r.JSON201
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r PostSandboxesSandboxIDForkResponse) GetJSON400() *N400 {
+	return r.JSON400
 }
 
 // GetJSON401 returns the response for an HTTP 401 `application/json` response
@@ -14558,7 +14623,7 @@ func (c *ClientWithResponses) GetSandboxesWithResponse(ctx context.Context, para
 
 // PostSandboxesWithBodyWithResponse Create sandbox
 //
-// Create a sandbox from the template.
+// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -14573,7 +14638,7 @@ func (c *ClientWithResponses) PostSandboxesWithBodyWithResponse(ctx context.Cont
 
 // PostSandboxesWithResponse Create sandbox
 //
-// Create a sandbox from the template.
+// Create a sandbox from the template. Volume mounts are validated before anything starts: an unknown volume, a bad or repeated path, a `consistencyProfile` on a block volume, a block volume that is not `ready`, block volumes on different nodes, or more than 4 block mounts answer 400. 409 when a block volume is already mounted by another sandbox (`error_code` `volume_attached`), or when the template build (see `Template.layout`) has no workspace slot for a block mount: a `rootfs` layout, fewer slots than block mounts, or a slot larger than its volume (`template_layout_mismatch`; block mounts take the slots in mount order).
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -14663,7 +14728,7 @@ func (c *ClientWithResponses) PostSandboxesSandboxIDConnectWithResponse(ctx cont
 
 // PostSandboxesSandboxIDForkWithBodyWithResponse Fork sandbox
 //
-// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -14678,7 +14743,7 @@ func (c *ClientWithResponses) PostSandboxesSandboxIDForkWithBodyWithResponse(ctx
 
 // PostSandboxesSandboxIDForkWithResponse Fork sandbox
 //
-// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted.
+// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -15580,7 +15645,7 @@ func (c *ClientWithResponses) PostVolumesWithResponse(ctx context.Context, param
 
 // DeleteVolumesVolumeIDWithResponse Delete team volume
 //
-// Delete a team volume.
+// Delete a team volume. A block volume is refused with 409 while a sandbox mounts it (`error_code` `volume_attached`), while a paused sandbox's snapshot references one of its revisions (`volume_referenced_by_snapshot`; killing that sandbox releases the reference) or while it is still being created (`volume_creating`).
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -15595,7 +15660,7 @@ func (c *ClientWithResponses) DeleteVolumesVolumeIDWithResponse(ctx context.Cont
 
 // GetVolumesVolumeIDWithResponse Team volume
 //
-// Get team volume info.
+// Get team volume info. A block volume being deleted is still returned (`state: deleting`) until its images are removed; after that, 404.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -16670,6 +16735,13 @@ func ParsePostSandboxesResponse(rsp *http.Response) (*PostSandboxesResponse, err
 		}
 		response.JSON401 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest N409
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest N500
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -16935,6 +17007,13 @@ func ParsePostSandboxesSandboxIDForkResponse(rsp *http.Response) (*PostSandboxes
 			return nil, err
 		}
 		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest N400
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
 		var dest N401

@@ -25,6 +25,7 @@ import (
 	"github.com/e2b-dev/infra/packages/db/pkg/dberrors"
 	dboutbox "github.com/e2b-dev/infra/packages/db/pkg/outbox"
 	"github.com/e2b-dev/infra/packages/db/queries"
+	"github.com/e2b-dev/infra/packages/shared/pkg/apierrors"
 	clustershared "github.com/e2b-dev/infra/packages/shared/pkg/clusters"
 	"github.com/e2b-dev/infra/packages/shared/pkg/ginutils"
 	orchestratorgrpc "github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
@@ -398,7 +399,7 @@ func (a *APIStore) deleteBlockVolume(c *gin.Context, team *types.Team, volume qu
 		}
 
 		if current.Lifecycle == volumeLifecycleCreating {
-			return blockVolumeBusyError{reason: "it is still being created"}
+			return blockVolumeBusyError{reason: "it is still being created", code: errCodeVolumeCreating}
 		}
 
 		attached, err := q.CountActiveVolumeAttachments(ctx, volume.ID)
@@ -407,7 +408,7 @@ func (a *APIStore) deleteBlockVolume(c *gin.Context, team *types.Team, volume qu
 		}
 
 		if attached > 0 {
-			return blockVolumeBusyError{reason: "it is mounted by a sandbox"}
+			return blockVolumeBusyError{reason: "it is mounted by a sandbox", code: errCodeVolumeAttached}
 		}
 
 		refs, err := q.CountVolumeSnapshotRefs(ctx, volume.ID)
@@ -416,7 +417,7 @@ func (a *APIStore) deleteBlockVolume(c *gin.Context, team *types.Team, volume qu
 		}
 
 		if refs > 0 {
-			return blockVolumeBusyError{reason: "a paused sandbox snapshot needs it; delete the snapshot first"}
+			return blockVolumeBusyError{reason: "a paused sandbox snapshot needs it; kill the paused sandbox first", code: errCodeVolumeReferencedBySnapshot}
 		}
 
 		op, _, err = a.recordVolumeOperation(ctx, q, tx, newVolumeOperation{
@@ -444,7 +445,11 @@ func (a *APIStore) deleteBlockVolume(c *gin.Context, team *types.Team, volume qu
 
 	switch {
 	case errors.As(err, &busy):
-		a.sendAPIStoreError(c, http.StatusConflict, fmt.Sprintf("Volume '%s' cannot be deleted: %s", volume.Name, busy.reason))
+		apierrors.SendAPIError(c, &api.APIError{
+			Code:      http.StatusConflict,
+			ErrorCode: busy.code,
+			ClientMsg: fmt.Sprintf("Volume '%s' cannot be deleted: %s", volume.Name, busy.reason),
+		})
 
 		return
 	case errors.Is(err, errVolumeJobsUnavailable):
@@ -461,7 +466,8 @@ func (a *APIStore) deleteBlockVolume(c *gin.Context, team *types.Team, volume qu
 	c.JSON(http.StatusAccepted, api.VolumeOperationAccepted{Volume: volumeToAPI(current), Operation: volumeOperationToAPI(op)})
 }
 
-type blockVolumeBusyError struct{ reason string }
+// blockVolumeBusyError refuses a delete; code is the response's error_code.
+type blockVolumeBusyError struct{ reason, code string }
 
 func (e blockVolumeBusyError) Error() string { return "block volume is busy: " + e.reason }
 

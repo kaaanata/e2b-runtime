@@ -21,6 +21,7 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal"
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	"github.com/e2b-dev/infra/packages/api/internal/cfg"
+	apidb "github.com/e2b-dev/infra/packages/api/internal/db"
 	"github.com/e2b-dev/infra/packages/api/internal/orchestrator/nodemanager"
 	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
 	authtypes "github.com/e2b-dev/infra/packages/auth/pkg/types"
@@ -224,6 +225,17 @@ func TestPostVolumes_Block(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, code, "the name is taken")
 	})
 
+	t.Run("a consistencyProfile in the body is ignored: profiles are per mount", func(t *testing.T) {
+		t.Parallel()
+
+		f := newBlockAPIFixture(t, db)
+		c, rec := f.request(t, http.MethodPost, "/volumes", map[string]any{
+			"name": "ws", "backend": "block", "capacityGiB": 10, "consistencyProfile": "strict",
+		})
+		f.store.PostVolumes(c, api.PostVolumesParams{})
+		require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+	})
+
 	t.Run("validates capacity and placement before recording anything", func(t *testing.T) {
 		t.Parallel()
 
@@ -272,6 +284,7 @@ func TestBlockVolumeLifecycleEndpoints(t *testing.T) {
 		c, rec := f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil)
 		f.store.DeleteVolumesVolumeID(c, vol.ID.String())
 		assert.Equal(t, http.StatusConflict, rec.Code)
+		assert.Equal(t, errCodeVolumeAttached, errorCode(t, rec))
 
 		require.NoError(t, f.db.SqlcClient.ReleaseVolumeAttachment(ctx, att.ID))
 
@@ -292,6 +305,15 @@ func TestBlockVolumeLifecycleEndpoints(t *testing.T) {
 		var again api.VolumeOperationAccepted
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &again))
 		assert.Equal(t, accepted.Operation.OperationID, again.Operation.OperationID, "a repeated delete reports the same operation")
+
+		// While the images are being removed the volume is still reported.
+		c, rec = f.request(t, http.MethodGet, "/volumes/"+vol.ID.String(), nil)
+		f.store.GetVolumesVolumeID(c, vol.ID.String())
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		var deleting api.VolumeAndToken
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &deleting))
+		assert.Equal(t, api.VolumeStateDeleting, *deleting.State)
 
 		// A deleting volume cannot be attached.
 		_, mounts, err := convertAPIVolumesToOrchestratorVolumes(ctx, f.db.SqlcClient, f.store.featureFlags, f.team.ID,
@@ -315,6 +337,82 @@ func TestBlockVolumeLifecycleEndpoints(t *testing.T) {
 		c, rec := f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil)
 		f.store.DeleteVolumesVolumeID(c, vol.ID.String())
 		assert.Equal(t, http.StatusConflict, rec.Code)
+		assert.Equal(t, errCodeVolumeReferencedBySnapshot, errorCode(t, rec))
+	})
+
+	t.Run("killing the paused sandbox releases its snapshot's references", func(t *testing.T) {
+		t.Parallel()
+
+		f := newBlockAPIFixture(t, db)
+		ctx := t.Context()
+		vol, inc, _ := f.readyVolume(t)
+
+		// volume -> sandbox -> pause: the pause's snapshot build references a
+		// paired-memory revision of the volume.
+		base := testutils.CreateTestTemplate(t, f.db, f.team.ID)
+		sandboxID := "sbx-" + uuid.NewString()
+		snap := testutils.UpsertTestSnapshot(t, ctx, f.db, "snap-"+uuid.NewString(), sandboxID, f.team.ID, base)
+		sealRevision(t, f, vol, inc, consistencyPairedMemory, snap.BuildID)
+
+		c, rec := f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil)
+		f.store.DeleteVolumesVolumeID(c, vol.ID.String())
+		require.Equal(t, http.StatusConflict, rec.Code)
+		assert.Equal(t, errCodeVolumeReferencedBySnapshot, errorCode(t, rec))
+
+		// kill: DELETE /sandboxes/{id} of a paused sandbox soft-deletes its
+		// snapshot template (deleteSnapshot -> softDeleteTemplate).
+		builds, err := apidb.GetSnapshotBuilds(ctx, f.db.SqlcClient, f.team.ID, sandboxID)
+		require.NoError(t, err)
+		_, err = f.store.softDeleteTemplate(ctx, f.team.ID, builds.TemplateID)
+		require.NoError(t, err)
+
+		refs, err := f.db.SqlcClient.CountVolumeSnapshotRefs(ctx, vol.ID)
+		require.NoError(t, err)
+		assert.Zero(t, refs)
+
+		c, rec = f.request(t, http.MethodDelete, "/volumes/"+vol.ID.String(), nil)
+		f.store.DeleteVolumesVolumeID(c, vol.ID.String())
+		assert.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
+	})
+
+	t.Run("delete refuses while the volume is being created", func(t *testing.T) {
+		t.Parallel()
+
+		f := newBlockAPIFixture(t, db)
+		code, accepted := f.create(t, api.NewVolume{Name: "new", Backend: new(api.Block), CapacityGiB: new(int64(10))}, nil)
+		require.Equal(t, http.StatusAccepted, code)
+
+		c, rec := f.request(t, http.MethodDelete, "/volumes/"+accepted.Volume.VolumeID, nil)
+		f.store.DeleteVolumesVolumeID(c, accepted.Volume.VolumeID)
+		assert.Equal(t, http.StatusConflict, rec.Code)
+		assert.Equal(t, errCodeVolumeCreating, errorCode(t, rec))
+	})
+
+	t.Run("a tombstoned volume is gone from GET and deleted in replays", func(t *testing.T) {
+		t.Parallel()
+
+		f := newBlockAPIFixture(t, db)
+		ctx := t.Context()
+		key := "tombstone-1"
+		body := api.NewVolume{Name: "gone", Backend: new(api.Block), CapacityGiB: new(int64(10))}
+
+		code, accepted := f.create(t, body, &key)
+		require.Equal(t, http.StatusAccepted, code)
+
+		volID := uuid.MustParse(accepted.Volume.VolumeID)
+		require.NoError(t, f.db.SqlcClient.SetBlockVolumeFailed(ctx, volID))
+		_, err := f.db.SqlcClient.MarkBlockVolumeDeleting(ctx, queries.MarkBlockVolumeDeletingParams{VolumeID: volID, TeamID: f.team.ID})
+		require.NoError(t, err)
+		require.NoError(t, f.db.SqlcClient.TombstoneBlockVolume(ctx, volID))
+
+		c, rec := f.request(t, http.MethodGet, "/volumes/"+volID.String(), nil)
+		f.store.GetVolumesVolumeID(c, volID.String())
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+
+		code, replay := f.create(t, body, &key)
+		require.Equal(t, http.StatusAccepted, code)
+		assert.Equal(t, api.VolumeStateDeleted, *replay.Volume.State)
+		assert.Equal(t, accepted.Operation.OperationID, replay.Operation.OperationID)
 	})
 
 	t.Run("clone starts from the newest quiesced revision into a new volume", func(t *testing.T) {
@@ -442,6 +540,7 @@ func TestBlockVolumeAttach(t *testing.T) {
 		_, apiErr = other.Attach(ctx, uuid.New(), "sbx-2", "exec-2")
 		require.NotNil(t, apiErr)
 		assert.Equal(t, http.StatusConflict, apiErr.Code)
+		assert.Equal(t, errCodeVolumeAttached, apiErr.ErrorCode, "a second writer is told the volume is attached")
 
 		attacher.Release(ctx, "sbx-1", "exec-1")
 		_, apiErr = other.Attach(ctx, uuid.New(), "sbx-2", "exec-2")
@@ -490,27 +589,27 @@ func TestBlockVolumeAttach(t *testing.T) {
 
 		mounts := []*orchestrator.SandboxVolumeMount{{Id: vol.ID.String(), Name: "ws", Path: "/w", Backend: volumeBackendBlock}}
 
-		_, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, true, true, false)
+		_, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, true, true, false, nil)
 		require.NotNil(t, apiErr)
 		assert.Equal(t, http.StatusConflict, apiErr.Code, "resume without memory is refused")
 
-		_, apiErr = f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, false, false, false)
+		_, apiErr = f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, false, false, false, nil)
 		require.NotNil(t, apiErr, "a filesystem-only snapshot needs a quiesced revision")
 
-		_, apiErr = f.store.planResumeBlockVolumes(ctx, f.team.ID, uuid.New(), mounts, false, true, false, false)
+		_, apiErr = f.store.planResumeBlockVolumes(ctx, f.team.ID, uuid.New(), mounts, false, true, false, false, nil)
 		require.NotNil(t, apiErr, "a snapshot without recorded revisions is refused")
 
-		_, apiErr = f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, true, true, false, false)
+		_, apiErr = f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, true, true, false, false, nil)
 		require.NotNil(t, apiErr)
 		assert.Contains(t, apiErr.ClientMsg, "allowSharedIdentity")
 
-		fork, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, true, true, false, true)
+		fork, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, true, true, false, true, nil)
 		require.Nil(t, apiErr)
 		assert.Equal(t, bindClone, fork.plans[0].binding)
 		assert.Equal(t, dboutbox.VolumeCloneMemoryRestore, fork.plans[0].cloneMode)
 		assert.Equal(t, sealed.ID, fork.plans[0].revision.ID)
 
-		resume, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, true, false, false)
+		resume, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, true, false, false, nil)
 		require.Nil(t, apiErr)
 		require.Equal(t, bindExact, resume.plans[0].binding)
 
@@ -538,7 +637,7 @@ func TestBlockVolumeAttach(t *testing.T) {
 		sealRevision(t, f, vol, inc, consistencyPairedMemory, buildID)
 
 		mounts := []*orchestrator.SandboxVolumeMount{{Id: vol.ID.String(), Name: "ws", Path: "/w", Backend: volumeBackendBlock}}
-		resume, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, true, false, false)
+		resume, apiErr := f.store.planResumeBlockVolumes(ctx, f.team.ID, buildID, mounts, false, true, false, false, nil)
 		require.Nil(t, apiErr)
 
 		bound, apiErr := resume.Attach(ctx, uuid.New(), "sbx", "e2")
@@ -581,3 +680,17 @@ func sealRevision(t *testing.T, f blockAPIFixture, vol queries.Volume, inc queri
 // sealedSlot is the workspace slot sealRevision records; deliberately not 0
 // so a test can tell the recorded slot from the mount position.
 const sealedSlot = 2
+
+// errorCode is the error_code of an error response ("" when absent).
+func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+
+	var body api.Error
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), rec.Body.String())
+
+	if body.ErrorCode == nil {
+		return ""
+	}
+
+	return *body.ErrorCode
+}

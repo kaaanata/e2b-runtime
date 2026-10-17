@@ -47,6 +47,14 @@ func (a *APIStore) softDeleteTemplate(ctx context.Context, teamID uuid.UUID, tem
 		return nil, fmt.Errorf("delete active builds: %w", err)
 	}
 
+	// A deleted template (the snapshot of a killed paused sandbox, or a
+	// discarded checkpoint) can no longer be resumed, so its builds stop
+	// keeping block volume revisions referenced; otherwise the volumes could
+	// never be deleted.
+	if _, err := txDB.ReleaseTemplateSnapshotVolumeRefs(ctx, templateID); err != nil {
+		return nil, fmt.Errorf("release snapshot volume references: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}

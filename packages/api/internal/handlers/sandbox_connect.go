@@ -27,6 +27,7 @@ import (
 // connectOrchestrator is the slice of *orchestrator.Orchestrator the connect
 // handler consults while a transition is in flight.
 type connectOrchestrator interface {
+	GetSandbox(ctx context.Context, teamID uuid.UUID, sandboxID string) (sandbox.Sandbox, error)
 	KeepAliveFor(ctx context.Context, teamID uuid.UUID, sandboxID string, duration time.Duration, allowShorter bool) (*sandbox.Sandbox, *api.APIError)
 	WaitForStateChange(ctx context.Context, teamID uuid.UUID, sandboxID string) error
 }
@@ -78,12 +79,36 @@ func (a *APIStore) PostSandboxesSandboxIDConnect(c *gin.Context, sandboxID api.S
 
 	span.SetAttributes(telemetry.WithSandboxID(sandboxID))
 
+	resize, apiErr := a.volumeResizes(body.VolumeMounts)
+	if apiErr != nil {
+		apierrors.SendAPIError(c, apiErr)
+
+		return
+	}
+
+	// A resize applies only to a paused sandbox: refuse it for a running one
+	// before its timeout is touched.
+	if resize != nil {
+		if current, err := a.connectBackend().GetSandbox(ctx, teamID, sandboxID); err == nil && current.State == sandbox.StateRunning {
+			apierrors.SendAPIError(c, errResizeRunning(sandboxID))
+
+			return
+		}
+	}
+
 	// It could happen that after sandbox transition, it'll be again transitioning, retry up to maxConnectRetries times.
 	const maxConnectRetries = 3
 
 	for attempt := range maxConnectRetries {
 		sbx, apiErr := a.connectBackend().KeepAliveFor(ctx, teamID, sandboxID, timeout, false)
 		if apiErr == nil {
+			if resize != nil {
+				// It was resumed by someone else while this request waited.
+				apierrors.SendAPIError(c, errResizeRunning(sandboxID))
+
+				return
+			}
+
 			c.JSON(http.StatusOK, sbx.ToAPISandbox())
 
 			return
@@ -183,7 +208,7 @@ func (a *APIStore) PostSandboxesSandboxIDConnect(c *gin.Context, sandboxID api.S
 		sandboxID,
 		timeout,
 		teamInfo,
-		a.buildResumeSandboxData(sandboxID, nil, body.Memory),
+		a.buildResumeSandboxData(sandboxID, nil, body.Memory, resize),
 		&c.Request.Header,
 		true,
 		demandsFilesystemBoot(body.Memory, lastSnapshot.Snapshot),

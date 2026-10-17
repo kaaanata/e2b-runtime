@@ -44,7 +44,8 @@ func sandboxMountConfigs(mounts []*orchestrator.SandboxVolumeMount, slots []*orc
 		if s, ok := byPath[c.Path]; ok {
 			c.IncarnationID = s.GetIncarnationId()
 			c.FsUUID = s.GetFsUuid()
-			c.CapacityBytes = s.GetCapacityBytes()
+			// A resume that grows the volume runs it at the new size.
+			c.CapacityBytes = max(s.GetCapacityBytes(), s.GetResizeToBytes())
 		}
 	}
 
