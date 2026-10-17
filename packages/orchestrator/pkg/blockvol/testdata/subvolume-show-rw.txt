@@ -1,0 +1,19 @@
+fixture/sv
+	Name: 			sv
+	UUID: 			1ddb5ce3-0bfc-4447-8074-65487d7734a4
+	Parent UUID: 		-
+	Received UUID: 		-
+	Creation time: 		2026-10-18 01:18:39 +0800
+	Subvolume ID: 		256
+	Generation: 		10
+	Gen at creation: 	9
+	Parent ID: 		5
+	Top level ID: 		5
+	Flags: 			-
+	Send transid: 		0
+	Send time: 		2026-10-18 01:18:39 +0800
+	Receive transid: 	0
+	Receive time: 		-
+	Snapshot(s):
+				fixture/ro
+	Quota group:		n/a

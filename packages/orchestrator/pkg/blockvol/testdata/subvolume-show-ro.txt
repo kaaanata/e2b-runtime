@@ -1,0 +1,18 @@
+fixture/ro
+	Name: 			ro
+	UUID: 			e623f4c2-5f65-834c-9cf3-a9e7ab1b3a14
+	Parent UUID: 		1ddb5ce3-0bfc-4447-8074-65487d7734a4
+	Received UUID: 		-
+	Creation time: 		2026-10-18 01:18:39 +0800
+	Subvolume ID: 		257
+	Generation: 		10
+	Gen at creation: 	10
+	Parent ID: 		5
+	Top level ID: 		5
+	Flags: 			readonly
+	Send transid: 		0
+	Send time: 		2026-10-18 01:18:39 +0800
+	Receive transid: 	0
+	Receive time: 		-
+	Snapshot(s):
+	Quota group:		n/a
