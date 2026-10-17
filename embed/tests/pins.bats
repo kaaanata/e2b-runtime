@@ -136,10 +136,33 @@ DASHBOARD_VARS=(E2B_DASHBOARD_API_IMAGE E2B_DASHBOARD_IMAGE)
   done
 }
 
+# dashboard-api comes in two forms. Upstream it is the published auto-deploy
+# image whose tag ends in the api's source commit. A fork whose api has no
+# published dashboard-api builds both from one tree, so both carry the same
+# local tag (e2b-local/api:T beside e2b-local/dashboard-api:T). A plain release
+# api tag (vX.Y.Z) names no commit: no published dashboard-api can be shown to
+# match it, so that pin set is reported as skipped, not passed. Point
+# PINS_ENV_FILE at an installed .env to check the pins a host actually runs.
 @test "dashboard-api is built from the api's source commit" {
-  api_tag="$(sed -n 's/^E2B_API_IMAGE=.*:\(v[^ #]*\).*/\1/p' compose/.env)"
-  dash_tag="$(sed -n 's/^E2B_DASHBOARD_API_IMAGE=.*:\(v[^ #]*\).*/\1/p' compose/.env)"
-  [ -n "$api_tag" ] && [ -n "$dash_tag" ]
+  local env_file="${PINS_ENV_FILE:-compose/.env}" api dash api_tag dash_tag
+  api="$(sed -n 's|^E2B_API_IMAGE=\([^ #]*\).*|\1|p' "$env_file")"
+  dash="$(sed -n 's|^E2B_DASHBOARD_API_IMAGE=\([^ #]*\).*|\1|p' "$env_file")"
+  [ -n "$api" ] && [ -n "$dash" ] || { echo "$env_file pins no api or no dashboard-api" >&2; return 1; }
+  api_tag="${api##*:}"
+  dash_tag="${dash##*:}"
+  case "$dash" in
+    e2b-local/dashboard-api:*)
+      [ "$api" = "e2b-local/api:$dash_tag" ] || {
+        echo "dashboard-api is the local build $dash_tag but the api is $api; build both from one tree (citadel_tool build-images)" >&2
+        return 1
+      }
+      return 0
+      ;;
+  esac
+  case "$api_tag" in
+    v*-*) ;;
+    *) skip "api $api_tag is a release tag without a source commit; no published dashboard-api pairs with it, build both locally" ;;
+  esac
   [ "${api_tag##*-}" = "${dash_tag##*-}" ] || {
     echo "api is built from ${api_tag##*-} and dashboard-api from ${dash_tag##*-}; dashboard-api checks the schema level its api's migrator applied, so the two move together" >&2
     return 1
