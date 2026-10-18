@@ -104,6 +104,30 @@ func (e PostFreezeParamsMode) Valid() bool {
 	}
 }
 
+// CPUsRequest defines model for CPUsRequest.
+type CPUsRequest struct {
+	// Online How many CPUs should be online after the call
+	Online int64 `json:"online"`
+}
+
+// CPUsResult defines model for CPUsResult.
+type CPUsResult struct {
+	// Changed CPUs this call brought online or offline
+	Changed *int64 `json:"changed,omitempty"`
+
+	// Errors One entry per CPU whose state could not be changed
+	Errors *[]string `json:"errors,omitempty"`
+
+	// Hotpluggable Whether every present CPU but cpu0 has an online control (CONFIG_HOTPLUG_CPU)
+	Hotpluggable bool `json:"hotpluggable"`
+
+	// Online CPUs online after the call (/sys/devices/system/cpu/online)
+	Online int64 `json:"online"`
+
+	// Present CPUs present (the VM's vCPU count)
+	Present int64 `json:"present"`
+}
+
 // CollapseResult Per-call statistics from a heap collapse
 type CollapseResult struct {
 	// AlreadyHuge Chunks MADV_COLLAPSE accepted but were already hugepages (no work)
@@ -488,6 +512,9 @@ type PostInitJSONBody struct {
 	VolumeMounts *[]VolumeMount `json:"volumeMounts,omitempty"`
 }
 
+// PostCpusJSONRequestBody defines body for PostCpus for application/json ContentType.
+type PostCpusJSONRequestBody = CPUsRequest
+
 // PostFilesMultipartRequestBody defines body for PostFiles for multipart/form-data ContentType.
 type PostFilesMultipartRequestBody PostFilesMultipartBody
 
@@ -511,6 +538,12 @@ type ServerInterface interface {
 	// PostCollapse Collapse envd's own anonymous heap into 2 MiB transparent hugepages before pause, so on resume envd touches fewer distinct guest-physical frames (each a cold fault). Best-effort.
 	// (POST /collapse)
 	PostCollapse(w http.ResponseWriter, r *http.Request)
+	// GetCpus Report the guest's present and online CPUs.
+	// (GET /cpus)
+	GetCpus(w http.ResponseWriter, r *http.Request)
+	// PostCpus Bring guest CPUs online or offline so exactly the requested number is online (CPU hot resize).
+	// (POST /cpus)
+	PostCpus(w http.ResponseWriter, r *http.Request)
 	// GetEnvs Environment variables
 	// (GET /envs)
 	GetEnvs(w http.ResponseWriter, r *http.Request)
@@ -565,6 +598,18 @@ type Unimplemented struct{}
 // PostCollapse Collapse envd's own anonymous heap into 2 MiB transparent hugepages before pause, so on resume envd touches fewer distinct guest-physical frames (each a cold fault). Best-effort.
 // (POST /collapse)
 func (_ Unimplemented) PostCollapse(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetCpus Report the guest's present and online CPUs.
+// (GET /cpus)
+func (_ Unimplemented) GetCpus(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// PostCpus Bring guest CPUs online or offline so exactly the requested number is online (CPU hot resize).
+// (POST /cpus)
+func (_ Unimplemented) PostCpus(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -672,6 +717,34 @@ func (siw *ServerInterfaceWrapper) PostCollapse(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.PostCollapse(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetCpus operation middleware
+func (siw *ServerInterfaceWrapper) GetCpus(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetCpus(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PostCpus operation middleware
+func (siw *ServerInterfaceWrapper) PostCpus(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PostCpus(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1201,6 +1274,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/collapse", wrapper.PostCollapse)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/cpus", wrapper.GetCpus)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/cpus", wrapper.PostCpus)
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/fsfreeze", wrapper.PostFsfreeze)
