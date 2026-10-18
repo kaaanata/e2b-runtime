@@ -465,6 +465,49 @@ func TestAlwaysDeniedCIDRs(t *testing.T) {
 	}
 }
 
+// TestIsResolvedUpstreamDenied pins the resolved-IP check of domain-allowed
+// connections: the private-range deny set still applies, except for the
+// ip:port pairs the deployment allow-list (SANDBOX_EGRESS_ALLOW) opens — the
+// same precedence as the kernel rules.
+func TestIsResolvedUpstreamDenied(t *testing.T) {
+	t.Parallel()
+
+	allow, err := sandbox_network.ParseEgressAllowList("192.168.0.232:18781,10.1.0.0/16")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name  string
+		ip    string
+		port  int
+		allow sandbox_network.EgressAllowList
+		want  bool
+	}{
+		{"public IP is never denied", "1.1.1.1", 443, sandbox_network.EgressAllowList{}, false},
+		{"private IP denied without allow-list", "192.168.0.232", 18781, sandbox_network.EgressAllowList{}, true},
+		{"allowed host:port", "192.168.0.232", 18781, allow, false},
+		{"allowed host, other port", "192.168.0.232", 80, allow, true},
+		{"other host, allowed port", "192.168.0.1", 18781, allow, true},
+		{"port-less prefix, any port", "10.1.200.3", 22, allow, false},
+		{"outside port-less prefix", "10.2.0.1", 22, allow, true},
+		{"IPv4-mapped IPv6 form", "::ffff:192.168.0.232", 18781, allow, false},
+		{"loopback stays denied", "127.0.0.1", 18781, allow, true},
+		{"invalid port fails closed", "192.168.0.232", 0, allow, true},
+		{"port overflow fails closed", "192.168.0.232", 70000, allow, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isResolvedUpstreamDenied(net.ParseIP(tt.ip), tt.port, tt.allow); got != tt.want {
+				t.Errorf("isResolvedUpstreamDenied(%s, %d) = %v, want %v", tt.ip, tt.port, got, tt.want)
+			}
+		})
+	}
+}
+
 // Reads IP_TOS back off a real socket, so the shift is checked against the kernel.
 func TestMarkDSCP_SetsSocketTOS(t *testing.T) {
 	t.Parallel()

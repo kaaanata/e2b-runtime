@@ -19,6 +19,7 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/connlimit"
 	"github.com/e2b-dev/infra/packages/shared/pkg/featureflags"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
+	sandbox_network "github.com/e2b-dev/infra/packages/shared/pkg/sandbox-network"
 )
 
 var _ sandbox.MapSubscriber = (*Proxy)(nil)
@@ -39,6 +40,10 @@ type Proxy struct {
 	otherPort uint16 // For all other ports - CIDR-only, no protocol inspection
 
 	egressTOS network.EgressTOS
+	// egressAllow is the deployment egress allow-list (SANDBOX_EGRESS_ALLOW);
+	// the kernel rules accept it ahead of the private-range deny set and the
+	// resolved-IP check in proxyWithIPVerification mirrors that.
+	egressAllow sandbox_network.EgressAllowList
 
 	proxyRules []proxyRule
 	proxy      *tcpproxy.Proxy
@@ -50,6 +55,7 @@ func New(logger logger.Logger, networkConfig network.Config, sandboxes *sandbox.
 		tlsPort:      networkConfig.SandboxTCPFirewallTLSPort,
 		otherPort:    networkConfig.SandboxTCPFirewallOtherPort,
 		egressTOS:    networkConfig.EgressTOS(),
+		egressAllow:  networkConfig.SandboxEgressAllow,
 		logger:       logger,
 		sandboxes:    sandboxes,
 		metrics:      NewMetrics(meterProvider),
@@ -110,6 +116,7 @@ func (p *Proxy) Start(ctx context.Context) error {
 		sandboxes:    p.sandboxes,
 		featureFlags: p.featureFlags,
 		egressTOS:    p.egressTOS,
+		egressAllow:  p.egressAllow,
 	}
 
 	// HTTP listener (port 80 traffic): inspect Host header for domain allowlist
@@ -214,9 +221,12 @@ type egressConn struct {
 	dstPort  int
 	protocol Protocol
 	// tos is the byte stamped on the upstream socket, resolved per connection.
-	tos     int
-	logger  logger.Logger
-	metrics *Metrics
+	tos int
+	// egressAllow is the node's deployment egress allow-list, consulted when a
+	// domain-allowed hostname resolves into the private-range deny set.
+	egressAllow sandbox_network.EgressAllowList
+	logger      logger.Logger
+	metrics     *Metrics
 }
 
 // upstreamAddr is the destination as a dial target.
@@ -237,6 +247,7 @@ type proxyDeps struct {
 	sandboxes    *sandbox.Map
 	featureFlags *featureflags.Client
 	egressTOS    network.EgressTOS
+	egressAllow  sandbox_network.EgressAllowList
 }
 
 var _ tcpproxy.Target = (*connectionHandler)(nil)
@@ -316,13 +327,14 @@ func (t *connectionHandler) HandleConn(conn net.Conn) {
 	defer t.deps.limiter.Release(limiterKey)
 
 	t.handler(ctx, egressConn{
-		conn:     conn,
-		sbx:      sbx,
-		dstIP:    ip,
-		dstPort:  port,
-		protocol: t.protocol,
-		tos:      t.deps.egressTOS.For(sbx.Runtime.SandboxType.EgressClass()),
-		logger:   sbxLogger,
-		metrics:  t.deps.metrics,
+		conn:        conn,
+		sbx:         sbx,
+		dstIP:       ip,
+		dstPort:     port,
+		protocol:    t.protocol,
+		tos:         t.deps.egressTOS.For(sbx.Runtime.SandboxType.EgressClass()),
+		egressAllow: t.deps.egressAllow,
+		logger:      sbxLogger,
+		metrics:     t.deps.metrics,
 	})
 }
