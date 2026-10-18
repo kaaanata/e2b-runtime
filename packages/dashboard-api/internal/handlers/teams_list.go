@@ -29,17 +29,16 @@ func (s *APIStore) GetTeams(c *gin.Context) {
 	teams := make([]api.UserTeam, 0, len(rows))
 	for _, row := range rows {
 		teams = append(teams, api.UserTeam{
-			Id:                row.Team.ID,
-			Name:              row.Team.Name,
-			Slug:              row.Team.Slug,
-			Tier:              row.Team.Tier,
-			Email:             row.Team.Email,
-			ProfilePictureUrl: row.Team.ProfilePictureUrl,
-			IsBlocked:         row.Team.IsBlocked,
-			IsBanned:          row.Team.IsBanned,
-			BlockedReason:     row.Team.BlockedReason,
-			IsDefault:         row.IsDefault,
-			CreatedAt:         row.Team.CreatedAt,
+			Id:            row.Team.ID,
+			Name:          row.Team.Name,
+			Slug:          row.Team.Slug,
+			Tier:          row.Team.Tier,
+			Email:         row.Team.Email,
+			IsBlocked:     row.Team.IsBlocked,
+			IsBanned:      row.Team.IsBanned,
+			BlockedReason: row.Team.BlockedReason,
+			IsDefault:     row.IsDefault,
+			CreatedAt:     row.Team.CreatedAt,
 			Limits: api.UserTeamLimits{
 				MaxLengthHours:           row.TeamLimit.MaxLengthHours,
 				ConcurrentSandboxes:      row.TeamLimit.ConcurrentSandboxes,
