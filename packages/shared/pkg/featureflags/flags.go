@@ -66,6 +66,7 @@ func (f JSONFlag) Fallback() ldvalue.Value {
 
 func NewJSONFlag(name string, fallback ldvalue.Value) JSONFlag {
 	flag := JSONFlag{name: name, fallback: fallback}
+	registerFlag(flag.name, jsonKind)
 	builder := launchDarklyOfflineStore.Flag(flag.name).ValueForAll(fallback)
 	launchDarklyOfflineStore.Update(builder)
 
@@ -122,6 +123,7 @@ func envBoolOr(key string, fallback bool) bool {
 
 func NewBoolFlag(name string, fallback bool) BoolFlag {
 	flag := BoolFlag{name: name, fallback: fallback}
+	registerFlag(flag.name, boolKind)
 	builder := launchDarklyOfflineStore.Flag(flag.name).VariationForAll(fallback)
 	launchDarklyOfflineStore.Update(builder)
 
@@ -425,6 +427,7 @@ func (f IntFlag) Fallback() int {
 
 func NewIntFlag(name string, fallback int) IntFlag {
 	flag := IntFlag{name: name, fallback: fallback}
+	registerFlag(flag.name, intKind)
 	builder := launchDarklyOfflineStore.Flag(flag.name).ValueForAll(ldvalue.Int(fallback))
 	launchDarklyOfflineStore.Update(builder)
 
@@ -695,6 +698,7 @@ func (f StringFlag) Fallback() string {
 
 func NewStringFlag(name string, fallback string) StringFlag {
 	flag := StringFlag{name: name, fallback: fallback}
+	registerFlag(flag.name, stringKind)
 	builder := launchDarklyOfflineStore.Flag(flag.name).ValueForAll(ldvalue.String(fallback))
 	launchDarklyOfflineStore.Update(builder)
 

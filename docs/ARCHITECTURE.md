@@ -181,7 +181,13 @@ The control-plane entry point (Gin, OpenAPI-generated from `spec/openapi.yml`, p
   and those reads fail until the flag routes them to ClickHouse. `LOGS_READ_CONFIG=true|false` sets
   the value the flag falls back to when LaunchDarkly has none (no LaunchDarkly, or the flag not
   defined there); a LaunchDarkly value wins. LaunchDarkly feature flags also gate placement
-  parameters, rate limits, and rollouts.
+  parameters, rate limits, and rollouts. Without `LAUNCH_DARKLY_API_KEY`, every service that
+  builds a `featureflags.Client` (api, orchestrator, client-proxy, dashboard-api and the
+  orchestrator's CLI tools) reads `FEATURE_FLAG_OVERRIDES`, a JSON object
+  `{"flag-key": value, ...}` applied to the offline flag store at startup, after the code
+  defaults (e.g. `{"best-of-k-max-overcommit": 400}`); values are checked against the flag's type,
+  unknown keys are logged and skipped, malformed input fails startup. With an API key set the
+  variable is ignored (warned), LaunchDarkly being the source of truth.
 
 ### Orchestrator (`packages/orchestrator`)
 
