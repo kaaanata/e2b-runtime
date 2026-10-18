@@ -49,3 +49,17 @@ func TestTemplateLayoutFromBuildMetadata(t *testing.T) {
 	assert.Equal(t, "block-v1", *block.Layout)
 	assert.Equal(t, []int64{10 << 30}, block.WorkspaceSlotCapacityBytes)
 }
+
+func TestTemplateLayoutFromBuildMetadata_MaxMemory(t *testing.T) {
+	t.Parallel()
+
+	hotplug := TemplateLayoutFromBuildMetadata(&templatemanagergrpc.TemplateBuildMetadata{Layout: new(""), MaxMemoryMB: new(int32(65536))})
+	require.NotNil(t, hotplug.MaxMemoryMB)
+	assert.Equal(t, int64(65536), *hotplug.MaxMemoryMB)
+
+	fixed := TemplateLayoutFromBuildMetadata(&templatemanagergrpc.TemplateBuildMetadata{Layout: new("")})
+	assert.Nil(t, fixed.MaxMemoryMB, "no device reported: fixed size")
+
+	unknown := TemplateLayoutFromBuildMetadata(&templatemanagergrpc.TemplateBuildMetadata{MaxMemoryMB: new(int32(65536))})
+	assert.Nil(t, unknown.MaxMemoryMB, "without a layout the metadata is from a template-manager that predates both")
+}

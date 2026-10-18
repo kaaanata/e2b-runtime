@@ -397,6 +397,18 @@ components:
       minimum: 128
       description: Memory for the sandbox in MiB
 
+    MaxMemoryMB:
+      type: integer
+      format: int32
+      minimum: 128
+      description: >-
+        Largest memory, in MiB, a sandbox of the template can be resized to
+        while it runs (virtio-mem memory hotplug). The template's memoryMB
+        stays the boot memory, always backed; the rest is plugged on demand.
+        maxMemoryMB - memoryMB must be a multiple of 128 MiB. Omitted (or
+        equal to memoryMB) for a fixed-size template. Needs a guest kernel
+        with CONFIG_VIRTIO_MEM.
+
     DiskSizeMB:
       type: integer
       format: int32
@@ -1355,6 +1367,13 @@ components:
           items:
             type: integer
             format: int64
+        maxMemoryMB:
+          allOf:
+            - $ref: "#/components/schemas/MaxMemoryMB"
+          description: >-
+            Maximum memory of the last successful build when it has memory
+            hotplug (sandboxes can be created and resized between memoryMB
+            and this); omitted for a fixed-size template.
 
     TemplateRequestResponseV3:
       required:
@@ -1502,6 +1521,12 @@ components:
           items:
             type: integer
             format: int64
+        maxMemoryMB:
+          allOf:
+            - $ref: "#/components/schemas/MaxMemoryMB"
+          description: >-
+            Maximum memory of a build with memory hotplug; omitted for a
+            fixed-size build.
 
     TemplateWithBuilds:
       required:
@@ -1637,6 +1662,8 @@ components:
           $ref: "#/components/schemas/CPUCount"
         memoryMB:
           $ref: "#/components/schemas/MemoryMB"
+        maxMemoryMB:
+          $ref: "#/components/schemas/MaxMemoryMB"
         minFreeDiskMb:
           $ref: "#/components/schemas/MinFreeDiskMb"
 
@@ -1749,6 +1776,13 @@ components:
         readyCmd:
           description: Ready check command to execute in the template after the build
           type: string
+        maxMemoryMB:
+          allOf:
+            - $ref: "#/components/schemas/MaxMemoryMB"
+          description: >-
+            Overrides the maxMemoryMB given when the build was requested. A
+            build from another template inherits that template's maximum and
+            may only repeat it.
         layout:
           $ref: "#/components/schemas/TemplateLayout"
         workspaceSlotCapacityGiB:

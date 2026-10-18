@@ -31,6 +31,7 @@ SELECT
     eb.envd_version AS build_envd_version,
     eb.layout AS build_layout,
     eb.workspace_slot_capacity_bytes AS build_workspace_slot_capacity_bytes,
+    eb.max_ram_mb AS build_max_ram_mb,
     COALESCE(latest_build.status_group, 'pending') AS build_status,
     COALESCE(ea.aliases, ARRAY[]::text[])::text[] AS aliases,
     COALESCE(ea.names, ARRAY[]::text[])::text[] AS names
@@ -51,7 +52,7 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) latest_build ON TRUE
 LEFT JOIN LATERAL (
-    SELECT b.id, b.vcpu, b.ram_mb, b.total_disk_size_mb, b.envd_version, b.layout, b.workspace_slot_capacity_bytes
+    SELECT b.id, b.vcpu, b.ram_mb, b.max_ram_mb, b.total_disk_size_mb, b.envd_version, b.layout, b.workspace_slot_capacity_bytes
     FROM public.env_build_assignments AS ba
     JOIN public.env_builds AS b ON b.id = ba.build_id
     WHERE ba.env_id = e.id AND ba.tag = 'default' AND b.status_group = 'ready'
@@ -88,6 +89,7 @@ type GetTeamTemplatesWithCursorRow struct {
 	BuildEnvdVersion                *string
 	BuildLayout                     *string
 	BuildWorkspaceSlotCapacityBytes []int64
+	BuildMaxRamMb                   *int64
 	BuildStatus                     types.BuildStatusGroup
 	Aliases                         []string
 	Names                           []string
@@ -129,6 +131,7 @@ func (q *Queries) GetTeamTemplatesWithCursor(ctx context.Context, arg GetTeamTem
 			&i.BuildEnvdVersion,
 			&i.BuildLayout,
 			&i.BuildWorkspaceSlotCapacityBytes,
+			&i.BuildMaxRamMb,
 			&i.BuildStatus,
 			&i.Aliases,
 			&i.Names,

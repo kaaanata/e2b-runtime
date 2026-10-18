@@ -136,6 +136,7 @@ type EnvBuild struct {
 	TeamID                     *uuid.UUID
 	Layout                     pgtype.Text
 	WorkspaceSlotCapacityBytes []int64
+	MaxRamMb                   pgtype.Int8
 }
 
 type EnvBuildAssignment struct {

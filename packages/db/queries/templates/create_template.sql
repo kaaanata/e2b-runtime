@@ -31,12 +31,14 @@ WHERE build_id IN (SELECT id FROM invalidated);
 -- compatibility with consumers that read the env_builds row before the build
 -- completes. The template-manager reports the versions it actually used via
 -- TemplateBuildMetadata, and FinishTemplateBuild overwrites these fields with
--- the reported values.
+-- the reported values. max_ram_mb is the requested maximum memory (NULL for a
+-- fixed-size build); FinishTemplateBuild replaces it with the reported one.
 INSERT INTO "public"."env_builds" (
     id,
     updated_at,
     status,
     ram_mb,
+    max_ram_mb,
     vcpu,
     kernel_version,
     firecracker_version,
@@ -50,6 +52,7 @@ INSERT INTO "public"."env_builds" (
     NOW(),
     @status,
     @ram_mb,
+    sqlc.narg(max_ram_mb),
     @vcpu,
     @kernel_version,
     @firecracker_version,

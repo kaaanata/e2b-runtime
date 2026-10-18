@@ -101,6 +101,14 @@ message TemplateConfig {
   // "block-v1" build, one entry per slot; a block volume of exactly that size
   // takes the slot at runtime.
   repeated int64 workspaceSlotCapacityBytes = 19;
+  // maxMemoryMB is the largest guest memory a sandbox of this template can be
+  // resized to while it runs. When above memoryMB the template's base snapshot
+  // carries a virtio-mem hotplug device of maxMemoryMB - memoryMB (a multiple
+  // of 128 MiB); memoryMB stays the boot memory, the always-present minimum.
+  // Unset or equal to memoryMB: no device, memory is fixed at memoryMB. A
+  // build from another template inherits that template's device when unset
+  // and must not change it.
+  optional int32 maxMemoryMB = 20;
 }
 
 message TemplateCreateRequest {
@@ -158,6 +166,11 @@ message TemplateBuildMetadata {
   optional string layout = 6;
   // Capacity of each workspace slot of a "block-v1" template, in bytes.
   repeated int64 workspaceSlotCapacityBytes = 7;
+  // Maximum guest memory of a template built with a virtio-mem hotplug
+  // device (after inheritance), in MiB. Unset when the build has no device;
+  // with layout set (a template-manager that knows layouts) an unset value
+  // therefore means "no device", without layout it means unknown.
+  optional int32 maxMemoryMB = 8;
 }
 
 enum TemplateBuildState {

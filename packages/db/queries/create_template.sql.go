@@ -51,6 +51,7 @@ INSERT INTO "public"."env_builds" (
     updated_at,
     status,
     ram_mb,
+    max_ram_mb,
     vcpu,
     kernel_version,
     firecracker_version,
@@ -71,7 +72,8 @@ INSERT INTO "public"."env_builds" (
     $8,
     $9,
     $10,
-    $11
+    $11,
+    $12
 )
 `
 
@@ -79,6 +81,7 @@ type CreateTemplateBuildParams struct {
 	BuildID            uuid.UUID
 	Status             types.BuildStatus
 	RamMb              int64
+	MaxRamMb           *int64
 	Vcpu               int64
 	KernelVersion      string
 	FirecrackerVersion string
@@ -93,12 +96,14 @@ type CreateTemplateBuildParams struct {
 // compatibility with consumers that read the env_builds row before the build
 // completes. The template-manager reports the versions it actually used via
 // TemplateBuildMetadata, and FinishTemplateBuild overwrites these fields with
-// the reported values.
+// the reported values. max_ram_mb is the requested maximum memory (NULL for a
+// fixed-size build); FinishTemplateBuild replaces it with the reported one.
 func (q *Queries) CreateTemplateBuild(ctx context.Context, arg CreateTemplateBuildParams) error {
 	_, err := q.db.Exec(ctx, createTemplateBuild,
 		arg.BuildID,
 		arg.Status,
 		arg.RamMb,
+		arg.MaxRamMb,
 		arg.Vcpu,
 		arg.KernelVersion,
 		arg.FirecrackerVersion,

@@ -92,6 +92,12 @@ type TemplateConfig struct {
 
 	// Workspace is the slot layout of a LayoutBlockV1 build; nil otherwise.
 	Workspace *metadata.WorkspaceLayout
+
+	// MemoryHotplug is the virtio-mem device every boot of this build carries
+	// (configured pre-boot, plugged 0) so the base snapshot records it; nil
+	// for a build without one. MemoryHotplug.BaseMiB equals MemoryMB. Part of
+	// the base-layer cache key for the same reason as Layout.
+	MemoryHotplug *metadata.MemoryHotplugLayout
 }
 
 // ObjectMetadata is the provenance stamped on a build's uploaded objects.

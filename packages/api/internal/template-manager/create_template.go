@@ -44,6 +44,9 @@ type TemplateLayout struct {
 	Layout *string
 	// WorkspaceSlotCapacityBytes is the capacity of each workspace slot.
 	WorkspaceSlotCapacityBytes []int64
+	// MaxMemoryMB is the memory hotplug maximum: nil for a fixed-size build
+	// (or, from a build start, "inherit"); the template manager validates it.
+	MaxMemoryMB *int64
 }
 
 // TemplateLayoutFromAPI converts the public build request's layout fields.
@@ -78,10 +81,17 @@ func TemplateLayoutFromBuildMetadata(meta *templatemanagergrpc.TemplateBuildMeta
 		return TemplateLayout{}
 	}
 
-	return TemplateLayout{
+	out := TemplateLayout{
 		Layout:                     new(meta.GetLayout()),
 		WorkspaceSlotCapacityBytes: slices.Clone(meta.GetWorkspaceSlotCapacityBytes()),
 	}
+
+	// Reported together with the layout: unset there means no device.
+	if meta.MaxMemoryMB != nil {
+		out.MaxMemoryMB = new(int64(meta.GetMaxMemoryMB()))
+	}
+
+	return out
 }
 
 func (tm *TemplateManager) CreateTemplate(
@@ -181,6 +191,9 @@ func (tm *TemplateManager) CreateTemplate(
 		FromImageRegistry:          imageRegistry,
 		Layout:                     layout.Layout,
 		WorkspaceSlotCapacityBytes: layout.WorkspaceSlotCapacityBytes,
+	}
+	if layout.MaxMemoryMB != nil {
+		template.MaxMemoryMB = new(int32(*layout.MaxMemoryMB))
 	}
 
 	err = setTemplateSource(ctx, tm, teamID, teamSlug, template, fromImage, fromTemplate)

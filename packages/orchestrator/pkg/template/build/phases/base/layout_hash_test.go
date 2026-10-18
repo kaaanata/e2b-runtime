@@ -43,3 +43,26 @@ func TestLayoutCacheKey(t *testing.T) {
 
 	assert.Equal(t, block, testLayerKey(layoutContext(metadata.LayoutBlockV1, two)), "the key is stable")
 }
+
+// The hotplug device is part of the base snapshot as well; a build without
+// one keeps the key it always had.
+func TestMemoryHotplugCacheKey(t *testing.T) {
+	t.Parallel()
+
+	withHotplug := func(l *metadata.MemoryHotplugLayout) buildcontext.BuildContext {
+		bc := layoutContext(metadata.LayoutLegacy, nil)
+		bc.Config.MemoryHotplug = l
+
+		return bc
+	}
+
+	assert.Equal(t, legacyLayerKey(), testLayerKey(withHotplug(nil)), "no device: unchanged key")
+
+	small := &metadata.MemoryHotplugLayout{BaseMiB: 1024, TotalMiB: 1024, SlotMiB: 128, BlockMiB: 2}
+	big := &metadata.MemoryHotplugLayout{BaseMiB: 1024, TotalMiB: 2048, SlotMiB: 128, BlockMiB: 2}
+
+	key := testLayerKey(withHotplug(small))
+	assert.NotEqual(t, legacyLayerKey(), key, "a hotplug base layer cannot serve a fixed-size build")
+	assert.NotEqual(t, key, testLayerKey(withHotplug(big)), "the region size is part of the key")
+	assert.Equal(t, key, testLayerKey(withHotplug(small.Clone())), "the key is stable")
+}

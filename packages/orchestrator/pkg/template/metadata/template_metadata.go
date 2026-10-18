@@ -56,7 +56,8 @@ const (
 // means adding it here, in the release that can handle it, BEFORE any writer may
 // produce it.
 var KnownCapabilities = map[string]struct{}{
-	LayoutBlockV1: {},
+	LayoutBlockV1:             {},
+	CapabilityMemoryHotplugV1: {},
 }
 
 // ErrUnsupportedLayout is the sentinel every UnsupportedLayoutError matches with
@@ -315,6 +316,19 @@ type Template struct {
 	// it and Pause re-stamps it. WithPrefetch does carry it: it rewrites the
 	// metadata of the same snapshot, whose revisions are unchanged.
 	WorkspaceRevisions []WorkspaceRevisionRef `json:"workspace_revisions,omitempty"`
+
+	// MemoryHotplug is the virtio-mem device of a template built with a
+	// maximum memory above its boot memory; nil for every other template (no
+	// device, memory fixed at boot size). Lineage state carried like Layout,
+	// and always paired with CapabilityMemoryHotplugV1 in RequiredCapabilities
+	// (see WithMemoryHotplug) so a reader without hotplug support refuses it.
+	MemoryHotplug *MemoryHotplugLayout `json:"memory_hotplug,omitempty"`
+
+	// MemoryHotplugPluggedMiB is the hotplug size that was plugged when this
+	// snapshot was taken; a memory resume restores exactly that much before
+	// any resize. Describes ONE snapshot (stamped at pause like
+	// FilesystemOnly), so only WithPrefetch carries it.
+	MemoryHotplugPluggedMiB int64 `json:"memory_hotplug_plugged_mib,omitempty"`
 }
 
 // HasWorkspaceSlots reports whether this template's device table reserves
@@ -399,7 +413,7 @@ func V1TemplateVersion() Template {
 // team — inheriting the parent's arguments would record arguments the child's kernel
 // never booted with, and a later filesystem-only cold boot would then apply them.
 //
-// It DOES carry Layout, Workspace and RequiredCapabilities: the child build resumes
+// It DOES carry Layout, Workspace, RequiredCapabilities and MemoryHotplug: the child build resumes
 // the parent's snapshot, whose device table it cannot change, so the slots are a
 // fact about the child's layers too. The finalize phase then stamps the build's
 // own configuration over them, as it does for CmdlineArgs.
@@ -416,6 +430,7 @@ func (t Template) BasedOn(
 		Layout:               t.Layout,
 		Workspace:            t.Workspace,
 		RequiredCapabilities: t.RequiredCapabilities,
+		MemoryHotplug:        t.MemoryHotplug.Clone(),
 	}
 }
 
@@ -431,6 +446,7 @@ func (t Template) NewVersionTemplate(metadata TemplateMetadata) Template {
 		Layout:               t.Layout,
 		Workspace:            t.Workspace,
 		RequiredCapabilities: t.RequiredCapabilities,
+		MemoryHotplug:        t.MemoryHotplug.Clone(),
 	}
 }
 
@@ -446,6 +462,7 @@ func (t Template) SameVersionTemplate(metadata TemplateMetadata) Template {
 		Layout:               t.Layout,
 		Workspace:            t.Workspace,
 		RequiredCapabilities: t.RequiredCapabilities,
+		MemoryHotplug:        t.MemoryHotplug.Clone(),
 	}
 }
 
@@ -454,18 +471,20 @@ func (t Template) SameVersionTemplate(metadata TemplateMetadata) Template {
 // WorkspaceRevisions.
 func (t Template) WithPrefetch(prefetch *Prefetch) Template {
 	return Template{
-		Version:              t.Version,
-		Template:             t.Template,
-		Context:              t.Context,
-		Start:                t.Start,
-		FromTemplate:         t.FromTemplate,
-		FromImage:            t.FromImage,
-		Prefetch:             prefetch,
-		CmdlineArgs:          t.CmdlineArgs,
-		Layout:               t.Layout,
-		Workspace:            t.Workspace,
-		RequiredCapabilities: t.RequiredCapabilities,
-		WorkspaceRevisions:   t.WorkspaceRevisions,
+		Version:                 t.Version,
+		Template:                t.Template,
+		Context:                 t.Context,
+		Start:                   t.Start,
+		FromTemplate:            t.FromTemplate,
+		FromImage:               t.FromImage,
+		Prefetch:                prefetch,
+		CmdlineArgs:             t.CmdlineArgs,
+		Layout:                  t.Layout,
+		Workspace:               t.Workspace,
+		RequiredCapabilities:    t.RequiredCapabilities,
+		WorkspaceRevisions:      t.WorkspaceRevisions,
+		MemoryHotplug:           t.MemoryHotplug.Clone(),
+		MemoryHotplugPluggedMiB: t.MemoryHotplugPluggedMiB,
 	}
 }
 
@@ -571,6 +590,14 @@ func deserialize(reader io.Reader) (Template, error) {
 	// than treat the snapshot as the legacy layout it is not.
 	if err := templateMetadata.checkCapabilities(); err != nil {
 		return Template{}, err
+	}
+
+	// A hotplug layout sizes the memory file and the UFFD handshake; a
+	// malformed one must not reach a resume.
+	if l := templateMetadata.MemoryHotplug; l != nil {
+		if err := l.Validate(); err != nil {
+			return Template{}, err
+		}
 	}
 
 	return templateMetadata, nil

@@ -1920,6 +1920,8 @@ definitions:
     type: object
     description:
       An update to the size of the hotpluggable memory region.
+    required:
+      - requested_size_mib
     properties:
       requested_size_mib:
         type: integer

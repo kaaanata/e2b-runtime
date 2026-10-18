@@ -6,7 +6,7 @@
 -- case so we do not clobber the values the API seeded at build registration.
 -- layout and workspace_slot_capacity_bytes are the device layout the build
 -- was made with; an unset layout (an older template-manager) leaves both
--- unknown.
+-- unknown. max_ram_mb (memory hotplug maximum) follows the same rule.
 -- The build keeps the first terminal outcome recorded: a build failed for
 -- running out of time has had its artifacts deleted, so a later success must
 -- not publish it.
@@ -24,6 +24,13 @@ WITH finished AS (
         workspace_slot_capacity_bytes = CASE
             WHEN sqlc.narg(layout)::text IS NULL THEN workspace_slot_capacity_bytes
             ELSE @workspace_slot_capacity_bytes::bigint[]
+        END,
+        -- Reported with the layout: a template-manager that reports a layout
+        -- reports the maximum memory of a hotplug build and none (NULL) for a
+        -- fixed-size one, so the requested value is replaced either way.
+        max_ram_mb = CASE
+            WHEN sqlc.narg(layout)::text IS NULL THEN max_ram_mb
+            ELSE sqlc.narg(max_ram_mb)::bigint
         END
     WHERE
         id = @build_id

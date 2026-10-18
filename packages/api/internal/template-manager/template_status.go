@@ -400,6 +400,7 @@ func (tm *TemplateManager) SetFinished(ctx context.Context, buildID uuid.UUID, r
 		FirecrackerVersion:         firecrackerVersion,
 		Layout:                     layout.Layout,
 		WorkspaceSlotCapacityBytes: layout.WorkspaceSlotCapacityBytes,
+		MaxRamMb:                   layout.MaxMemoryMB,
 		BuildID:                    buildID,
 	})
 

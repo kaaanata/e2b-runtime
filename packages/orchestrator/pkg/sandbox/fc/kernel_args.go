@@ -131,6 +131,12 @@ func buildKernelArgs(ipv4 string, options ProcessOptions) KernelArgs {
 		maps.Copy(args, options.CmdlineArgs)
 	}
 
+	// After the overlay, so it cannot be overridden: a guest that onlines
+	// hotplugged memory into ZONE_NORMAL cannot reliably unplug it again.
+	if options.MemoryHotplug != nil {
+		args[memhpDefaultStateParam] = memhpOnlineMovable
+	}
+
 	return args
 }
 

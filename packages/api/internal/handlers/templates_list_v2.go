@@ -116,6 +116,7 @@ func (a *APIStore) GetV2Templates(c *gin.Context, params api.GetV2TemplatesParam
 			EnvdVersion:   envdVersion,
 		}
 		tpl.Layout, tpl.WorkspaceSlotCapacityGiB = templateBuildLayoutToAPI(item.BuildLayout, item.BuildWorkspaceSlotCapacityBytes)
+		tpl.MaxMemoryMB = maxMemoryToAPI(item.BuildMaxRamMb)
 		templates = append(templates, tpl)
 	}
 

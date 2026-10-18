@@ -27,6 +27,7 @@ import (
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/rootfs"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/socket"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/template"
+	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/metadata"
 	"github.com/e2b-dev/infra/packages/shared/pkg/fc/client/operations"
 	"github.com/e2b-dev/infra/packages/shared/pkg/keys"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
@@ -125,6 +126,13 @@ type ProcessOptions struct {
 
 	// Stderr is the writer to which the process stderr will be written.
 	Stderr io.Writer
+
+	// MemoryHotplug, when set, configures a virtio-mem device of this layout
+	// before boot (plugged 0) and boots the guest with hotplugged memory
+	// onlined movable, so it can later be unplugged. Every cold boot of a
+	// template lineage built with a device must configure the identical one:
+	// the snapshot's device table and memory file depend on it.
+	MemoryHotplug *metadata.MemoryHotplugLayout
 }
 
 // TokenBucketConfig holds parameters for a single Firecracker token bucket.
@@ -169,6 +177,10 @@ type Process struct {
 	Exit *utils.ErrorOnce
 
 	client *apiClient
+
+	// resumeHotplugMiB, when set, is the hotplug size Resume requests between
+	// loading the snapshot and resuming the vCPUs (see SetResumeMemoryHotplug).
+	resumeHotplugMiB *int64
 
 	// balloonAccum is the cumulative virtio-balloon snapshot summed by the
 	// metrics-reader goroutine (FC's SharedIncMetric resets per flush).
@@ -534,6 +546,28 @@ func (p *Process) Create(
 	}
 	telemetry.ReportEvent(ctx, "set fc machine config")
 
+	// The hotplug device is pre-boot only. It must describe exactly the
+	// memory the machine config does: the region starts right after boot
+	// memory, at the same offset in the memory file.
+	if l := options.MemoryHotplug; l != nil {
+		if l.BaseMiB != memoryMB {
+			fcStopErr := p.Stop(ctx)
+
+			return errors.Join(fmt.Errorf("memory hotplug layout has %d MiB boot memory, machine config %d MiB", l.BaseMiB, memoryMB), fcStopErr)
+		}
+
+		if err := p.client.setMemoryHotplug(ctx, *l); err != nil {
+			fcStopErr := p.Stop(ctx)
+
+			return errors.Join(err, fcStopErr)
+		}
+		telemetry.ReportEvent(ctx, "set fc memory hotplug",
+			attribute.Int64("memory_hotplug.total_mib", l.TotalMiB),
+			attribute.Int64("memory_hotplug.slot_mib", l.SlotMiB),
+			attribute.Int64("memory_hotplug.block_mib", l.BlockMiB),
+		)
+	}
+
 	err = p.client.setEntropyDevice(ctx)
 	if err != nil {
 		fcStopErr := p.Stop(ctx)
@@ -782,6 +816,19 @@ func (p *Process) Resume(
 		}
 	}
 	telemetry.ReportEvent(ctx, "configured drive rate limit")
+
+	// A resume with a different memory size: Firecracker records the request
+	// on the paused VM and the guest driver starts plugging the moment the
+	// vCPUs run (measured: plugged 0.25 s after resume). Before resumeVM so
+	// no guest code runs at the old size longer than it has to.
+	if p.resumeHotplugMiB != nil {
+		if setErr := p.client.patchMemoryHotplug(ctx, *p.resumeHotplugMiB); setErr != nil {
+			fcStopErr := p.Stop(ctx)
+
+			return errors.Join(fmt.Errorf("error requesting memory size on resume: %w", setErr), fcStopErr)
+		}
+		telemetry.ReportEvent(ctx, "requested memory hotplug size", attribute.Int64("memory_hotplug.requested_mib", *p.resumeHotplugMiB))
+	}
 
 	err = p.client.resumeVM(ctx)
 	if err != nil {

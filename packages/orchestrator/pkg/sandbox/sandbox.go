@@ -146,6 +146,12 @@ type Config struct {
 
 	MaxSandboxLengthHours int64
 
+	// MemoryHotplug is the virtio-mem device of the template lineage, nil
+	// when its memory is fixed at RamMB. RamMB stays the boot memory (the
+	// device's base). A cold boot configures the device from it; a memory
+	// resume restores it from the snapshot and must agree with it.
+	MemoryHotplug *metadata.MemoryHotplugLayout
+
 	// mu protects mutable sub-fields of Network (Egress, Ingress).
 	// The Network pointer itself is set once at construction and never replaced.
 	mu      *sync.RWMutex
@@ -1023,6 +1029,17 @@ func (f *Factory) CreateSandbox(
 		return nil, fmt.Errorf("failed to get memfile size: %w", err)
 	}
 
+	// A hotplug template's memory file covers boot memory and the whole
+	// hotplug region; every snapshot diff inherits that size, so a mismatch
+	// here would corrupt the lineage at the first pause.
+	if config.MemoryHotplug != nil {
+		if want := config.memfileSizeBytes(); memfileSize != want {
+			return nil, fmt.Errorf("memfile is %d bytes, the memory hotplug layout needs %d", memfileSize, want)
+		}
+
+		processOptions.MemoryHotplug = config.MemoryHotplug.Clone()
+	}
+
 	// / ==== END of resources initialization ====
 	ips, err := ipsPromise.Wait(ctx)
 	if err != nil {
@@ -1579,6 +1596,10 @@ func (f *Factory) ResumeSandbox(
 	meta, err := t.Metadata()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get metadata: %w", err)
+	}
+
+	if err := config.adoptMemoryHotplug(meta); err != nil {
+		return nil, err
 	}
 
 	// The default user lives only in the restored envd's memory, so a resume that sends it
