@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -135,6 +136,14 @@ func buildKernelArgs(ipv4 string, options ProcessOptions) KernelArgs {
 	// hotplugged memory into ZONE_NORMAL cannot reliably unplug it again.
 	if options.MemoryHotplug != nil {
 		args[memhpDefaultStateParam] = memhpOnlineMovable
+	}
+
+	// After the overlay too: the guest must boot with exactly the base CPUs
+	// online and the rest present-but-offline (maxcpus=, not nr_cpus=, which
+	// would make them impossible to bring online later).
+	if l := options.CPUHotplug; l != nil {
+		args[maxcpusParam] = strconv.FormatInt(l.BaseVCPUs, 10)
+		delete(args, "nr_cpus")
 	}
 
 	return args

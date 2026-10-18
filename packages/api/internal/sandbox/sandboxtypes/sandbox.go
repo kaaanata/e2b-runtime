@@ -101,9 +101,17 @@ type Sandbox struct {
 	// RamMB (see RequestedMemoryMB). CurrentMemoryMB is what the node last
 	// reported the guest to have; MaxMemoryMB the template's maximum, nil for
 	// a template without memory hotplug (fixed at RamMB).
-	MemoryMB           int64  `json:"memoryMB,omitempty"`
-	CurrentMemoryMB    int64  `json:"currentMemoryMB,omitempty"`
-	MaxMemoryMB        *int64 `json:"maxMemoryMB,omitempty"`
+	MemoryMB        int64  `json:"memoryMB,omitempty"`
+	CurrentMemoryMB int64  `json:"currentMemoryMB,omitempty"`
+	MaxMemoryMB     *int64 `json:"maxMemoryMB,omitempty"`
+	// CPUCount is the vCPU count granted to the sandbox (CPU hot resize; VCpu
+	// stays the template's count); 0 on records predating it, read as VCpu
+	// (see RequestedVCPUs). CurrentCPUCount is what the guest had online when
+	// the node last reported; MaxCPUCount the template's maximum, nil for a
+	// fixed vCPU count.
+	CPUCount           int64  `json:"cpuCount,omitempty"`
+	CurrentCPUCount    int64  `json:"currentCpuCount,omitempty"`
+	MaxCPUCount        *int64 `json:"maxCpuCount,omitempty"`
 	KernelVersion      string `json:"kernelVersion"`
 	FirecrackerVersion string `json:"firecrackerVersion"`
 	// FirecrackerVersionResolved records whether FirecrackerVersion is the
@@ -150,6 +158,22 @@ func (s Sandbox) RequestedMemoryMB() int64 {
 	}
 
 	return s.MemoryMB
+}
+
+// RequestedVCPUs is the vCPU count granted to the sandbox: CPUCount, or the
+// template's count for records that predate CPU hot resize.
+func (s Sandbox) RequestedVCPUs() int64 {
+	if s.CPUCount == 0 {
+		return s.VCpu
+	}
+
+	return s.CPUCount
+}
+
+// CPUHotResizable reports whether the sandbox's template has CPU hot resize,
+// i.e. its vCPU count can be changed while it runs.
+func (s Sandbox) CPUHotResizable() bool {
+	return s.MaxCPUCount != nil
 }
 
 // HotResizable reports whether the sandbox's template has a memory hotplug
@@ -214,6 +238,19 @@ type NodeSandbox struct {
 	VCpu     int64
 	RamMB    int64
 	MemoryMB int64
+	// CPUCount is the vCPU count the node accounts (the granted count, CPU
+	// hot resize); 0 from nodes predating it.
+	CPUCount int64
+}
+
+// AccountedVCPUs is the vCPU count to release from the node's optimistic
+// allocation when the sandbox goes: what the node accounted, else VCpu.
+func (s NodeSandbox) AccountedVCPUs() int64 {
+	if s.CPUCount == 0 {
+		return s.VCpu
+	}
+
+	return s.CPUCount
 }
 
 // AccountedMemoryMB is the memory to release from the node's optimistic
@@ -239,6 +276,7 @@ func (s Sandbox) ToNodeSandbox() NodeSandbox {
 		VCpu:        s.VCpu,
 		RamMB:       s.RamMB,
 		MemoryMB:    s.RequestedMemoryMB(),
+		CPUCount:    s.RequestedVCPUs(),
 	}
 }
 

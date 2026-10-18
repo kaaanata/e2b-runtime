@@ -109,6 +109,14 @@ message TemplateConfig {
   // build from another template inherits that template's device when unset
   // and must not change it.
   optional int32 maxMemoryMB = 20;
+  // maxCpuCount is the largest vCPU count a sandbox of this template can be
+  // resized to while it runs. When above vCpuCount the VM is created with
+  // maxCpuCount vCPUs and the guest boots with only vCpuCount of them online
+  // (maxcpus=); a resize brings CPUs online/offline in the guest and moves the
+  // host cgroup CPU quota. At most 32 (Firecracker), even on x86 (SMT). Unset
+  // or equal to vCpuCount: the vCPU count is fixed. A build from another
+  // template inherits that template's maximum when unset and must not change it.
+  optional int32 maxCpuCount = 21;
 }
 
 message TemplateCreateRequest {
@@ -171,6 +179,10 @@ message TemplateBuildMetadata {
   // with layout set (a template-manager that knows layouts) an unset value
   // therefore means "no device", without layout it means unknown.
   optional int32 maxMemoryMB = 8;
+  // Maximum vCPU count of a template built with CPU hotplug (after
+  // inheritance). Unset when the build has a fixed vCPU count; like
+  // maxMemoryMB only meaningful together with layout.
+  optional int32 maxCpuCount = 9;
 }
 
 enum TemplateBuildState {

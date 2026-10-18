@@ -66,3 +66,20 @@ func TestMemoryHotplugCacheKey(t *testing.T) {
 	assert.NotEqual(t, key, testLayerKey(withHotplug(big)), "the region size is part of the key")
 	assert.Equal(t, key, testLayerKey(withHotplug(small.Clone())), "the key is stable")
 }
+
+func TestCPUHotplugCacheKey(t *testing.T) {
+	t.Parallel()
+
+	withCPU := func(l *metadata.CPUHotplugLayout) buildcontext.BuildContext {
+		bc := layoutContext(metadata.LayoutLegacy, nil)
+		bc.Config.CPUHotplug = l
+
+		return bc
+	}
+
+	assert.Equal(t, legacyLayerKey(), testLayerKey(withCPU(nil)), "fixed vCPUs: unchanged key")
+
+	key := testLayerKey(withCPU(&metadata.CPUHotplugLayout{BaseVCPUs: 8, MaxVCPUs: 32}))
+	assert.NotEqual(t, legacyLayerKey(), key)
+	assert.NotEqual(t, key, testLayerKey(withCPU(&metadata.CPUHotplugLayout{BaseVCPUs: 8, MaxVCPUs: 16})))
+}

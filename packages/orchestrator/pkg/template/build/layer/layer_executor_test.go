@@ -75,3 +75,19 @@ func TestLayerMetadata_NoDeviceClearsStaleField(t *testing.T) {
 	assert.Nil(t, got.MemoryHotplug, "the metadata describes the VM that was paused")
 	assert.Empty(t, got.RequiredCapabilities)
 }
+
+func TestLayerMetadata_CarriesCPUHotplug(t *testing.T) {
+	t.Parallel()
+
+	l := &metadata.CPUHotplugLayout{BaseVCPUs: 8, MaxVCPUs: 32}
+	cfg := buildVMConfig(nil)
+	cfg.CPUHotplug = l
+
+	got := layerMetadata(metadata.Template{Version: metadata.CurrentVersion}, uuid.NewString(), cfg)
+	assert.Equal(t, l, got.CPUHotplug)
+	assert.Equal(t, []string{metadata.CapabilityCPUHotplugV1}, got.RequiredCapabilities)
+
+	cleared := layerMetadata(got, uuid.NewString(), buildVMConfig(nil))
+	assert.Nil(t, cleared.CPUHotplug, "the metadata describes the VM that was paused")
+	assert.Empty(t, cleared.RequiredCapabilities)
+}

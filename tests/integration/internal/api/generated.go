@@ -482,6 +482,9 @@ type CloneVolume struct {
 
 // ConnectSandbox defines model for ConnectSandbox.
 type ConnectSandbox struct {
+	// CpuCount vCPUs to resume a paused sandbox with (CPU hot resize templates only; ignored for a running sandbox). Same bounds and errors as on create.
+	CpuCount *CPUCount `json:"cpuCount,omitempty"`
+
 	// Memory Defaults to true. When false and the sandbox is paused, resume from disk state only: the sandbox cold-boots fresh and any memory in the snapshot is ignored, never modified or deleted. Disk state has crash-recovery semantics — writes not flushed before the pause may be lost. A no-op for snapshots that contain no memory. Rejected with an error in environments where this capability is not enabled, never silently downgraded to a memory restore.
 	Memory *bool `json:"memory,omitempty"`
 
@@ -556,7 +559,7 @@ type Error struct {
 	// Code Error code
 	Code int32 `json:"code"`
 
-	// ErrorCode Machine-readable semantic error code. Not a closed set; initial values: sandbox_capacity_unavailable, sandbox_placement_timeout, sandbox_no_compatible_node, sandbox_create_failed, internal_server_error. Block volume refusals (409): block_volume_shared_identity_required, volume_attached, volume_referenced_by_snapshot, volume_creating, template_layout_mismatch, volume_resize_invalid, checkpoint_unsupported. Memory hotplug (409): memory_not_hot_resizable (the template has no maxMemoryMB), memory_resize_busy (a checkpoint of the sandbox is in progress).
+	// ErrorCode Machine-readable semantic error code. Not a closed set; initial values: sandbox_capacity_unavailable, sandbox_placement_timeout, sandbox_no_compatible_node, sandbox_create_failed, internal_server_error. Block volume refusals (409): block_volume_shared_identity_required, volume_attached, volume_referenced_by_snapshot, volume_creating, template_layout_mismatch, volume_resize_invalid, checkpoint_unsupported. Memory hotplug (409): memory_not_hot_resizable (the template has no maxMemoryMB), memory_resize_busy (a checkpoint of the sandbox is in progress). CPU hot resize (409): cpu_not_hot_resizable (the template has no maxCpuCount).
 	ErrorCode *string `json:"error_code,omitempty"`
 
 	// Message Error
@@ -619,8 +622,11 @@ type ListedSandbox struct {
 	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	ClientID string `json:"clientID"`
 
-	// CpuCount CPU cores for the sandbox
+	// CpuCount vCPUs granted to the sandbox. For a running sandbox of a CPU hot resize template this is the last count requested (create, resume or PATCH), enforced by a host CPU quota; for a paused one the count it will resume with. Otherwise the template's cpuCount.
 	CpuCount CPUCount `json:"cpuCount"`
+
+	// CurrentCpuCount CPUs online in the guest when last observed (what nproc reports). Equals cpuCount once a resize settled; omitted for a paused sandbox and for templates without CPU hot resize.
+	CurrentCpuCount *CPUCount `json:"currentCpuCount,omitempty"`
 
 	// CurrentMemoryMB Guest memory the sandbox actually had when last observed (boot memory plus plugged hotplug memory), in MiB. Below memoryMB while the guest is still plugging, or when a shrink stalled on pinned memory. Omitted for a paused sandbox and for templates without memory hotplug.
 	CurrentMemoryMB *MemoryMB `json:"currentMemoryMB,omitempty"`
@@ -633,6 +639,9 @@ type ListedSandbox struct {
 
 	// EnvdVersion Version of the envd running in the sandbox
 	EnvdVersion EnvdVersion `json:"envdVersion"`
+
+	// MaxCpuCount Largest cpuCount the sandbox can be resized to (the template's maxCpuCount); omitted when the vCPU count is fixed.
+	MaxCpuCount *MaxCPUCount `json:"maxCpuCount,omitempty"`
 
 	// MaxMemoryMB Largest memoryMB the sandbox can be resized to (the template's maxMemoryMB); omitted when the template has no memory hotplug and the size is fixed.
 	MaxMemoryMB *MaxMemoryMB `json:"maxMemoryMB,omitempty"`
@@ -679,6 +688,9 @@ type MachineInfo struct {
 	CpuModelName string `json:"cpuModelName"`
 }
 
+// MaxCPUCount Largest vCPU count a sandbox of the template can be resized to while it runs (CPU hot resize). The VM is created with this many vCPUs and the guest boots with the template's cpuCount online; the rest stay offline (no host CPU) until a sandbox asks for them, and a host cgroup quota enforces the granted count. At most 32 (Firecracker) and even on x86. Omitted (or equal to cpuCount) for a fixed vCPU count. Needs a guest kernel with CONFIG_HOTPLUG_CPU.
+type MaxCPUCount = int32
+
 // MaxMemoryMB Largest memory, in MiB, a sandbox of the template can be resized to while it runs (virtio-mem memory hotplug). The template's memoryMB stays the boot memory, always backed; the rest is plugged on demand. maxMemoryMB - memoryMB must be a multiple of 128 MiB. Omitted (or equal to memoryMB) for a fixed-size template. Needs a guest kernel with CONFIG_VIRTIO_MEM.
 type MaxMemoryMB = int32
 
@@ -717,7 +729,10 @@ type NewSandbox struct {
 
 	// AutoResume Auto-resume configuration for paused sandboxes.
 	AutoResume *SandboxAutoResumeConfig `json:"autoResume,omitempty"`
-	EnvVars    *EnvVars                 `json:"envVars,omitempty"`
+
+	// CpuCount vCPUs for the sandbox. Defaults to the template's cpuCount. For a template built with maxCpuCount (CPU hot resize) any count in [cpuCount, maxCpuCount] within the team's limit may be requested: the extra CPUs are brought online in the guest after it starts and a host CPU quota enforces the count. 400 when outside that range; 409 (`error_code` `cpu_not_hot_resizable`) for a template without CPU hot resize when the value differs from its cpuCount.
+	CpuCount *CPUCount `json:"cpuCount,omitempty"`
+	EnvVars  *EnvVars  `json:"envVars,omitempty"`
 
 	// Iam Sandbox workload identity configuration. A non-empty, valid tokens map enables workload identity for the sandbox.
 	Iam *SandboxIam `json:"iam,omitempty"`
@@ -924,6 +939,9 @@ type ResumedSandbox struct {
 	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	AutoPause *bool `json:"autoPause,omitempty"`
 
+	// CpuCount vCPUs to resume with, for a sandbox of a CPU hot resize template; defaults to the count it had when it was paused. Same bounds and errors as on create.
+	CpuCount *CPUCount `json:"cpuCount,omitempty"`
+
 	// Memory Defaults to true. When false, resume from disk state only: the sandbox cold-boots fresh and any memory in the snapshot is ignored, never modified or deleted. Disk state has crash-recovery semantics — writes not flushed before the pause may be lost. A no-op for snapshots that contain no memory. Rejected with an error in environments where this capability is not enabled, never silently downgraded to a memory restore.
 	Memory *bool `json:"memory,omitempty"`
 
@@ -1049,8 +1067,11 @@ type SandboxDetail struct {
 	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	ClientID string `json:"clientID"`
 
-	// CpuCount CPU cores for the sandbox
+	// CpuCount vCPUs granted to the sandbox. For a running sandbox of a CPU hot resize template this is the last count requested (create, resume or PATCH), enforced by a host CPU quota; for a paused one the count it will resume with. Otherwise the template's cpuCount.
 	CpuCount CPUCount `json:"cpuCount"`
+
+	// CurrentCpuCount CPUs online in the guest when last observed (what nproc reports). Equals cpuCount once a resize settled; omitted for a paused sandbox and for templates without CPU hot resize.
+	CurrentCpuCount *CPUCount `json:"currentCpuCount,omitempty"`
 
 	// CurrentMemoryMB Guest memory the sandbox actually had when last observed (boot memory plus plugged hotplug memory), in MiB. Below memoryMB while the guest is still plugging, or when a shrink stalled on pinned memory. Omitted for a paused sandbox and for templates without memory hotplug.
 	CurrentMemoryMB *MemoryMB `json:"currentMemoryMB,omitempty"`
@@ -1072,6 +1093,9 @@ type SandboxDetail struct {
 
 	// Lifecycle Sandbox lifecycle policy returned by sandbox info.
 	Lifecycle *SandboxLifecycle `json:"lifecycle,omitempty"`
+
+	// MaxCpuCount Largest cpuCount the sandbox can be resized to (the template's maxCpuCount); omitted when the vCPU count is fixed.
+	MaxCpuCount *MaxCPUCount `json:"maxCpuCount,omitempty"`
 
 	// MaxMemoryMB Largest memoryMB the sandbox can be resized to (the template's maxMemoryMB); omitted when the template has no memory hotplug and the size is fixed.
 	MaxMemoryMB *MaxMemoryMB `json:"maxMemoryMB,omitempty"`
@@ -1310,6 +1334,9 @@ type SandboxTimeoutRequest struct {
 
 // SandboxUpdate Fields of a running sandbox that can be changed in place.
 type SandboxUpdate struct {
+	// CpuCount New vCPU count, within [cpuCount, maxCpuCount] of the sandbox's template. The host CPU quota moves first (immediately, in both directions), then the guest brings CPUs online or offline (~60 ms per CPU); the response's `currentCpuCount` is what the guest has online. Can be combined with memoryMB (memory is resized first).
+	CpuCount *CPUCount `json:"cpuCount,omitempty"`
+
 	// MemoryMB New guest memory, in MiB, within [memoryMB, maxMemoryMB] of the sandbox's template. Grows plug memory within a second; shrinks are best effort: the guest must give the memory back, and while it pins it the response reports the achieved `currentMemoryMB` below `memoryMB` (the guest finishes on its own once the memory is freed). The sandbox keeps running in every case.
 	MemoryMB *MemoryMB `json:"memoryMB,omitempty"`
 }
@@ -1465,6 +1492,9 @@ type Template struct {
 	// Layout Guest device layout a build was made with (after inheritance from its base template): `rootfs` (no workspace slots; block volumes cannot be mounted) or `block-v1`. Omitted when the build did not record it (builds from before layouts were recorded); creating a sandbox with block mounts from such a template is then decided by its node.
 	Layout *TemplateBuildLayout `json:"layout,omitempty"`
 
+	// MaxCpuCount Maximum vCPU count of the last successful build when it has CPU hot resize; omitted for a fixed vCPU count.
+	MaxCpuCount *MaxCPUCount `json:"maxCpuCount,omitempty"`
+
 	// MaxMemoryMB Maximum memory of the last successful build when it has memory hotplug (sandboxes can be created and resized between memoryMB and this); omitted for a fixed-size template.
 	MaxMemoryMB *MaxMemoryMB `json:"maxMemoryMB,omitempty"`
 
@@ -1521,6 +1551,9 @@ type TemplateBuild struct {
 
 	// Layout Guest device layout a build was made with (after inheritance from its base template): `rootfs` (no workspace slots; block volumes cannot be mounted) or `block-v1`. Omitted when the build did not record it (builds from before layouts were recorded); creating a sandbox with block mounts from such a template is then decided by its node.
 	Layout *TemplateBuildLayout `json:"layout,omitempty"`
+
+	// MaxCpuCount Maximum vCPU count of a build with CPU hot resize; omitted for a fixed vCPU count.
+	MaxCpuCount *MaxCPUCount `json:"maxCpuCount,omitempty"`
 
 	// MaxMemoryMB Maximum memory of a build with memory hotplug; omitted for a fixed-size build.
 	MaxMemoryMB *MaxMemoryMB `json:"maxMemoryMB,omitempty"`
@@ -1624,6 +1657,9 @@ type TemplateBuildRequestV3 struct {
 	// CpuCount CPU cores for the sandbox
 	CpuCount *CPUCount `json:"cpuCount,omitempty"`
 
+	// MaxCpuCount Largest vCPU count a sandbox of the template can be resized to while it runs (CPU hot resize). The VM is created with this many vCPUs and the guest boots with the template's cpuCount online; the rest stay offline (no host CPU) until a sandbox asks for them, and a host cgroup quota enforces the granted count. At most 32 (Firecracker) and even on x86. Omitted (or equal to cpuCount) for a fixed vCPU count. Needs a guest kernel with CONFIG_HOTPLUG_CPU.
+	MaxCpuCount *MaxCPUCount `json:"maxCpuCount,omitempty"`
+
 	// MaxMemoryMB Largest memory, in MiB, a sandbox of the template can be resized to while it runs (virtio-mem memory hotplug). The template's memoryMB stays the boot memory, always backed; the rest is plugged on demand. maxMemoryMB - memoryMB must be a multiple of 128 MiB. Omitted (or equal to memoryMB) for a fixed-size template. Needs a guest kernel with CONFIG_VIRTIO_MEM.
 	MaxMemoryMB *MaxMemoryMB `json:"maxMemoryMB,omitempty"`
 
@@ -1658,6 +1694,9 @@ type TemplateBuildStartV2 struct {
 
 	// Layout Guest device layout of a template. `block-v1` reserves workspace block slots in the base snapshot so block volumes can be mounted into its sandboxes. Omitted keeps the rootfs-only layout (or, for a build from another template, inherits that template's layout, which cannot be changed).
 	Layout *TemplateLayout `json:"layout,omitempty"`
+
+	// MaxCpuCount Overrides the maxCpuCount given when the build was requested. A build from another template inherits that template's maximum and may only repeat it.
+	MaxCpuCount *MaxCPUCount `json:"maxCpuCount,omitempty"`
 
 	// MaxMemoryMB Overrides the maxMemoryMB given when the build was requested. A build from another template inherits that template's maximum and may only repeat it.
 	MaxMemoryMB *MaxMemoryMB `json:"maxMemoryMB,omitempty"`
@@ -2744,7 +2783,7 @@ type ClientInterface interface {
 
 	// PatchSandboxesSandboxIDWithBody Update sandbox
 	//
-	// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+	// Change a running sandbox in place: its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB (memory above the template's memoryMB is hotplugged into the running guest) and/or its vCPU count (`cpuCount`) for a template built with maxCpuCount (guest CPUs brought online/offline, host CPU quota moved). No restart and no snapshot. Returns the sandbox with the requested `memoryMB`/`cpuCount` and the achieved `currentMemoryMB`/`currentCpuCount`.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -2753,7 +2792,7 @@ type ClientInterface interface {
 
 	// PatchSandboxesSandboxID Update sandbox
 	//
-	// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+	// Change a running sandbox in place: its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB (memory above the template's memoryMB is hotplugged into the running guest) and/or its vCPU count (`cpuCount`) for a template built with maxCpuCount (guest CPUs brought online/offline, host CPU quota moved). No restart and no snapshot. Returns the sandbox with the requested `memoryMB`/`cpuCount` and the achieved `currentMemoryMB`/`currentCpuCount`.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -3872,7 +3911,7 @@ func (c *Client) GetSandboxesSandboxID(ctx context.Context, sandboxID SandboxID,
 
 // PatchSandboxesSandboxIDWithBody Update sandbox
 //
-// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+// Change a running sandbox in place: its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB (memory above the template's memoryMB is hotplugged into the running guest) and/or its vCPU count (`cpuCount`) for a template built with maxCpuCount (guest CPUs brought online/offline, host CPU quota moved). No restart and no snapshot. Returns the sandbox with the requested `memoryMB`/`cpuCount` and the achieved `currentMemoryMB`/`currentCpuCount`.
 //
 // Takes any type of body and a specified content type.
 //
@@ -3891,7 +3930,7 @@ func (c *Client) PatchSandboxesSandboxIDWithBody(ctx context.Context, sandboxID 
 
 // PatchSandboxesSandboxID Update sandbox
 //
-// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+// Change a running sandbox in place: its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB (memory above the template's memoryMB is hotplugged into the running guest) and/or its vCPU count (`cpuCount`) for a template built with maxCpuCount (guest CPUs brought online/offline, host CPU quota moved). No restart and no snapshot. Returns the sandbox with the requested `memoryMB`/`cpuCount` and the achieved `currentMemoryMB`/`currentCpuCount`.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -9022,7 +9061,7 @@ type ClientWithResponsesInterface interface {
 
 	// PatchSandboxesSandboxIDWithBodyWithResponse Update sandbox
 	//
-	// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+	// Change a running sandbox in place: its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB (memory above the template's memoryMB is hotplugged into the running guest) and/or its vCPU count (`cpuCount`) for a template built with maxCpuCount (guest CPUs brought online/offline, host CPU quota moved). No restart and no snapshot. Returns the sandbox with the requested `memoryMB`/`cpuCount` and the achieved `currentMemoryMB`/`currentCpuCount`.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -9031,7 +9070,7 @@ type ClientWithResponsesInterface interface {
 
 	// PatchSandboxesSandboxIDWithResponse Update sandbox
 	//
-	// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+	// Change a running sandbox in place: its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB (memory above the template's memoryMB is hotplugged into the running guest) and/or its vCPU count (`cpuCount`) for a template built with maxCpuCount (guest CPUs brought online/offline, host CPU quota moved). No restart and no snapshot. Returns the sandbox with the requested `memoryMB`/`cpuCount` and the achieved `currentMemoryMB`/`currentCpuCount`.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -14940,7 +14979,7 @@ func (c *ClientWithResponses) GetSandboxesSandboxIDWithResponse(ctx context.Cont
 
 // PatchSandboxesSandboxIDWithBodyWithResponse Update sandbox
 //
-// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+// Change a running sandbox in place: its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB (memory above the template's memoryMB is hotplugged into the running guest) and/or its vCPU count (`cpuCount`) for a template built with maxCpuCount (guest CPUs brought online/offline, host CPU quota moved). No restart and no snapshot. Returns the sandbox with the requested `memoryMB`/`cpuCount` and the achieved `currentMemoryMB`/`currentCpuCount`.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -14955,7 +14994,7 @@ func (c *ClientWithResponses) PatchSandboxesSandboxIDWithBodyWithResponse(ctx co
 
 // PatchSandboxesSandboxIDWithResponse Update sandbox
 //
-// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+// Change a running sandbox in place: its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB (memory above the template's memoryMB is hotplugged into the running guest) and/or its vCPU count (`cpuCount`) for a template built with maxCpuCount (guest CPUs brought online/offline, host CPU quota moved). No restart and no snapshot. Returns the sandbox with the requested `memoryMB`/`cpuCount` and the achieved `currentMemoryMB`/`currentCpuCount`.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //

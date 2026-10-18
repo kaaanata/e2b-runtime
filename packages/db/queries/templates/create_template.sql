@@ -33,12 +33,14 @@ WHERE build_id IN (SELECT id FROM invalidated);
 -- TemplateBuildMetadata, and FinishTemplateBuild overwrites these fields with
 -- the reported values. max_ram_mb is the requested maximum memory (NULL for a
 -- fixed-size build); FinishTemplateBuild replaces it with the reported one.
+-- max_vcpu likewise for the CPU hot resize maximum.
 INSERT INTO "public"."env_builds" (
     id,
     updated_at,
     status,
     ram_mb,
     max_ram_mb,
+    max_vcpu,
     vcpu,
     kernel_version,
     firecracker_version,
@@ -53,6 +55,7 @@ INSERT INTO "public"."env_builds" (
     @status,
     @ram_mb,
     sqlc.narg(max_ram_mb),
+    sqlc.narg(max_vcpu),
     @vcpu,
     @kernel_version,
     @firecracker_version,

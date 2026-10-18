@@ -95,6 +95,11 @@ type SandboxMetadata struct {
 	// and the team tier. 0 keeps the node's default: the build's ram_mb for a
 	// new sandbox, the size recorded at pause for a resume.
 	RequestedMemoryMB int64
+	// RequestedVCPUs is the vCPU count this start asks for (CPU hot resize),
+	// validated by the handler against the build's max_vcpu and the team
+	// tier. 0 keeps the node's default: the build's vcpu for a new sandbox,
+	// the count granted at pause for a resume.
+	RequestedVCPUs int64
 }
 
 // requestedMemoryMiB is the memory a start occupies on its node for placement:
@@ -424,6 +429,7 @@ func (o *Orchestrator) CreateSandbox(
 			VolumeMounts:            nfsVolumeMounts(sbxData.VolumeMounts),
 			Iam:                     iamToProto(sbxData.Iam),
 			RequestedMemoryMb:       sbxData.RequestedMemoryMB,
+			RequestedVcpu:           sbxData.RequestedVCPUs,
 		},
 		StartTime:      timestamppb.New(startTime),
 		EndTime:        timestamppb.New(endTime),
@@ -553,6 +559,20 @@ func (o *Orchestrator) CreateSandbox(
 		// A hotplug resume without an explicit size keeps the paused size,
 		// which only the node knows; it is what the guest came back with.
 		sbx.MemoryMB = sbx.CurrentMemoryMB
+	}
+	// vCPUs likewise: the node echoes the granted count (the cgroup quota)
+	// and what the guest has online; older nodes echo nothing.
+	sbx.MaxCPUCount = sbxData.Build.MaxVcpu
+	sbx.CPUCount = placed.Response.GetVcpuCount()
+	if sbx.CPUCount == 0 {
+		sbx.CPUCount = sbxData.RequestedVCPUs
+	}
+	if sbx.CPUCount == 0 {
+		sbx.CPUCount = sbx.VCpu
+	}
+	sbx.CurrentCPUCount = placed.Response.GetOnlineVcpu()
+	if sbx.CurrentCPUCount == 0 {
+		sbx.CurrentCPUCount = sbx.CPUCount
 	}
 
 	// An orchestrator that predates the filesystem_boot field ignores it and

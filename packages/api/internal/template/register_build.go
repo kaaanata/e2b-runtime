@@ -43,6 +43,8 @@ type RegisterBuildData struct {
 	MemoryMB           *int32
 	// MaxMemoryMB is the memory hotplug maximum, nil for a fixed-size build.
 	MaxMemoryMB *int32
+	// MaxCpuCount is the CPU hot resize maximum, nil for a fixed vCPU count.
+	MaxCpuCount *int32
 	Version     string
 
 	// The requested minimum free space after build steps, or nil for the team's default.
@@ -204,6 +206,14 @@ func registerBuild(
 		telemetry.SetAttributes(ctx, attribute.Int64("env.max_memory_mb", *maxRamMB))
 	}
 
+	maxVCPU, apiError := team.LimitMaxCPU(data.Team.Limits, cpuCount, data.MaxCpuCount)
+	if apiError != nil {
+		return nil, apiError
+	}
+	if maxVCPU != nil {
+		telemetry.SetAttributes(ctx, attribute.Int64("env.max_cpu_count", *maxVCPU))
+	}
+
 	// Start a transaction to prevent partial updates
 	client, tx, err := db.WithTx(ctx)
 	if err != nil {
@@ -300,6 +310,7 @@ func registerBuild(
 		Status:             dbtypes.BuildStatusWaiting,
 		RamMb:              ramMB,
 		MaxRamMb:           maxRamMB,
+		MaxVcpu:            maxVCPU,
 		Vcpu:               cpuCount,
 		KernelVersion:      data.KernelVersion,
 		FirecrackerVersion: data.FirecrackerVersion,

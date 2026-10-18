@@ -58,6 +58,7 @@ const (
 var KnownCapabilities = map[string]struct{}{
 	LayoutBlockV1:             {},
 	CapabilityMemoryHotplugV1: {},
+	CapabilityCPUHotplugV1:    {},
 }
 
 // ErrUnsupportedLayout is the sentinel every UnsupportedLayoutError matches with
@@ -329,6 +330,17 @@ type Template struct {
 	// any resize. Describes ONE snapshot (stamped at pause like
 	// FilesystemOnly), so only WithPrefetch carries it.
 	MemoryHotplugPluggedMiB int64 `json:"memory_hotplug_plugged_mib,omitempty"`
+
+	// CPUHotplug is the vCPU layout of a template built with a maximum CPU
+	// count above its CPU count: the VM has MaxVCPUs vCPUs, BaseVCPUs online
+	// at boot. nil for every other template (vCPU count fixed). Lineage state
+	// carried like MemoryHotplug, always paired with CapabilityCPUHotplugV1.
+	CPUHotplug *CPUHotplugLayout `json:"cpu_hotplug,omitempty"`
+
+	// CPUHotplugVCPUs is the CPU count granted to the sandbox when this
+	// snapshot was taken (its cgroup quota); a resume without an explicit
+	// count restores it. Describes ONE snapshot, so only WithPrefetch carries it.
+	CPUHotplugVCPUs int64 `json:"cpu_hotplug_vcpus,omitempty"`
 }
 
 // HasWorkspaceSlots reports whether this template's device table reserves
@@ -413,7 +425,7 @@ func V1TemplateVersion() Template {
 // team — inheriting the parent's arguments would record arguments the child's kernel
 // never booted with, and a later filesystem-only cold boot would then apply them.
 //
-// It DOES carry Layout, Workspace, RequiredCapabilities and MemoryHotplug: the child build resumes
+// It DOES carry Layout, Workspace, RequiredCapabilities, MemoryHotplug and CPUHotplug: the child build resumes
 // the parent's snapshot, whose device table it cannot change, so the slots are a
 // fact about the child's layers too. The finalize phase then stamps the build's
 // own configuration over them, as it does for CmdlineArgs.
@@ -431,6 +443,7 @@ func (t Template) BasedOn(
 		Workspace:            t.Workspace,
 		RequiredCapabilities: t.RequiredCapabilities,
 		MemoryHotplug:        t.MemoryHotplug.Clone(),
+		CPUHotplug:           t.CPUHotplug.Clone(),
 	}
 }
 
@@ -447,6 +460,7 @@ func (t Template) NewVersionTemplate(metadata TemplateMetadata) Template {
 		Workspace:            t.Workspace,
 		RequiredCapabilities: t.RequiredCapabilities,
 		MemoryHotplug:        t.MemoryHotplug.Clone(),
+		CPUHotplug:           t.CPUHotplug.Clone(),
 	}
 }
 
@@ -463,6 +477,7 @@ func (t Template) SameVersionTemplate(metadata TemplateMetadata) Template {
 		Workspace:            t.Workspace,
 		RequiredCapabilities: t.RequiredCapabilities,
 		MemoryHotplug:        t.MemoryHotplug.Clone(),
+		CPUHotplug:           t.CPUHotplug.Clone(),
 	}
 }
 
@@ -485,6 +500,8 @@ func (t Template) WithPrefetch(prefetch *Prefetch) Template {
 		WorkspaceRevisions:      t.WorkspaceRevisions,
 		MemoryHotplug:           t.MemoryHotplug.Clone(),
 		MemoryHotplugPluggedMiB: t.MemoryHotplugPluggedMiB,
+		CPUHotplug:              t.CPUHotplug.Clone(),
+		CPUHotplugVCPUs:         t.CPUHotplugVCPUs,
 	}
 }
 
@@ -595,6 +612,13 @@ func deserialize(reader io.Reader) (Template, error) {
 	// A hotplug layout sizes the memory file and the UFFD handshake; a
 	// malformed one must not reach a resume.
 	if l := templateMetadata.MemoryHotplug; l != nil {
+		if err := l.Validate(); err != nil {
+			return Template{}, err
+		}
+	}
+
+	// A CPU layout sizes the VM and the guest's boot CPUs.
+	if l := templateMetadata.CPUHotplug; l != nil {
 		if err := l.Validate(); err != nil {
 			return Template{}, err
 		}

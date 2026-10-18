@@ -52,6 +52,7 @@ INSERT INTO "public"."env_builds" (
     status,
     ram_mb,
     max_ram_mb,
+    max_vcpu,
     vcpu,
     kernel_version,
     firecracker_version,
@@ -73,7 +74,8 @@ INSERT INTO "public"."env_builds" (
     $9,
     $10,
     $11,
-    $12
+    $12,
+    $13
 )
 `
 
@@ -82,6 +84,7 @@ type CreateTemplateBuildParams struct {
 	Status             types.BuildStatus
 	RamMb              int64
 	MaxRamMb           *int64
+	MaxVcpu            *int64
 	Vcpu               int64
 	KernelVersion      string
 	FirecrackerVersion string
@@ -98,12 +101,14 @@ type CreateTemplateBuildParams struct {
 // TemplateBuildMetadata, and FinishTemplateBuild overwrites these fields with
 // the reported values. max_ram_mb is the requested maximum memory (NULL for a
 // fixed-size build); FinishTemplateBuild replaces it with the reported one.
+// max_vcpu likewise for the CPU hot resize maximum.
 func (q *Queries) CreateTemplateBuild(ctx context.Context, arg CreateTemplateBuildParams) error {
 	_, err := q.db.Exec(ctx, createTemplateBuild,
 		arg.BuildID,
 		arg.Status,
 		arg.RamMb,
 		arg.MaxRamMb,
+		arg.MaxVcpu,
 		arg.Vcpu,
 		arg.KernelVersion,
 		arg.FirecrackerVersion,

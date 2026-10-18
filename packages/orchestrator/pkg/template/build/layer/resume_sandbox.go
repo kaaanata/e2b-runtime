@@ -44,6 +44,7 @@ func (rs *ResumeSandbox) Sandbox(
 	// The layer snapshot carries the build's hotplug device; the resume checks
 	// the snapshot against it.
 	rs.config.MemoryHotplug = layerExecutor.Config.MemoryHotplug.Clone()
+	rs.config.CPUHotplug = layerExecutor.Config.CPUHotplug.Clone()
 
 	sbx, err := rs.sandboxFactory.ResumeSandbox(
 		ctx,

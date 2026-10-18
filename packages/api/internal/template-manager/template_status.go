@@ -401,6 +401,7 @@ func (tm *TemplateManager) SetFinished(ctx context.Context, buildID uuid.UUID, r
 		Layout:                     layout.Layout,
 		WorkspaceSlotCapacityBytes: layout.WorkspaceSlotCapacityBytes,
 		MaxRamMb:                   layout.MaxMemoryMB,
+		MaxVcpu:                    layout.MaxCPUCount,
 		BuildID:                    buildID,
 	})
 

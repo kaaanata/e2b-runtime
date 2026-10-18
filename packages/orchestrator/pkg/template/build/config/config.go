@@ -98,6 +98,11 @@ type TemplateConfig struct {
 	// for a build without one. MemoryHotplug.BaseMiB equals MemoryMB. Part of
 	// the base-layer cache key for the same reason as Layout.
 	MemoryHotplug *metadata.MemoryHotplugLayout
+
+	// CPUHotplug is the vCPU layout every boot of this build uses (VM with
+	// MaxVCPUs, guest booting BaseVCPUs == VCpuCount online); nil for a fixed
+	// vCPU count. Part of the base-layer cache key like MemoryHotplug.
+	CPUHotplug *metadata.CPUHotplugLayout
 }
 
 // ObjectMetadata is the provenance stamped on a build's uploaded objects.

@@ -158,6 +158,13 @@ func buildUpsertSnapshotParams(sbx sandbox.Sandbox, node *nodemanager.Node, file
 		requestedRamMB = new(sbx.RequestedMemoryMB())
 	}
 
+	// CPU hot resize likewise: vcpu stays the template's count, the row
+	// inherits the maximum and records the granted count to resume with.
+	var requestedVCPU *int64
+	if sbx.MaxCPUCount != nil {
+		requestedVCPU = new(sbx.RequestedVCPUs())
+	}
+
 	return queries.UpsertSnapshotParams{
 		// Used if there's no snapshot for this sandbox yet
 		TemplateID:     id.Generate(),
@@ -170,6 +177,8 @@ func buildUpsertSnapshotParams(sbx sandbox.Sandbox, node *nodemanager.Node, file
 		RamMb:          sbx.RamMB,
 		MaxRamMb:       sbx.MaxMemoryMB,
 		RequestedRamMb: requestedRamMB,
+		MaxVcpu:        sbx.MaxCPUCount,
+		RequestedVcpu:  requestedVCPU,
 		// We don't know this information
 		FreeDiskSizeMb:      0,
 		TotalDiskSizeMb:     &sbx.TotalDiskSizeMB,

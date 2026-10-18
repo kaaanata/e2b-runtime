@@ -257,3 +257,65 @@ func TestFinishTemplateBuild_RecordsReportedMaxMemory(t *testing.T) {
 	finish(unknown, nil, nil)
 	assert.Equal(t, new(int64(65536)), getBuildMaxRamMB(t, ctx, db, unknown), "an older template-manager leaves the request")
 }
+
+func getBuildMaxVCPU(t *testing.T, ctx context.Context, db *testutils.Database, buildID uuid.UUID) *int64 {
+	t.Helper()
+
+	var maxVCPU *int64
+	err := db.SqlcClient.TestsRawSQLQuery(ctx,
+		"SELECT max_vcpu FROM public.env_builds WHERE id = $1",
+		func(rows pgx.Rows) error {
+			if !rows.Next() {
+				return nil
+			}
+
+			return rows.Scan(&maxVCPU)
+		},
+		buildID,
+	)
+	require.NoError(t, err, "Failed to query build max_vcpu")
+
+	return maxVCPU
+}
+
+// max_vcpu follows max_ram_mb's rule: replaced by the reported value only when
+// the template-manager reports a layout.
+func TestFinishTemplateBuild_RecordsReportedMaxVCPU(t *testing.T) {
+	t.Parallel()
+	db := testutils.SetupDatabase(t)
+	ctx := t.Context()
+
+	teamID := testutils.CreateTestTeam(t, db)
+	templateID := testutils.CreateTestTemplate(t, db, teamID)
+	request := func(buildID uuid.UUID, maxVCPU int64) {
+		t.Helper()
+
+		require.NoError(t, db.SqlcClient.TestsRawSQL(ctx,
+			"UPDATE public.env_builds SET max_vcpu = $1 WHERE id = $2", maxVCPU, buildID))
+	}
+	finish := func(buildID uuid.UUID, layout *string, maxVCPU *int64) {
+		t.Helper()
+
+		require.NoError(t, db.SqlcClient.FinishTemplateBuild(ctx, queries.FinishTemplateBuildParams{
+			BuildID: buildID,
+			Status:  types.BuildStatusUploaded,
+			Layout:  layout,
+			MaxVcpu: maxVCPU,
+		}))
+	}
+
+	hot := testutils.CreateTestBuild(t, ctx, db, templateID, "building")
+	request(hot, 32)
+	finish(hot, new(""), new(int64(32)))
+	assert.Equal(t, new(int64(32)), getBuildMaxVCPU(t, ctx, db, hot))
+
+	fixed := testutils.CreateTestBuild(t, ctx, db, templateID, "building")
+	request(fixed, 32)
+	finish(fixed, new(""), nil)
+	assert.Nil(t, getBuildMaxVCPU(t, ctx, db, fixed), "a reported fixed build replaces the request")
+
+	unknown := testutils.CreateTestBuild(t, ctx, db, templateID, "building")
+	request(unknown, 32)
+	finish(unknown, nil, nil)
+	assert.Equal(t, new(int64(32)), getBuildMaxVCPU(t, ctx, db, unknown), "an older template-manager leaves the request")
+}

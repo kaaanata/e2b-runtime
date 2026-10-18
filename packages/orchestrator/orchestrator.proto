@@ -73,6 +73,15 @@ message SandboxConfig {
   // template without the device unless it equals ram_mb, and never above the
   // template's maximum (the node reads both from the template metadata).
   int64 requested_memory_mb = 28;
+
+  // vCPU count requested for this start, for a template built with CPU
+  // hotplug (maxCpuCount): vcpu stays the template's count (the CPUs online in
+  // its snapshot), the VM has maxCpuCount vCPUs, and the guest brings this
+  // many online once envd is up; the host cgroup quota of the Firecracker
+  // process is set to it before the VM runs. 0 = the snapshot's count (a new
+  // sandbox: vcpu; a resume: the count granted at pause). Refused for a
+  // template without CPU hotplug unless it equals vcpu.
+  int64 requested_vcpu = 29;
 }
 
 // Sandbox workload identity configuration. A non-empty tokens map defines the
@@ -243,6 +252,12 @@ message SandboxCreateResponse {
   // the guest did not finish plugging within the node's timeout (accounting
   // then uses the request; the guest keeps plugging on its own).
   int64 memory_mb = 5;
+
+  // vCPU count the sandbox runs with after the start: its cgroup quota
+  // (equal to vcpu for a template without CPU hotplug). online_vcpu is how
+  // many the guest had online when the start returned.
+  int64 vcpu_count = 6;
+  int64 online_vcpu = 7;
 }
 
 // Resizes the guest memory of a running sandbox of a hotplug template.
@@ -263,6 +278,26 @@ message SandboxResizeMemoryResponse {
   // A shrink stalls while the guest pins the memory being unplugged; the
   // guest finishes on its own once it is freed, and accounting uses
   // max(requested, plugged) meanwhile.
+  bool complete = 4;
+}
+
+// Changes the vCPU count of a running sandbox of a CPU-hotplug template.
+message SandboxResizeCpuRequest {
+  string sandbox_id = 1;
+  // Target vCPU count, within [vcpu, maxCpuCount] of the template.
+  int64 requested_vcpu = 2;
+}
+
+message SandboxResizeCpuResponse {
+  // The count granted: the host cgroup quota, applied before the call
+  // returned (it is what enforces the count).
+  int64 vcpu_count = 1;
+  // CPUs online in the guest when the call returned.
+  int64 online_vcpu = 2;
+  // The template's maximum.
+  int64 max_vcpu = 3;
+  // Whether online_vcpu == vcpu_count. Onlining takes ~60 ms per CPU and has
+  // not failed in testing; an incomplete result is reported, not retried.
   bool complete = 4;
 }
 
@@ -323,6 +358,11 @@ message SandboxPauseResponse {
   // applies its own requested_memory_mb. 0 from orchestrators that predate
   // memory hotplug or for a filesystem-only snapshot.
   int64 memory_mb = 21;
+
+  // vCPU count granted to the sandbox when it was paused (CPU hotplug); a
+  // resume restores it unless it asks for another. 0 from orchestrators that
+  // predate CPU hotplug, for a fixed template or a filesystem-only snapshot.
+  int64 vcpu_count = 22;
 }
 
 message SandboxCheckpointRequest {
@@ -343,6 +383,9 @@ message SandboxCheckpointResponse {
 
   // As SandboxPauseResponse.memory_mb.
   int64 memory_mb = 21;
+
+  // As SandboxPauseResponse.vcpu_count.
+  int64 vcpu_count = 22;
 }
 
 message RunningSandbox {
@@ -369,6 +412,9 @@ message RunningSandbox {
   // Guest memory the node accounts for this sandbox (requested or plugged,
   // whichever is larger), in MiB; equals ram_mb without hotplug.
   int64 memory_mb = 10;
+  // vCPU count the node accounts for this sandbox (the granted count); 0
+  // from nodes predating CPU hotplug, read as vcpu.
+  int64 vcpu_count = 11;
 }
 
 message SandboxListResponse {
@@ -383,4 +429,5 @@ service SandboxService {
   rpc Pause(SandboxPauseRequest) returns (SandboxPauseResponse);
   rpc Checkpoint(SandboxCheckpointRequest) returns (SandboxCheckpointResponse);
   rpc ResizeMemory(SandboxResizeMemoryRequest) returns (SandboxResizeMemoryResponse);
+  rpc ResizeCpu(SandboxResizeCpuRequest) returns (SandboxResizeCpuResponse);
 }

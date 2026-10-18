@@ -34,9 +34,13 @@ WITH finished AS (
         max_ram_mb = CASE
             WHEN $6::text IS NULL THEN max_ram_mb
             ELSE $8::bigint
+        END,
+        max_vcpu = CASE
+            WHEN $6::text IS NULL THEN max_vcpu
+            ELSE $9::bigint
         END
     WHERE
-        id = $9
+        id = $10
         AND status_group NOT IN ('ready', 'failed')
     RETURNING id
 )
@@ -53,6 +57,7 @@ type FinishTemplateBuildParams struct {
 	Layout                     *string
 	WorkspaceSlotCapacityBytes []int64
 	MaxRamMb                   *int64
+	MaxVcpu                    *int64
 	BuildID                    uuid.UUID
 }
 
@@ -63,7 +68,8 @@ type FinishTemplateBuildParams struct {
 // case so we do not clobber the values the API seeded at build registration.
 // layout and workspace_slot_capacity_bytes are the device layout the build
 // was made with; an unset layout (an older template-manager) leaves both
-// unknown. max_ram_mb (memory hotplug maximum) follows the same rule.
+// unknown. max_ram_mb (memory hotplug maximum) and max_vcpu (CPU hot resize
+// maximum) follow the same rule.
 // The build keeps the first terminal outcome recorded: a build failed for
 // running out of time has had its artifacts deleted, so a later success must
 // not publish it.
@@ -77,6 +83,7 @@ func (q *Queries) FinishTemplateBuild(ctx context.Context, arg FinishTemplateBui
 		arg.Layout,
 		arg.WorkspaceSlotCapacityBytes,
 		arg.MaxRamMb,
+		arg.MaxVcpu,
 		arg.BuildID,
 	)
 	return err

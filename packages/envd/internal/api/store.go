@@ -13,6 +13,7 @@ import (
 	"github.com/e2b-dev/infra/packages/envd/internal/execcontext"
 	"github.com/e2b-dev/infra/packages/envd/internal/host"
 	"github.com/e2b-dev/infra/packages/envd/internal/services/cgroups"
+	"github.com/e2b-dev/infra/packages/envd/internal/services/cpus"
 	"github.com/e2b-dev/infra/packages/envd/internal/services/fsfreeze"
 	"github.com/e2b-dev/infra/packages/envd/internal/utils"
 )
@@ -67,7 +68,10 @@ type API struct {
 
 	// fsFreezer freezes/thaws the guest rootfs for filesystem-only pauses;
 	// fsFreezeLock serializes /fsfreeze and /fsthaw.
-	fsFreezer    fsfreeze.Freezer
+	fsFreezer fsfreeze.Freezer
+
+	// cpus brings guest CPUs online/offline for CPU hot resize (/cpus).
+	cpus         *cpus.Controller
 	fsFreezeLock *semaphore.Weighted
 	// freezeOps records mount-set freezes by operation token (see fsfreeze_set.go);
 	// guarded by fsFreezeLock.
@@ -155,6 +159,7 @@ func New(l *zerolog.Logger, defaults *execcontext.Defaults, mmdsChan chan *host.
 		logFlusher:      logFlusher,
 		initLock:        semaphore.NewWeighted(1),
 		fsFreezer:       fsfreeze.New(),
+		cpus:            cpus.New(""),
 		fsFreezeLock:    semaphore.NewWeighted(1),
 	}
 }

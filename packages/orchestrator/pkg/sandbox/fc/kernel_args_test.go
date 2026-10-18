@@ -236,3 +236,21 @@ func TestBuildKernelArgs_MemoryHotplugOnlinesMovable(t *testing.T) {
 	_, set := buildKernelArgs(testIPv4, ProcessOptions{InitScriptPath: "/sbin/init"})["memhp_default_state"]
 	assert.False(t, set)
 }
+
+func TestBuildKernelArgs_CPUHotplugBootsTheBaseCPUs(t *testing.T) {
+	t.Parallel()
+
+	l := &metadata.CPUHotplugLayout{BaseVCPUs: 8, MaxVCPUs: 32}
+	args := buildKernelArgs(testIPv4, ProcessOptions{InitScriptPath: "/sbin/init", CPUHotplug: l})
+	assert.Equal(t, "8", args["maxcpus"])
+
+	overridden := buildKernelArgs(testIPv4, ProcessOptions{
+		InitScriptPath: "/sbin/init",
+		CmdlineArgs:    map[string]string{"maxcpus": "32"},
+		CPUHotplug:     l,
+	})
+	assert.Equal(t, "8", overridden["maxcpus"], "the template overlay cannot boot more CPUs than granted")
+
+	_, set := buildKernelArgs(testIPv4, ProcessOptions{InitScriptPath: "/sbin/init"})["maxcpus"]
+	assert.False(t, set, "a fixed-size VM keeps the default command line")
+}

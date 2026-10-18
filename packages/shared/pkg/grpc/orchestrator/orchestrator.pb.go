@@ -74,8 +74,16 @@ type SandboxConfig struct {
 	// template without the device unless it equals ram_mb, and never above the
 	// template's maximum (the node reads both from the template metadata).
 	RequestedMemoryMb int64 `protobuf:"varint,28,opt,name=requested_memory_mb,json=requestedMemoryMb,proto3" json:"requested_memory_mb,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// vCPU count requested for this start, for a template built with CPU
+	// hotplug (maxCpuCount): vcpu stays the template's count (the CPUs online in
+	// its snapshot), the VM has maxCpuCount vCPUs, and the guest brings this
+	// many online once envd is up; the host cgroup quota of the Firecracker
+	// process is set to it before the VM runs. 0 = the snapshot's count (a new
+	// sandbox: vcpu; a resume: the count granted at pause). Refused for a
+	// template without CPU hotplug unless it equals vcpu.
+	RequestedVcpu int64 `protobuf:"varint,29,opt,name=requested_vcpu,json=requestedVcpu,proto3" json:"requested_vcpu,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SandboxConfig) Reset() {
@@ -300,6 +308,13 @@ func (x *SandboxConfig) GetIam() *SandboxIam {
 func (x *SandboxConfig) GetRequestedMemoryMb() int64 {
 	if x != nil {
 		return x.RequestedMemoryMb
+	}
+	return 0
+}
+
+func (x *SandboxConfig) GetRequestedVcpu() int64 {
+	if x != nil {
+		return x.RequestedVcpu
 	}
 	return 0
 }
@@ -1218,7 +1233,12 @@ type SandboxCreateResponse struct {
 	// for a template without a hotplug device. Below requested_memory_mb when
 	// the guest did not finish plugging within the node's timeout (accounting
 	// then uses the request; the guest keeps plugging on its own).
-	MemoryMb      int64 `protobuf:"varint,5,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	MemoryMb int64 `protobuf:"varint,5,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	// vCPU count the sandbox runs with after the start: its cgroup quota
+	// (equal to vcpu for a template without CPU hotplug). online_vcpu is how
+	// many the guest had online when the start returned.
+	VcpuCount     int64 `protobuf:"varint,6,opt,name=vcpu_count,json=vcpuCount,proto3" json:"vcpu_count,omitempty"`
+	OnlineVcpu    int64 `protobuf:"varint,7,opt,name=online_vcpu,json=onlineVcpu,proto3" json:"online_vcpu,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1284,6 +1304,20 @@ func (x *SandboxCreateResponse) GetResolvedFirecrackerVersion() string {
 func (x *SandboxCreateResponse) GetMemoryMb() int64 {
 	if x != nil {
 		return x.MemoryMb
+	}
+	return 0
+}
+
+func (x *SandboxCreateResponse) GetVcpuCount() int64 {
+	if x != nil {
+		return x.VcpuCount
+	}
+	return 0
+}
+
+func (x *SandboxCreateResponse) GetOnlineVcpu() int64 {
+	if x != nil {
+		return x.OnlineVcpu
 	}
 	return 0
 }
@@ -1417,6 +1451,134 @@ func (x *SandboxResizeMemoryResponse) GetComplete() bool {
 	return false
 }
 
+// Changes the vCPU count of a running sandbox of a CPU-hotplug template.
+type SandboxResizeCpuRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SandboxId string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
+	// Target vCPU count, within [vcpu, maxCpuCount] of the template.
+	RequestedVcpu int64 `protobuf:"varint,2,opt,name=requested_vcpu,json=requestedVcpu,proto3" json:"requested_vcpu,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SandboxResizeCpuRequest) Reset() {
+	*x = SandboxResizeCpuRequest{}
+	mi := &file_orchestrator_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SandboxResizeCpuRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SandboxResizeCpuRequest) ProtoMessage() {}
+
+func (x *SandboxResizeCpuRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SandboxResizeCpuRequest.ProtoReflect.Descriptor instead.
+func (*SandboxResizeCpuRequest) Descriptor() ([]byte, []int) {
+	return file_orchestrator_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *SandboxResizeCpuRequest) GetSandboxId() string {
+	if x != nil {
+		return x.SandboxId
+	}
+	return ""
+}
+
+func (x *SandboxResizeCpuRequest) GetRequestedVcpu() int64 {
+	if x != nil {
+		return x.RequestedVcpu
+	}
+	return 0
+}
+
+type SandboxResizeCpuResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The count granted: the host cgroup quota, applied before the call
+	// returned (it is what enforces the count).
+	VcpuCount int64 `protobuf:"varint,1,opt,name=vcpu_count,json=vcpuCount,proto3" json:"vcpu_count,omitempty"`
+	// CPUs online in the guest when the call returned.
+	OnlineVcpu int64 `protobuf:"varint,2,opt,name=online_vcpu,json=onlineVcpu,proto3" json:"online_vcpu,omitempty"`
+	// The template's maximum.
+	MaxVcpu int64 `protobuf:"varint,3,opt,name=max_vcpu,json=maxVcpu,proto3" json:"max_vcpu,omitempty"`
+	// Whether online_vcpu == vcpu_count. Onlining takes ~60 ms per CPU and has
+	// not failed in testing; an incomplete result is reported, not retried.
+	Complete      bool `protobuf:"varint,4,opt,name=complete,proto3" json:"complete,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SandboxResizeCpuResponse) Reset() {
+	*x = SandboxResizeCpuResponse{}
+	mi := &file_orchestrator_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SandboxResizeCpuResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SandboxResizeCpuResponse) ProtoMessage() {}
+
+func (x *SandboxResizeCpuResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_orchestrator_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SandboxResizeCpuResponse.ProtoReflect.Descriptor instead.
+func (*SandboxResizeCpuResponse) Descriptor() ([]byte, []int) {
+	return file_orchestrator_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SandboxResizeCpuResponse) GetVcpuCount() int64 {
+	if x != nil {
+		return x.VcpuCount
+	}
+	return 0
+}
+
+func (x *SandboxResizeCpuResponse) GetOnlineVcpu() int64 {
+	if x != nil {
+		return x.OnlineVcpu
+	}
+	return 0
+}
+
+func (x *SandboxResizeCpuResponse) GetMaxVcpu() int64 {
+	if x != nil {
+		return x.MaxVcpu
+	}
+	return 0
+}
+
+func (x *SandboxResizeCpuResponse) GetComplete() bool {
+	if x != nil {
+		return x.Complete
+	}
+	return false
+}
+
 type SandboxUpdateRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	SandboxId string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
@@ -1429,7 +1591,7 @@ type SandboxUpdateRequest struct {
 
 func (x *SandboxUpdateRequest) Reset() {
 	*x = SandboxUpdateRequest{}
-	mi := &file_orchestrator_proto_msgTypes[17]
+	mi := &file_orchestrator_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1441,7 +1603,7 @@ func (x *SandboxUpdateRequest) String() string {
 func (*SandboxUpdateRequest) ProtoMessage() {}
 
 func (x *SandboxUpdateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[17]
+	mi := &file_orchestrator_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1454,7 +1616,7 @@ func (x *SandboxUpdateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxUpdateRequest.ProtoReflect.Descriptor instead.
 func (*SandboxUpdateRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{17}
+	return file_orchestrator_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *SandboxUpdateRequest) GetSandboxId() string {
@@ -1488,7 +1650,7 @@ type SandboxDeleteRequest struct {
 
 func (x *SandboxDeleteRequest) Reset() {
 	*x = SandboxDeleteRequest{}
-	mi := &file_orchestrator_proto_msgTypes[18]
+	mi := &file_orchestrator_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1500,7 +1662,7 @@ func (x *SandboxDeleteRequest) String() string {
 func (*SandboxDeleteRequest) ProtoMessage() {}
 
 func (x *SandboxDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[18]
+	mi := &file_orchestrator_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1513,7 +1675,7 @@ func (x *SandboxDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxDeleteRequest.ProtoReflect.Descriptor instead.
 func (*SandboxDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{18}
+	return file_orchestrator_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SandboxDeleteRequest) GetSandboxId() string {
@@ -1545,7 +1707,7 @@ type SandboxPauseRequest struct {
 
 func (x *SandboxPauseRequest) Reset() {
 	*x = SandboxPauseRequest{}
-	mi := &file_orchestrator_proto_msgTypes[19]
+	mi := &file_orchestrator_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1557,7 +1719,7 @@ func (x *SandboxPauseRequest) String() string {
 func (*SandboxPauseRequest) ProtoMessage() {}
 
 func (x *SandboxPauseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[19]
+	mi := &file_orchestrator_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1570,7 +1732,7 @@ func (x *SandboxPauseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxPauseRequest.ProtoReflect.Descriptor instead.
 func (*SandboxPauseRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{19}
+	return file_orchestrator_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SandboxPauseRequest) GetSandboxId() string {
@@ -1627,7 +1789,7 @@ type SchedulingMetadata struct {
 
 func (x *SchedulingMetadata) Reset() {
 	*x = SchedulingMetadata{}
-	mi := &file_orchestrator_proto_msgTypes[20]
+	mi := &file_orchestrator_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1639,7 +1801,7 @@ func (x *SchedulingMetadata) String() string {
 func (*SchedulingMetadata) ProtoMessage() {}
 
 func (x *SchedulingMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[20]
+	mi := &file_orchestrator_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1652,7 +1814,7 @@ func (x *SchedulingMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SchedulingMetadata.ProtoReflect.Descriptor instead.
 func (*SchedulingMetadata) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{20}
+	return file_orchestrator_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SchedulingMetadata) GetMemfileBaseBuildId() string {
@@ -1728,14 +1890,18 @@ type SandboxPauseResponse struct {
 	// memory plugged at pause), in MiB; a resume restores this size before it
 	// applies its own requested_memory_mb. 0 from orchestrators that predate
 	// memory hotplug or for a filesystem-only snapshot.
-	MemoryMb      int64 `protobuf:"varint,21,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	MemoryMb int64 `protobuf:"varint,21,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	// vCPU count granted to the sandbox when it was paused (CPU hotplug); a
+	// resume restores it unless it asks for another. 0 from orchestrators that
+	// predate CPU hotplug, for a fixed template or a filesystem-only snapshot.
+	VcpuCount     int64 `protobuf:"varint,22,opt,name=vcpu_count,json=vcpuCount,proto3" json:"vcpu_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SandboxPauseResponse) Reset() {
 	*x = SandboxPauseResponse{}
-	mi := &file_orchestrator_proto_msgTypes[21]
+	mi := &file_orchestrator_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1747,7 +1913,7 @@ func (x *SandboxPauseResponse) String() string {
 func (*SandboxPauseResponse) ProtoMessage() {}
 
 func (x *SandboxPauseResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[21]
+	mi := &file_orchestrator_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1760,7 +1926,7 @@ func (x *SandboxPauseResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxPauseResponse.ProtoReflect.Descriptor instead.
 func (*SandboxPauseResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{21}
+	return file_orchestrator_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *SandboxPauseResponse) GetSchedulingMetadata() *SchedulingMetadata {
@@ -1784,6 +1950,13 @@ func (x *SandboxPauseResponse) GetMemoryMb() int64 {
 	return 0
 }
 
+func (x *SandboxPauseResponse) GetVcpuCount() int64 {
+	if x != nil {
+		return x.VcpuCount
+	}
+	return 0
+}
+
 type SandboxCheckpointRequest struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	SandboxId string                 `protobuf:"bytes,1,opt,name=sandbox_id,json=sandboxId,proto3" json:"sandbox_id,omitempty"`
@@ -1798,7 +1971,7 @@ type SandboxCheckpointRequest struct {
 
 func (x *SandboxCheckpointRequest) Reset() {
 	*x = SandboxCheckpointRequest{}
-	mi := &file_orchestrator_proto_msgTypes[22]
+	mi := &file_orchestrator_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1810,7 +1983,7 @@ func (x *SandboxCheckpointRequest) String() string {
 func (*SandboxCheckpointRequest) ProtoMessage() {}
 
 func (x *SandboxCheckpointRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[22]
+	mi := &file_orchestrator_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1823,7 +1996,7 @@ func (x *SandboxCheckpointRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxCheckpointRequest.ProtoReflect.Descriptor instead.
 func (*SandboxCheckpointRequest) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{22}
+	return file_orchestrator_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *SandboxCheckpointRequest) GetSandboxId() string {
@@ -1854,14 +2027,16 @@ type SandboxCheckpointResponse struct {
 	// One sealed revision per bound workspace slot, in slot order.
 	WorkspaceRevisions []*SandboxWorkspaceRevision `protobuf:"bytes,20,rep,name=workspace_revisions,json=workspaceRevisions,proto3" json:"workspace_revisions,omitempty"`
 	// As SandboxPauseResponse.memory_mb.
-	MemoryMb      int64 `protobuf:"varint,21,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	MemoryMb int64 `protobuf:"varint,21,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	// As SandboxPauseResponse.vcpu_count.
+	VcpuCount     int64 `protobuf:"varint,22,opt,name=vcpu_count,json=vcpuCount,proto3" json:"vcpu_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SandboxCheckpointResponse) Reset() {
 	*x = SandboxCheckpointResponse{}
-	mi := &file_orchestrator_proto_msgTypes[23]
+	mi := &file_orchestrator_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1873,7 +2048,7 @@ func (x *SandboxCheckpointResponse) String() string {
 func (*SandboxCheckpointResponse) ProtoMessage() {}
 
 func (x *SandboxCheckpointResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[23]
+	mi := &file_orchestrator_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1886,7 +2061,7 @@ func (x *SandboxCheckpointResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxCheckpointResponse.ProtoReflect.Descriptor instead.
 func (*SandboxCheckpointResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{23}
+	return file_orchestrator_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *SandboxCheckpointResponse) GetSchedulingMetadata() *SchedulingMetadata {
@@ -1906,6 +2081,13 @@ func (x *SandboxCheckpointResponse) GetWorkspaceRevisions() []*SandboxWorkspaceR
 func (x *SandboxCheckpointResponse) GetMemoryMb() int64 {
 	if x != nil {
 		return x.MemoryMb
+	}
+	return 0
+}
+
+func (x *SandboxCheckpointResponse) GetVcpuCount() int64 {
+	if x != nil {
+		return x.VcpuCount
 	}
 	return 0
 }
@@ -1934,14 +2116,17 @@ type RunningSandbox struct {
 	RamMb       int64  `protobuf:"varint,9,opt,name=ram_mb,json=ramMb,proto3" json:"ram_mb,omitempty"`
 	// Guest memory the node accounts for this sandbox (requested or plugged,
 	// whichever is larger), in MiB; equals ram_mb without hotplug.
-	MemoryMb      int64 `protobuf:"varint,10,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	MemoryMb int64 `protobuf:"varint,10,opt,name=memory_mb,json=memoryMb,proto3" json:"memory_mb,omitempty"`
+	// vCPU count the node accounts for this sandbox (the granted count); 0
+	// from nodes predating CPU hotplug, read as vcpu.
+	VcpuCount     int64 `protobuf:"varint,11,opt,name=vcpu_count,json=vcpuCount,proto3" json:"vcpu_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RunningSandbox) Reset() {
 	*x = RunningSandbox{}
-	mi := &file_orchestrator_proto_msgTypes[24]
+	mi := &file_orchestrator_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1953,7 +2138,7 @@ func (x *RunningSandbox) String() string {
 func (*RunningSandbox) ProtoMessage() {}
 
 func (x *RunningSandbox) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[24]
+	mi := &file_orchestrator_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1966,7 +2151,7 @@ func (x *RunningSandbox) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunningSandbox.ProtoReflect.Descriptor instead.
 func (*RunningSandbox) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{24}
+	return file_orchestrator_proto_rawDescGZIP(), []int{26}
 }
 
 // Deprecated: Marked as deprecated in orchestrator.proto.
@@ -2040,6 +2225,13 @@ func (x *RunningSandbox) GetMemoryMb() int64 {
 	return 0
 }
 
+func (x *RunningSandbox) GetVcpuCount() int64 {
+	if x != nil {
+		return x.VcpuCount
+	}
+	return 0
+}
+
 type SandboxListResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Sandboxes     []*RunningSandbox      `protobuf:"bytes,1,rep,name=sandboxes,proto3" json:"sandboxes,omitempty"`
@@ -2049,7 +2241,7 @@ type SandboxListResponse struct {
 
 func (x *SandboxListResponse) Reset() {
 	*x = SandboxListResponse{}
-	mi := &file_orchestrator_proto_msgTypes[25]
+	mi := &file_orchestrator_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2061,7 +2253,7 @@ func (x *SandboxListResponse) String() string {
 func (*SandboxListResponse) ProtoMessage() {}
 
 func (x *SandboxListResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_orchestrator_proto_msgTypes[25]
+	mi := &file_orchestrator_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2074,7 +2266,7 @@ func (x *SandboxListResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxListResponse.ProtoReflect.Descriptor instead.
 func (*SandboxListResponse) Descriptor() ([]byte, []int) {
-	return file_orchestrator_proto_rawDescGZIP(), []int{25}
+	return file_orchestrator_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SandboxListResponse) GetSandboxes() []*RunningSandbox {
@@ -2088,8 +2280,7 @@ var File_orchestrator_proto protoreflect.FileDescriptor
 
 const file_orchestrator_proto_rawDesc = "" +
 	"\n" +
-	"\x12orchestrator.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe1\n" +
-	"\n" +
+	"\x12orchestrator.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x88\v\n" +
 	"\rSandboxConfig\x12\x1f\n" +
 	"\vtemplate_id\x18\x01 \x01(\tR\n" +
 	"templateId\x12\x19\n" +
@@ -2124,7 +2315,8 @@ const file_orchestrator_proto_rawDesc = "" +
 	"\x1aauto_pause_filesystem_only\x18\x19 \x01(\bR\x17autoPauseFilesystemOnly\x12&\n" +
 	"\x0fevents_ttl_days\x18\x1a \x01(\x03R\reventsTtlDays\x12\"\n" +
 	"\x03iam\x18\x1b \x01(\v2\v.SandboxIamH\x05R\x03iam\x88\x01\x01\x12.\n" +
-	"\x13requested_memory_mb\x18\x1c \x01(\x03R\x11requestedMemoryMb\x1a:\n" +
+	"\x13requested_memory_mb\x18\x1c \x01(\x03R\x11requestedMemoryMb\x12%\n" +
+	"\x0erequested_vcpu\x18\x1d \x01(\x03R\rrequestedVcpu\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a;\n" +
@@ -2223,13 +2415,17 @@ const file_orchestrator_proto_rawDesc = "" +
 	"\bend_time\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\aendTime\x12,\n" +
 	"\x0ffilesystem_boot\x18\x04 \x01(\bH\x00R\x0efilesystemBoot\x88\x01\x01\x12>\n" +
 	"\x0fworkspace_slots\x18\x14 \x03(\v2\x15.SandboxWorkspaceSlotR\x0eworkspaceSlotsB\x12\n" +
-	"\x10_filesystem_boot\"\x91\x02\n" +
+	"\x10_filesystem_boot\"\xd1\x02\n" +
 	"\x15SandboxCreateResponse\x12\x1b\n" +
 	"\tclient_id\x18\x01 \x01(\tR\bclientId\x12D\n" +
 	"\x13scheduling_metadata\x18\x02 \x01(\v2\x13.SchedulingMetadataR\x12schedulingMetadata\x126\n" +
 	"\x17filesystem_boot_applied\x18\x03 \x01(\bR\x15filesystemBootApplied\x12@\n" +
 	"\x1cresolved_firecracker_version\x18\x04 \x01(\tR\x1aresolvedFirecrackerVersion\x12\x1b\n" +
-	"\tmemory_mb\x18\x05 \x01(\x03R\bmemoryMb\"k\n" +
+	"\tmemory_mb\x18\x05 \x01(\x03R\bmemoryMb\x12\x1d\n" +
+	"\n" +
+	"vcpu_count\x18\x06 \x01(\x03R\tvcpuCount\x12\x1f\n" +
+	"\vonline_vcpu\x18\a \x01(\x03R\n" +
+	"onlineVcpu\"k\n" +
 	"\x1aSandboxResizeMemoryRequest\x12\x1d\n" +
 	"\n" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12.\n" +
@@ -2238,6 +2434,17 @@ const file_orchestrator_proto_rawDesc = "" +
 	"\x13requested_memory_mb\x18\x01 \x01(\x03R\x11requestedMemoryMb\x12\x1b\n" +
 	"\tmemory_mb\x18\x02 \x01(\x03R\bmemoryMb\x12\"\n" +
 	"\rmax_memory_mb\x18\x03 \x01(\x03R\vmaxMemoryMb\x12\x1a\n" +
+	"\bcomplete\x18\x04 \x01(\bR\bcomplete\"_\n" +
+	"\x17SandboxResizeCpuRequest\x12\x1d\n" +
+	"\n" +
+	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12%\n" +
+	"\x0erequested_vcpu\x18\x02 \x01(\x03R\rrequestedVcpu\"\x91\x01\n" +
+	"\x18SandboxResizeCpuResponse\x12\x1d\n" +
+	"\n" +
+	"vcpu_count\x18\x01 \x01(\x03R\tvcpuCount\x12\x1f\n" +
+	"\vonline_vcpu\x18\x02 \x01(\x03R\n" +
+	"onlineVcpu\x12\x19\n" +
+	"\bmax_vcpu\x18\x03 \x01(\x03R\amaxVcpu\x12\x1a\n" +
 	"\bcomplete\x18\x04 \x01(\bR\bcomplete\"\xc3\x01\n" +
 	"\x14SandboxUpdateRequest\x12\x1d\n" +
 	"\n" +
@@ -2268,11 +2475,13 @@ const file_orchestrator_proto_rawDesc = "" +
 	"\x15rootfs_dropped_builds\x18\x06 \x01(\rR\x13rootfsDroppedBuilds\x12.\n" +
 	"\x13memfile_build_bytes\x18\a \x03(\x04R\x11memfileBuildBytes\x12,\n" +
 	"\x12rootfs_build_bytes\x18\b \x03(\x04R\x10rootfsBuildBytes\x12/\n" +
-	"\x14rootfs_base_build_id\x18\t \x01(\tR\x11rootfsBaseBuildId\"\xc5\x01\n" +
+	"\x14rootfs_base_build_id\x18\t \x01(\tR\x11rootfsBaseBuildId\"\xe4\x01\n" +
 	"\x14SandboxPauseResponse\x12D\n" +
 	"\x13scheduling_metadata\x18\x01 \x01(\v2\x13.SchedulingMetadataR\x12schedulingMetadata\x12J\n" +
 	"\x13workspace_revisions\x18\x14 \x03(\v2\x19.SandboxWorkspaceRevisionR\x12workspaceRevisions\x12\x1b\n" +
-	"\tmemory_mb\x18\x15 \x01(\x03R\bmemoryMb\"\xd6\x01\n" +
+	"\tmemory_mb\x18\x15 \x01(\x03R\bmemoryMb\x12\x1d\n" +
+	"\n" +
+	"vcpu_count\x18\x16 \x01(\x03R\tvcpuCount\"\xd6\x01\n" +
 	"\x18SandboxCheckpointRequest\x12\x1d\n" +
 	"\n" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12\x19\n" +
@@ -2280,11 +2489,13 @@ const file_orchestrator_proto_rawDesc = "" +
 	"\bmetadata\x18\x04 \x03(\v2'.SandboxCheckpointRequest.MetadataEntryR\bmetadata\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xca\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe9\x01\n" +
 	"\x19SandboxCheckpointResponse\x12D\n" +
 	"\x13scheduling_metadata\x18\x01 \x01(\v2\x13.SchedulingMetadataR\x12schedulingMetadata\x12J\n" +
 	"\x13workspace_revisions\x18\x14 \x03(\v2\x19.SandboxWorkspaceRevisionR\x12workspaceRevisions\x12\x1b\n" +
-	"\tmemory_mb\x18\x15 \x01(\x03R\bmemoryMb\"\xee\x02\n" +
+	"\tmemory_mb\x18\x15 \x01(\x03R\bmemoryMb\x12\x1d\n" +
+	"\n" +
+	"vcpu_count\x18\x16 \x01(\x03R\tvcpuCount\"\x8d\x03\n" +
 	"\x0eRunningSandbox\x12*\n" +
 	"\x06config\x18\x01 \x01(\v2\x0e.SandboxConfigB\x02\x18\x01R\x06config\x12\x1b\n" +
 	"\tclient_id\x18\x02 \x01(\tR\bclientId\x129\n" +
@@ -2298,9 +2509,11 @@ const file_orchestrator_proto_rawDesc = "" +
 	"\x04vcpu\x18\b \x01(\x03R\x04vcpu\x12\x15\n" +
 	"\x06ram_mb\x18\t \x01(\x03R\x05ramMb\x12\x1b\n" +
 	"\tmemory_mb\x18\n" +
-	" \x01(\x03R\bmemoryMb\"D\n" +
+	" \x01(\x03R\bmemoryMb\x12\x1d\n" +
+	"\n" +
+	"vcpu_count\x18\v \x01(\x03R\tvcpuCount\"D\n" +
 	"\x13SandboxListResponse\x12-\n" +
-	"\tsandboxes\x18\x01 \x03(\v2\x0f.RunningSandboxR\tsandboxes2\xb7\x03\n" +
+	"\tsandboxes\x18\x01 \x03(\v2\x0f.RunningSandboxR\tsandboxes2\xf9\x03\n" +
 	"\x0eSandboxService\x127\n" +
 	"\x06Create\x12\x15.SandboxCreateRequest\x1a\x16.SandboxCreateResponse\x127\n" +
 	"\x06Update\x12\x15.SandboxUpdateRequest\x1a\x16.google.protobuf.Empty\x124\n" +
@@ -2309,7 +2522,8 @@ const file_orchestrator_proto_rawDesc = "" +
 	"\x05Pause\x12\x14.SandboxPauseRequest\x1a\x15.SandboxPauseResponse\x12C\n" +
 	"\n" +
 	"Checkpoint\x12\x19.SandboxCheckpointRequest\x1a\x1a.SandboxCheckpointResponse\x12I\n" +
-	"\fResizeMemory\x12\x1b.SandboxResizeMemoryRequest\x1a\x1c.SandboxResizeMemoryResponseB/Z-https://github.com/e2b-dev/infra/orchestratorb\x06proto3"
+	"\fResizeMemory\x12\x1b.SandboxResizeMemoryRequest\x1a\x1c.SandboxResizeMemoryResponse\x12@\n" +
+	"\tResizeCpu\x12\x18.SandboxResizeCpuRequest\x1a\x19.SandboxResizeCpuResponseB/Z-https://github.com/e2b-dev/infra/orchestratorb\x06proto3"
 
 var (
 	file_orchestrator_proto_rawDescOnce sync.Once
@@ -2323,7 +2537,7 @@ func file_orchestrator_proto_rawDescGZIP() []byte {
 	return file_orchestrator_proto_rawDescData
 }
 
-var file_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_orchestrator_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
 var file_orchestrator_proto_goTypes = []any{
 	(*SandboxConfig)(nil),               // 0: SandboxConfig
 	(*SandboxIam)(nil),                  // 1: SandboxIam
@@ -2342,72 +2556,76 @@ var file_orchestrator_proto_goTypes = []any{
 	(*SandboxCreateResponse)(nil),       // 14: SandboxCreateResponse
 	(*SandboxResizeMemoryRequest)(nil),  // 15: SandboxResizeMemoryRequest
 	(*SandboxResizeMemoryResponse)(nil), // 16: SandboxResizeMemoryResponse
-	(*SandboxUpdateRequest)(nil),        // 17: SandboxUpdateRequest
-	(*SandboxDeleteRequest)(nil),        // 18: SandboxDeleteRequest
-	(*SandboxPauseRequest)(nil),         // 19: SandboxPauseRequest
-	(*SchedulingMetadata)(nil),          // 20: SchedulingMetadata
-	(*SandboxPauseResponse)(nil),        // 21: SandboxPauseResponse
-	(*SandboxCheckpointRequest)(nil),    // 22: SandboxCheckpointRequest
-	(*SandboxCheckpointResponse)(nil),   // 23: SandboxCheckpointResponse
-	(*RunningSandbox)(nil),              // 24: RunningSandbox
-	(*SandboxListResponse)(nil),         // 25: SandboxListResponse
-	nil,                                 // 26: SandboxConfig.EnvVarsEntry
-	nil,                                 // 27: SandboxConfig.MetadataEntry
-	nil,                                 // 28: SandboxIam.TokensEntry
-	nil,                                 // 29: SandboxNetworkTransform.HeadersEntry
-	nil,                                 // 30: SandboxNetworkEgressConfig.RulesEntry
-	nil,                                 // 31: SandboxCheckpointRequest.MetadataEntry
-	(*timestamppb.Timestamp)(nil),       // 32: google.protobuf.Timestamp
-	(*emptypb.Empty)(nil),               // 33: google.protobuf.Empty
+	(*SandboxResizeCpuRequest)(nil),     // 17: SandboxResizeCpuRequest
+	(*SandboxResizeCpuResponse)(nil),    // 18: SandboxResizeCpuResponse
+	(*SandboxUpdateRequest)(nil),        // 19: SandboxUpdateRequest
+	(*SandboxDeleteRequest)(nil),        // 20: SandboxDeleteRequest
+	(*SandboxPauseRequest)(nil),         // 21: SandboxPauseRequest
+	(*SchedulingMetadata)(nil),          // 22: SchedulingMetadata
+	(*SandboxPauseResponse)(nil),        // 23: SandboxPauseResponse
+	(*SandboxCheckpointRequest)(nil),    // 24: SandboxCheckpointRequest
+	(*SandboxCheckpointResponse)(nil),   // 25: SandboxCheckpointResponse
+	(*RunningSandbox)(nil),              // 26: RunningSandbox
+	(*SandboxListResponse)(nil),         // 27: SandboxListResponse
+	nil,                                 // 28: SandboxConfig.EnvVarsEntry
+	nil,                                 // 29: SandboxConfig.MetadataEntry
+	nil,                                 // 30: SandboxIam.TokensEntry
+	nil,                                 // 31: SandboxNetworkTransform.HeadersEntry
+	nil,                                 // 32: SandboxNetworkEgressConfig.RulesEntry
+	nil,                                 // 33: SandboxCheckpointRequest.MetadataEntry
+	(*timestamppb.Timestamp)(nil),       // 34: google.protobuf.Timestamp
+	(*emptypb.Empty)(nil),               // 35: google.protobuf.Empty
 }
 var file_orchestrator_proto_depIdxs = []int32{
-	26, // 0: SandboxConfig.env_vars:type_name -> SandboxConfig.EnvVarsEntry
-	27, // 1: SandboxConfig.metadata:type_name -> SandboxConfig.MetadataEntry
+	28, // 0: SandboxConfig.env_vars:type_name -> SandboxConfig.EnvVarsEntry
+	29, // 1: SandboxConfig.metadata:type_name -> SandboxConfig.MetadataEntry
 	7,  // 2: SandboxConfig.network:type_name -> SandboxNetworkConfig
 	4,  // 3: SandboxConfig.volumeMounts:type_name -> SandboxVolumeMount
 	3,  // 4: SandboxConfig.auto_resume:type_name -> SandboxAutoResumeConfig
 	1,  // 5: SandboxConfig.iam:type_name -> SandboxIam
-	28, // 6: SandboxIam.tokens:type_name -> SandboxIam.TokensEntry
+	30, // 6: SandboxIam.tokens:type_name -> SandboxIam.TokensEntry
 	11, // 7: SandboxNetworkConfig.egress:type_name -> SandboxNetworkEgressConfig
 	12, // 8: SandboxNetworkConfig.ingress:type_name -> SandboxNetworkIngressConfig
-	29, // 9: SandboxNetworkTransform.headers:type_name -> SandboxNetworkTransform.HeadersEntry
+	31, // 9: SandboxNetworkTransform.headers:type_name -> SandboxNetworkTransform.HeadersEntry
 	8,  // 10: SandboxNetworkRule.transform:type_name -> SandboxNetworkTransform
 	9,  // 11: SandboxNetworkDomainRules.rules:type_name -> SandboxNetworkRule
-	30, // 12: SandboxNetworkEgressConfig.rules:type_name -> SandboxNetworkEgressConfig.RulesEntry
+	32, // 12: SandboxNetworkEgressConfig.rules:type_name -> SandboxNetworkEgressConfig.RulesEntry
 	0,  // 13: SandboxCreateRequest.sandbox:type_name -> SandboxConfig
-	32, // 14: SandboxCreateRequest.start_time:type_name -> google.protobuf.Timestamp
-	32, // 15: SandboxCreateRequest.end_time:type_name -> google.protobuf.Timestamp
+	34, // 14: SandboxCreateRequest.start_time:type_name -> google.protobuf.Timestamp
+	34, // 15: SandboxCreateRequest.end_time:type_name -> google.protobuf.Timestamp
 	5,  // 16: SandboxCreateRequest.workspace_slots:type_name -> SandboxWorkspaceSlot
-	20, // 17: SandboxCreateResponse.scheduling_metadata:type_name -> SchedulingMetadata
-	32, // 18: SandboxUpdateRequest.end_time:type_name -> google.protobuf.Timestamp
+	22, // 17: SandboxCreateResponse.scheduling_metadata:type_name -> SchedulingMetadata
+	34, // 18: SandboxUpdateRequest.end_time:type_name -> google.protobuf.Timestamp
 	11, // 19: SandboxUpdateRequest.egress:type_name -> SandboxNetworkEgressConfig
-	20, // 20: SandboxPauseResponse.scheduling_metadata:type_name -> SchedulingMetadata
+	22, // 20: SandboxPauseResponse.scheduling_metadata:type_name -> SchedulingMetadata
 	6,  // 21: SandboxPauseResponse.workspace_revisions:type_name -> SandboxWorkspaceRevision
-	31, // 22: SandboxCheckpointRequest.metadata:type_name -> SandboxCheckpointRequest.MetadataEntry
-	20, // 23: SandboxCheckpointResponse.scheduling_metadata:type_name -> SchedulingMetadata
+	33, // 22: SandboxCheckpointRequest.metadata:type_name -> SandboxCheckpointRequest.MetadataEntry
+	22, // 23: SandboxCheckpointResponse.scheduling_metadata:type_name -> SchedulingMetadata
 	6,  // 24: SandboxCheckpointResponse.workspace_revisions:type_name -> SandboxWorkspaceRevision
 	0,  // 25: RunningSandbox.config:type_name -> SandboxConfig
-	32, // 26: RunningSandbox.start_time:type_name -> google.protobuf.Timestamp
-	32, // 27: RunningSandbox.end_time:type_name -> google.protobuf.Timestamp
-	24, // 28: SandboxListResponse.sandboxes:type_name -> RunningSandbox
+	34, // 26: RunningSandbox.start_time:type_name -> google.protobuf.Timestamp
+	34, // 27: RunningSandbox.end_time:type_name -> google.protobuf.Timestamp
+	26, // 28: SandboxListResponse.sandboxes:type_name -> RunningSandbox
 	2,  // 29: SandboxIam.TokensEntry.value:type_name -> SandboxIamToken
 	10, // 30: SandboxNetworkEgressConfig.RulesEntry.value:type_name -> SandboxNetworkDomainRules
 	13, // 31: SandboxService.Create:input_type -> SandboxCreateRequest
-	17, // 32: SandboxService.Update:input_type -> SandboxUpdateRequest
-	33, // 33: SandboxService.List:input_type -> google.protobuf.Empty
-	18, // 34: SandboxService.Delete:input_type -> SandboxDeleteRequest
-	19, // 35: SandboxService.Pause:input_type -> SandboxPauseRequest
-	22, // 36: SandboxService.Checkpoint:input_type -> SandboxCheckpointRequest
+	19, // 32: SandboxService.Update:input_type -> SandboxUpdateRequest
+	35, // 33: SandboxService.List:input_type -> google.protobuf.Empty
+	20, // 34: SandboxService.Delete:input_type -> SandboxDeleteRequest
+	21, // 35: SandboxService.Pause:input_type -> SandboxPauseRequest
+	24, // 36: SandboxService.Checkpoint:input_type -> SandboxCheckpointRequest
 	15, // 37: SandboxService.ResizeMemory:input_type -> SandboxResizeMemoryRequest
-	14, // 38: SandboxService.Create:output_type -> SandboxCreateResponse
-	33, // 39: SandboxService.Update:output_type -> google.protobuf.Empty
-	25, // 40: SandboxService.List:output_type -> SandboxListResponse
-	33, // 41: SandboxService.Delete:output_type -> google.protobuf.Empty
-	21, // 42: SandboxService.Pause:output_type -> SandboxPauseResponse
-	23, // 43: SandboxService.Checkpoint:output_type -> SandboxCheckpointResponse
-	16, // 44: SandboxService.ResizeMemory:output_type -> SandboxResizeMemoryResponse
-	38, // [38:45] is the sub-list for method output_type
-	31, // [31:38] is the sub-list for method input_type
+	17, // 38: SandboxService.ResizeCpu:input_type -> SandboxResizeCpuRequest
+	14, // 39: SandboxService.Create:output_type -> SandboxCreateResponse
+	35, // 40: SandboxService.Update:output_type -> google.protobuf.Empty
+	27, // 41: SandboxService.List:output_type -> SandboxListResponse
+	35, // 42: SandboxService.Delete:output_type -> google.protobuf.Empty
+	23, // 43: SandboxService.Pause:output_type -> SandboxPauseResponse
+	25, // 44: SandboxService.Checkpoint:output_type -> SandboxCheckpointResponse
+	16, // 45: SandboxService.ResizeMemory:output_type -> SandboxResizeMemoryResponse
+	18, // 46: SandboxService.ResizeCpu:output_type -> SandboxResizeCpuResponse
+	39, // [39:47] is the sub-list for method output_type
+	31, // [31:39] is the sub-list for method input_type
 	31, // [31:31] is the sub-list for extension type_name
 	31, // [31:31] is the sub-list for extension extendee
 	0,  // [0:31] is the sub-list for field type_name
@@ -2423,15 +2641,15 @@ func file_orchestrator_proto_init() {
 	file_orchestrator_proto_msgTypes[9].OneofWrappers = []any{}
 	file_orchestrator_proto_msgTypes[12].OneofWrappers = []any{}
 	file_orchestrator_proto_msgTypes[13].OneofWrappers = []any{}
-	file_orchestrator_proto_msgTypes[17].OneofWrappers = []any{}
-	file_orchestrator_proto_msgTypes[18].OneofWrappers = []any{}
+	file_orchestrator_proto_msgTypes[19].OneofWrappers = []any{}
+	file_orchestrator_proto_msgTypes[20].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_orchestrator_proto_rawDesc), len(file_orchestrator_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   32,
+			NumMessages:   34,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

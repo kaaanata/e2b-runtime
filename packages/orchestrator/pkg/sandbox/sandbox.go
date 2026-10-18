@@ -163,6 +163,19 @@ type Config struct {
 	memoryMB  int64
 	pluggedMB int64
 
+	// CPUHotplug is the vCPU layout of a template built with maxCpuCount,
+	// nil when the vCPU count is fixed at Vcpu. Vcpu stays the template's
+	// count (the layout's base, the CPUs online in its snapshot). A cold boot
+	// creates the VM with the layout's maximum; a resume restores it from the
+	// snapshot and must agree with it.
+	CPUHotplug *metadata.CPUHotplugLayout
+
+	// vcpuCount is the vCPU count granted to the sandbox (its cgroup CPU
+	// quota), onlineVCPUs what the guest had online when envd last reported.
+	// Guarded by mu; read them through the accessors (cpu_hotplug.go).
+	vcpuCount   int64
+	onlineVCPUs int64
+
 	// mu protects mutable sub-fields of Network (Egress, Ingress).
 	// The Network pointer itself is set once at construction and never replaced.
 	mu      *sync.RWMutex
@@ -499,6 +512,10 @@ type Sandbox struct {
 	// snapshot records and the mapping list the dirty readout translates
 	// with, and an unplug's REMOVE would cancel a CoW export window.
 	memResizeMu sync.Mutex
+
+	// cpuResizeMu serializes vCPU resizes (ResizeCPU) with pauses: the
+	// granted count is stamped into the snapshot.
+	cpuResizeMu sync.Mutex
 
 	// memSealMu guards memSealDone and inPlaceExportedDirty.
 	memSealMu sync.Mutex
@@ -1066,6 +1083,10 @@ func (f *Factory) CreateSandbox(
 		processOptions.MemoryHotplug = config.MemoryHotplug.Clone()
 	}
 
+	// A CPU-hotplug lineage: the VM gets the layout's maximum vCPUs and the
+	// guest boots the base online (fc.Create checks Vcpu is the base).
+	processOptions.CPUHotplug = config.CPUHotplug.Clone()
+
 	// / ==== END of resources initialization ====
 	ips, err := ipsPromise.Wait(ctx)
 	if err != nil {
@@ -1091,6 +1112,11 @@ func (f *Factory) CreateSandbox(
 	cleanup.Add(ctx, func(ctx context.Context) error {
 		return cgroupHandle.Remove(ctx)
 	})
+
+	// The granted vCPU count is enforced from the first guest instruction.
+	if err := config.applyCPUQuota(cgroupHandle); err != nil {
+		return nil, err
+	}
 
 	// A cold boot: the guest mounts the volumes from scratch, so a requested
 	// resize is done on the host, offline, before any VM can open the image.
@@ -1641,6 +1667,10 @@ func (f *Factory) ResumeSandbox(
 		return nil, err
 	}
 
+	if err := config.adoptCPUHotplug(meta); err != nil {
+		return nil, err
+	}
+
 	// A different size than the snapshot recorded: Firecracker takes the
 	// request on the paused VM and the guest plugs as soon as it runs.
 	resizeOnResume, err := config.resumeHotplugRequest(meta)
@@ -1695,6 +1725,12 @@ func (f *Factory) ResumeSandbox(
 	cleanup.Add(ctx, func(ctx context.Context) error {
 		return cgroupHandle.Remove(ctx)
 	})
+
+	// A CPU-hotplug snapshot has every vCPU in it: the quota holds the
+	// guest to the granted count before its vCPUs resume.
+	if err := config.applyCPUQuota(cgroupHandle); err != nil {
+		return nil, err
+	}
 
 	// A memory restore: the guest may have the volumes mounted, so each slot
 	// must present the revision's identity at the recorded size (or a grow of
@@ -1934,6 +1970,10 @@ func (f *Factory) ResumeSandbox(
 		if err := sbx.settleRequestedMemory(ctx, resizeOnResume != nil); err != nil {
 			return nil, err
 		}
+
+		// The vCPU count granted for this start (the quota already holds):
+		// bring the guest's online CPUs to it.
+		sbx.settleRequestedCPUs(ctx)
 	}
 
 	// A throwaway (e.g. the pause-resume prefetch harvest) is never promoted to a
@@ -2246,6 +2286,9 @@ func (s *Sandbox) Pause(
 	s.memResizeMu.Lock()
 	defer s.memResizeMu.Unlock()
 
+	s.cpuResizeMu.Lock()
+	defer s.cpuResizeMu.Unlock()
+
 	// Stop the health check before pausing the VM
 	s.Checks.Stop()
 
@@ -2484,6 +2527,11 @@ func (s *Sandbox) Pause(
 		snapshotMemoryMB = s.Config.RamMB + m.MemoryHotplugPluggedMiB
 	}
 
+	// The vCPU count granted at this snapshot: a resume without its own
+	// request restores it (also after a filesystem-only cold boot, which
+	// boots the base and brings the rest online).
+	m = s.stampCPUHotplugVCPUs(m)
+
 	// Gather data for postprocessing
 	originalRootfs, err := s.Template.Rootfs()
 	if err != nil {
@@ -2651,6 +2699,7 @@ func (s *Sandbox) Pause(
 		SchedulingMetadata:   schedulingMetadata,
 		FilesystemSnapshot:   pauseOpts.filesystemSnapshot,
 		MemoryMB:             snapshotMemoryMB,
+		VCPUs:                m.CPUHotplugVCPUs,
 		RootfsBlockSize:      originalRootfs.Header().Metadata.BlockSize,
 		WorkspaceRevisions:   m.WorkspaceRevisions,
 		WorkspaceSeals:       workspaceSeals,

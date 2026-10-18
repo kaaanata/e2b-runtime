@@ -85,6 +85,7 @@ func snapshotMemoryDefault(ramMB int64, requestedRamMB *int64) int64 {
 type memoryResizeOrchestrator interface {
 	GetSandbox(ctx context.Context, teamID uuid.UUID, sandboxID string) (sandbox.Sandbox, error)
 	ResizeSandboxMemory(ctx context.Context, teamID uuid.UUID, sandboxID string, memoryMB int64) (sandbox.Sandbox, *api.APIError)
+	ResizeSandboxCPU(ctx context.Context, teamID uuid.UUID, sandboxID string, vcpus int64) (sandbox.Sandbox, *api.APIError)
 }
 
 func (a *APIStore) resizeBackend() memoryResizeOrchestrator {
@@ -95,9 +96,10 @@ func (a *APIStore) resizeBackend() memoryResizeOrchestrator {
 	return a.orchestrator
 }
 
-// PatchSandboxesSandboxID changes a running sandbox in place: today its guest
+// PatchSandboxesSandboxID changes a running sandbox in place: its guest
 // memory, hotplugged into the running guest for a template built with
-// maxMemoryMB.
+// maxMemoryMB, and/or its vCPU count for a template built with maxCpuCount.
+// Both are validated before either is applied; memory goes first.
 func (a *APIStore) PatchSandboxesSandboxID(c *gin.Context, id string) {
 	ctx := c.Request.Context()
 
@@ -120,8 +122,8 @@ func (a *APIStore) PatchSandboxesSandboxID(c *gin.Context, id string) {
 		return
 	}
 
-	if body.MemoryMB == nil {
-		a.sendAPIStoreError(c, http.StatusBadRequest, "Nothing to update: memoryMB is required")
+	if body.MemoryMB == nil && body.CpuCount == nil {
+		a.sendAPIStoreError(c, http.StatusBadRequest, "Nothing to update: memoryMB or cpuCount is required")
 
 		return
 	}
@@ -141,19 +143,43 @@ func (a *APIStore) PatchSandboxesSandboxID(c *gin.Context, id string) {
 		return
 	}
 
-	requested := int64(*body.MemoryMB)
-	if apiErr := validateSandboxMemory(teamInfo.Limits, sbx.RamMB, sbx.MaxMemoryMB, requested); apiErr != nil {
-		apierrors.SendAPIError(c, apiErr)
+	if body.MemoryMB != nil {
+		if apiErr := validateSandboxMemory(teamInfo.Limits, sbx.RamMB, sbx.MaxMemoryMB, int64(*body.MemoryMB)); apiErr != nil {
+			apierrors.SendAPIError(c, apiErr)
 
-		return
+			return
+		}
 	}
 
-	updated, apiErr := backend.ResizeSandboxMemory(ctx, team.ID, sandboxID, requested)
-	if apiErr != nil {
-		telemetry.ReportErrorByCode(ctx, apiErr.Code, "error resizing sandbox memory", apiErr.Err, telemetry.WithSandboxID(sandboxID))
-		apierrors.SendAPIError(c, apiErr)
+	if body.CpuCount != nil {
+		if apiErr := validateSandboxCPU(teamInfo.Limits, sbx.VCpu, sbx.MaxCPUCount, int64(*body.CpuCount)); apiErr != nil {
+			apierrors.SendAPIError(c, apiErr)
 
-		return
+			return
+		}
+	}
+
+	updated := sbx
+	if body.MemoryMB != nil {
+		var apiErr *api.APIError
+		updated, apiErr = backend.ResizeSandboxMemory(ctx, team.ID, sandboxID, int64(*body.MemoryMB))
+		if apiErr != nil {
+			telemetry.ReportErrorByCode(ctx, apiErr.Code, "error resizing sandbox memory", apiErr.Err, telemetry.WithSandboxID(sandboxID))
+			apierrors.SendAPIError(c, apiErr)
+
+			return
+		}
+	}
+
+	if body.CpuCount != nil {
+		var apiErr *api.APIError
+		updated, apiErr = backend.ResizeSandboxCPU(ctx, team.ID, sandboxID, int64(*body.CpuCount))
+		if apiErr != nil {
+			telemetry.ReportErrorByCode(ctx, apiErr.Code, "error resizing sandbox vCPUs", apiErr.Err, telemetry.WithSandboxID(sandboxID))
+			apierrors.SendAPIError(c, apiErr)
+
+			return
+		}
 	}
 
 	domain, apiErr := a.sandboxDomain(teamInfo)
@@ -197,7 +223,7 @@ func runningSandboxDetail(sbx sandbox.Sandbox, domain *string) api.SandboxDetail
 		Alias:               sbx.Alias,
 		SandboxID:           sbx.SandboxID,
 		StartedAt:           sbx.StartTime,
-		CpuCount:            api.CPUCount(sbx.VCpu),
+		CpuCount:            api.CPUCount(sbx.RequestedVCPUs()),
 		MemoryMB:            api.MemoryMB(sbx.RequestedMemoryMB()),
 		DiskSizeMB:          api.DiskSizeMB(sbx.TotalDiskSizeMB),
 		EndAt:               sbx.EndTime,
@@ -211,6 +237,7 @@ func runningSandboxDetail(sbx sandbox.Sandbox, domain *string) api.SandboxDetail
 		VolumeMounts:        convertFromDBMountsToAPIMounts(sbx.VolumeMounts),
 	}
 	setRunningMemory(&detail.CurrentMemoryMB, &detail.MaxMemoryMB, sbx)
+	setRunningCPU(&detail.CurrentCpuCount, &detail.MaxCpuCount, sbx)
 
 	if sbx.Metadata != nil {
 		meta := api.SandboxMetadata(sbx.Metadata)

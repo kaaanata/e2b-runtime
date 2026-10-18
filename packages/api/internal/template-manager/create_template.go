@@ -47,6 +47,8 @@ type TemplateLayout struct {
 	// MaxMemoryMB is the memory hotplug maximum: nil for a fixed-size build
 	// (or, from a build start, "inherit"); the template manager validates it.
 	MaxMemoryMB *int64
+	// MaxCPUCount is the CPU hot resize maximum, with MaxMemoryMB's rules.
+	MaxCPUCount *int64
 }
 
 // TemplateLayoutFromAPI converts the public build request's layout fields.
@@ -89,6 +91,10 @@ func TemplateLayoutFromBuildMetadata(meta *templatemanagergrpc.TemplateBuildMeta
 	// Reported together with the layout: unset there means no device.
 	if meta.MaxMemoryMB != nil {
 		out.MaxMemoryMB = new(int64(meta.GetMaxMemoryMB()))
+	}
+
+	if meta.MaxCpuCount != nil {
+		out.MaxCPUCount = new(int64(meta.GetMaxCpuCount()))
 	}
 
 	return out
@@ -194,6 +200,9 @@ func (tm *TemplateManager) CreateTemplate(
 	}
 	if layout.MaxMemoryMB != nil {
 		template.MaxMemoryMB = new(int32(*layout.MaxMemoryMB))
+	}
+	if layout.MaxCPUCount != nil {
+		template.MaxCpuCount = new(int32(*layout.MaxCPUCount))
 	}
 
 	err = setTemplateSource(ctx, tm, teamID, teamSlug, template, fromImage, fromTemplate)

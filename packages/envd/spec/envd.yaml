@@ -196,6 +196,56 @@ paths:
         "500":
           $ref: "#/components/responses/InternalServerError"
 
+  /cpus:
+    post:
+      summary: Bring guest CPUs online or offline so exactly the requested number is online (CPU hot resize).
+      description: |
+        The VM of a CPU-hotplug template has more vCPUs than it runs with; the extra ones are
+        present but offline. envd onlines the lowest-numbered present CPUs up to `online` and
+        offlines the rest (highest first), skipping CPUs already in the wanted state. cpu0 is
+        always online. Per-CPU failures do not abort the call; the result reports what is online
+        afterwards and the errors. The host cgroup quota, not this call, enforces the count.
+      x-internal: true
+      security:
+        - AccessTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CPUsRequest"
+      responses:
+        "200":
+          description: The CPUs online after the call
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CPUsResult"
+        "400":
+          description: The request is outside [1, present CPUs]
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+    get:
+      summary: Report the guest's present and online CPUs.
+      x-internal: true
+      security:
+        - AccessTokenAuth: []
+        - {}
+      responses:
+        "200":
+          description: The current CPU state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CPUsResult"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
   /fsfreeze:
     post:
       summary: Freeze the guest rootfs (FIFREEZE) before a filesystem-only pause so it is flushed to a consistent on-disk state, closing the sync->pause race. Idempotent. On a successful filesystem-only pause the VM is rebooted, so no thaw is needed; the orchestrator thaws only on the pause-failure path.
@@ -591,6 +641,39 @@ components:
             code: 507
 
   schemas:
+    CPUsRequest:
+      type: object
+      required: [online]
+      properties:
+        online:
+          type: integer
+          format: int64
+          minimum: 1
+          description: How many CPUs should be online after the call
+    CPUsResult:
+      type: object
+      required: [online, present, hotpluggable]
+      properties:
+        online:
+          type: integer
+          format: int64
+          description: CPUs online after the call (/sys/devices/system/cpu/online)
+        present:
+          type: integer
+          format: int64
+          description: CPUs present (the VM's vCPU count)
+        hotpluggable:
+          type: boolean
+          description: Whether every present CPU but cpu0 has an online control (CONFIG_HOTPLUG_CPU)
+        changed:
+          type: integer
+          format: int64
+          description: CPUs this call brought online or offline
+        errors:
+          type: array
+          items:
+            type: string
+          description: One entry per CPU whose state could not be changed
     Error:
       required:
         - message

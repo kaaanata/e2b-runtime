@@ -133,6 +133,13 @@ type ProcessOptions struct {
 	// template lineage built with a device must configure the identical one:
 	// the snapshot's device table and memory file depend on it.
 	MemoryHotplug *metadata.MemoryHotplugLayout
+
+	// CPUHotplug, when set, creates the VM with CPUHotplug.MaxVCPUs vCPUs
+	// and boots the guest with maxcpus=CPUHotplug.BaseVCPUs: the extra vCPUs
+	// are present but offline until envd brings them online. The vCPU count
+	// passed to Create must be the base. Like MemoryHotplug, every cold boot
+	// of a lineage built with it must use the identical layout.
+	CPUHotplug *metadata.CPUHotplugLayout
 }
 
 // TokenBucketConfig holds parameters for a single Firecracker token bucket.
@@ -538,7 +545,22 @@ func (p *Process) Create(
 	}
 	telemetry.ReportEvent(ctx, "set fc network config")
 
-	err = p.client.setMachineConfig(ctx, vCPUCount, memoryMB, hugePages)
+	machineVCPUs := vCPUCount
+	if l := options.CPUHotplug; l != nil {
+		if l.BaseVCPUs != vCPUCount {
+			fcStopErr := p.Stop(ctx)
+
+			return errors.Join(fmt.Errorf("CPU hotplug layout has %d boot vCPUs, the sandbox %d", l.BaseVCPUs, vCPUCount), fcStopErr)
+		}
+
+		machineVCPUs = l.MaxVCPUs
+		telemetry.ReportEvent(ctx, "fc cpu hotplug",
+			attribute.Int64("cpu_hotplug.base_vcpus", l.BaseVCPUs),
+			attribute.Int64("cpu_hotplug.max_vcpus", l.MaxVCPUs),
+		)
+	}
+
+	err = p.client.setMachineConfig(ctx, machineVCPUs, memoryMB, hugePages)
 	if err != nil {
 		fcStopErr := p.Stop(ctx)
 
