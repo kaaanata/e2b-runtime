@@ -75,6 +75,7 @@ type EnvBuild struct {
 	Layout                     *string
 	WorkspaceSlotCapacityBytes []int64
 	MaxRamMb                   *int64
+	RequestedRamMb             *int64
 }
 
 type Snapshot struct {

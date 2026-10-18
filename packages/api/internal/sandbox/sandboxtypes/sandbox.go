@@ -85,19 +85,27 @@ type Sandbox struct {
 	Alias      *string `json:"alias,omitempty"`
 	Domain     *string `json:"domain,omitempty"`
 
-	ExecutionID        string            `json:"executionID"`
-	TeamID             uuid.UUID         `json:"teamID"`
-	BuildID            uuid.UUID         `json:"buildID"`
-	BaseTemplateID     string            `json:"baseTemplateID"`
-	Metadata           map[string]string `json:"metadata"`
-	MaxInstanceLength  time.Duration     `json:"maxInstanceLength"`
-	StartTime          time.Time         `json:"startTime"`
-	EndTime            time.Time         `json:"endTime"`
-	VCpu               int64             `json:"vCpu"`
-	TotalDiskSizeMB    int64             `json:"totalDiskSizeMB"`
-	RamMB              int64             `json:"ramMB"`
-	KernelVersion      string            `json:"kernelVersion"`
-	FirecrackerVersion string            `json:"firecrackerVersion"`
+	ExecutionID       string            `json:"executionID"`
+	TeamID            uuid.UUID         `json:"teamID"`
+	BuildID           uuid.UUID         `json:"buildID"`
+	BaseTemplateID    string            `json:"baseTemplateID"`
+	Metadata          map[string]string `json:"metadata"`
+	MaxInstanceLength time.Duration     `json:"maxInstanceLength"`
+	StartTime         time.Time         `json:"startTime"`
+	EndTime           time.Time         `json:"endTime"`
+	VCpu              int64             `json:"vCpu"`
+	TotalDiskSizeMB   int64             `json:"totalDiskSizeMB"`
+	RamMB             int64             `json:"ramMB"`
+	// MemoryMB is the guest memory requested for the sandbox (RamMB plus
+	// hotplugged memory); 0 on records predating memory hotplug, read as
+	// RamMB (see RequestedMemoryMB). CurrentMemoryMB is what the node last
+	// reported the guest to have; MaxMemoryMB the template's maximum, nil for
+	// a template without memory hotplug (fixed at RamMB).
+	MemoryMB           int64  `json:"memoryMB,omitempty"`
+	CurrentMemoryMB    int64  `json:"currentMemoryMB,omitempty"`
+	MaxMemoryMB        *int64 `json:"maxMemoryMB,omitempty"`
+	KernelVersion      string `json:"kernelVersion"`
+	FirecrackerVersion string `json:"firecrackerVersion"`
 	// FirecrackerVersionResolved records whether FirecrackerVersion is the
 	// orchestrator-RESOLVED version the sandbox actually runs (frozen at
 	// start, echoed on the create response) rather than the build's declared
@@ -132,6 +140,22 @@ type Sandbox struct {
 	Iam *types.SandboxIam `json:"iam,omitempty"`
 
 	State State `json:"state"`
+}
+
+// RequestedMemoryMB is the guest memory requested for the sandbox: MemoryMB,
+// or the boot memory for records that predate memory hotplug.
+func (s Sandbox) RequestedMemoryMB() int64 {
+	if s.MemoryMB == 0 {
+		return s.RamMB
+	}
+
+	return s.MemoryMB
+}
+
+// HotResizable reports whether the sandbox's template has a memory hotplug
+// device, i.e. its memory can be changed while it runs.
+func (s Sandbox) HotResizable() bool {
+	return s.MaxMemoryMB != nil
 }
 
 // HasBlockVolumeMounts reports whether the sandbox mounts a workspace block
@@ -185,9 +209,21 @@ type NodeSandbox struct {
 	// check, since the store write may not have landed yet.
 	StartTime time.Time
 	// VCpu and RamMB correct the node's optimistic resource accounting after a
-	// kill.
-	VCpu  int64
-	RamMB int64
+	// kill. MemoryMB is the memory the node accounts (requested or plugged
+	// hotplug memory on top of RamMB); 0 from nodes predating hotplug.
+	VCpu     int64
+	RamMB    int64
+	MemoryMB int64
+}
+
+// AccountedMemoryMB is the memory to release from the node's optimistic
+// allocation when the sandbox goes: what the node accounted, else RamMB.
+func (s NodeSandbox) AccountedMemoryMB() int64 {
+	if s.MemoryMB == 0 {
+		return s.RamMB
+	}
+
+	return s.MemoryMB
 }
 
 // ToNodeSandbox reduces a stored sandbox to the node-reported view, so the kill
@@ -202,6 +238,7 @@ func (s Sandbox) ToNodeSandbox() NodeSandbox {
 		StartTime:   s.StartTime,
 		VCpu:        s.VCpu,
 		RamMB:       s.RamMB,
+		MemoryMB:    s.RequestedMemoryMB(),
 	}
 }
 

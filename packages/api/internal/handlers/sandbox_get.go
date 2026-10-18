@@ -133,13 +133,8 @@ func (a *APIStore) GetSandboxesSandboxID(c *gin.Context, id string) {
 			return
 		}
 
-		state := api.Running
-		switch sbx.State {
-		// Sandbox is being paused or already is paused, user can work with that as if it's paused
-		case sandbox.StatePausing:
-			state = api.Paused
 		// Sandbox is being stopped or already is stopped, user can't work with it anymore
-		case sandbox.StateKilling:
+		if sbx.State == sandbox.StateKilling {
 			logger.L().Debug(ctx, "Sandbox is being killed", logger.WithSandboxID(sandboxId))
 			a.sendAPIStoreError(c, http.StatusNotFound, utils.SandboxNotFoundMsg(id))
 
@@ -147,32 +142,7 @@ func (a *APIStore) GetSandboxesSandboxID(c *gin.Context, id string) {
 		}
 
 		// Sandbox exists and belongs to the team - return running sandbox sbx
-		sandbox := api.SandboxDetail{
-			ClientID:            sbx.ClientID,
-			TemplateID:          sbx.BaseTemplateID,
-			Alias:               sbx.Alias,
-			SandboxID:           sbx.SandboxID,
-			StartedAt:           sbx.StartTime,
-			CpuCount:            api.CPUCount(sbx.VCpu),
-			MemoryMB:            api.MemoryMB(sbx.RamMB),
-			DiskSizeMB:          api.DiskSizeMB(sbx.TotalDiskSizeMB),
-			EndAt:               sbx.EndTime,
-			State:               state,
-			EnvdVersion:         sbx.EnvdVersion,
-			EnvdAccessToken:     sbx.EnvdAccessToken,
-			AllowInternetAccess: sbx.AllowInternetAccess,
-			Domain:              sbxDomain,
-			Network:             dbNetworkConfigToAPI(sbx.Network),
-			Lifecycle:           sandboxLifecycleToAPI(sbx.AutoPause, sbx.AutoResume),
-			VolumeMounts:        convertFromDBMountsToAPIMounts(sbx.VolumeMounts),
-		}
-
-		if sbx.Metadata != nil {
-			meta := api.SandboxMetadata(sbx.Metadata)
-			sandbox.Metadata = &meta
-		}
-
-		c.JSON(http.StatusOK, sandbox)
+		c.JSON(http.StatusOK, runningSandboxDetail(sbx, sbxDomain))
 
 		return
 	}
@@ -201,7 +171,7 @@ func (a *APIStore) GetSandboxesSandboxID(c *gin.Context, id string) {
 		return
 	}
 
-	memoryMB := int32(lastSnapshot.EnvBuild.RamMb)
+	memoryMB, maxMemoryMB := pausedMemory(lastSnapshot.EnvBuild.RamMb, lastSnapshot.EnvBuild.MaxRamMb, lastSnapshot.EnvBuild.RequestedRamMb)
 	cpuCount := int32(lastSnapshot.EnvBuild.Vcpu)
 
 	diskSize := int32(0)
@@ -249,6 +219,7 @@ func (a *APIStore) GetSandboxesSandboxID(c *gin.Context, id string) {
 		StartedAt:           lastSnapshot.Snapshot.SandboxStartedAt.Time,
 		CpuCount:            cpuCount,
 		MemoryMB:            memoryMB,
+		MaxMemoryMB:         maxMemoryMB,
 		DiskSizeMB:          diskSize,
 		EndAt:               lastSnapshot.EnvBuild.CreatedAt, // Latest build created_at represents last pause time
 		State:               api.Paused,

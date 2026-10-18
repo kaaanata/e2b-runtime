@@ -150,6 +150,14 @@ func buildUpsertSnapshotParams(sbx sandbox.Sandbox, node *nodemanager.Node, file
 		clusterID = &sbx.ClusterID
 	}
 
+	// Memory hotplug: the snapshot build row inherits the template's maximum
+	// and records the last requested size as the default to resume with.
+	// ram_mb stays the boot memory, so readers predating hotplug stay correct.
+	var requestedRamMB *int64
+	if sbx.MaxMemoryMB != nil {
+		requestedRamMB = new(sbx.RequestedMemoryMB())
+	}
+
 	return queries.UpsertSnapshotParams{
 		// Used if there's no snapshot for this sandbox yet
 		TemplateID:     id.Generate(),
@@ -160,6 +168,8 @@ func buildUpsertSnapshotParams(sbx sandbox.Sandbox, node *nodemanager.Node, file
 		StartedAt:      pgtype.Timestamptz{Time: sbx.StartTime, Valid: true},
 		Vcpu:           sbx.VCpu,
 		RamMb:          sbx.RamMB,
+		MaxRamMb:       sbx.MaxMemoryMB,
+		RequestedRamMb: requestedRamMB,
 		// We don't know this information
 		FreeDiskSizeMb:      0,
 		TotalDiskSizeMb:     &sbx.TotalDiskSizeMB,

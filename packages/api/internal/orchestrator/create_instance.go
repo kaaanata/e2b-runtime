@@ -90,6 +90,21 @@ type SandboxMetadata struct {
 	// VolumeMounts keeps the sandbox's block mounts for the API's own records,
 	// but only its NFS entries are sent as volume_mounts.
 	WorkspaceSlots []*orchestrator.SandboxWorkspaceSlot
+	// RequestedMemoryMB is the guest memory this start asks for (boot memory
+	// plus hotplug), validated by the handler against the build's max_ram_mb
+	// and the team tier. 0 keeps the node's default: the build's ram_mb for a
+	// new sandbox, the size recorded at pause for a resume.
+	RequestedMemoryMB int64
+}
+
+// requestedMemoryMiB is the memory a start occupies on its node for placement:
+// what was requested, or the boot memory when nothing was.
+func requestedMemoryMiB(cfg *orchestrator.SandboxConfig) int64 {
+	if cfg.GetRequestedMemoryMb() > 0 {
+		return cfg.GetRequestedMemoryMb()
+	}
+
+	return cfg.GetRamMb()
 }
 
 // VolumeAttacher binds a starting sandbox execution to its block volumes.
@@ -408,6 +423,7 @@ func (o *Orchestrator) CreateSandbox(
 			TotalDiskSizeMb:         ut.FromPtr(sbxData.Build.TotalDiskSizeMb),
 			VolumeMounts:            nfsVolumeMounts(sbxData.VolumeMounts),
 			Iam:                     iamToProto(sbxData.Iam),
+			RequestedMemoryMb:       sbxData.RequestedMemoryMB,
 		},
 		StartTime:      timestamppb.New(startTime),
 		EndTime:        timestamppb.New(endTime),
@@ -523,6 +539,21 @@ func (o *Orchestrator) CreateSandbox(
 		sbxData.Iam,
 	)
 	sbx.FirecrackerVersionResolved = resolvedFCVersion
+	// Memory: the request (0 = the node's default, which equals the boot
+	// memory for a fixed template and the paused size for a hotplug resume;
+	// the node echoes what it runs with) and the template's ceiling.
+	sbx.MaxMemoryMB = sbxData.Build.MaxRamMb
+	sbx.MemoryMB = requestedMemoryMiB(sbxRequest.GetSandbox())
+	sbx.CurrentMemoryMB = placed.Response.GetMemoryMb()
+	if sbx.CurrentMemoryMB == 0 {
+		// An orchestrator that predates the echo: assume the request.
+		sbx.CurrentMemoryMB = sbx.MemoryMB
+	}
+	if sbx.MaxMemoryMB != nil && sbxData.RequestedMemoryMB == 0 && sbx.CurrentMemoryMB > 0 {
+		// A hotplug resume without an explicit size keeps the paused size,
+		// which only the node knows; it is what the guest came back with.
+		sbx.MemoryMB = sbx.CurrentMemoryMB
+	}
 
 	// An orchestrator that predates the filesystem_boot field ignores it and
 	// memory-restores; only the echo proves the demand was honored. Kill the

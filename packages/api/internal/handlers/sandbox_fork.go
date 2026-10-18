@@ -209,7 +209,7 @@ func (a *APIStore) PostSandboxesSandboxIDFork(c *gin.Context, sandboxID api.Sand
 				forkedSandboxID,
 				forkTimeout,
 				teamInfo,
-				a.buildResumeSandboxDataFromSnapshot(sandboxID, forkedSandboxID, nil, nil, allowSharedIdentity, nil),
+				a.buildResumeSandboxDataFromSnapshot(sandboxID, forkedSandboxID, nil, nil, allowSharedIdentity, nil, nil, teamInfo.Limits),
 				&c.Request.Header,
 				true,
 				false,

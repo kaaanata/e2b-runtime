@@ -866,7 +866,29 @@ components:
         cpuCount:
           $ref: "#/components/schemas/CPUCount"
         memoryMB:
-          $ref: "#/components/schemas/MemoryMB"
+          allOf:
+            - $ref: "#/components/schemas/MemoryMB"
+          description: >-
+            Guest memory requested for the sandbox, in MiB: the template's
+            memoryMB plus any hotplugged memory. For a running sandbox of a
+            memory-hotplug template this is the last size requested (create,
+            resume or PATCH); for a paused one the size it will resume with.
+        currentMemoryMB:
+          allOf:
+            - $ref: "#/components/schemas/MemoryMB"
+          description: >-
+            Guest memory the sandbox actually had when last observed (boot
+            memory plus plugged hotplug memory), in MiB. Below memoryMB while
+            the guest is still plugging, or when a shrink stalled on pinned
+            memory. Omitted for a paused sandbox and for templates without
+            memory hotplug.
+        maxMemoryMB:
+          allOf:
+            - $ref: "#/components/schemas/MaxMemoryMB"
+          description: >-
+            Largest memoryMB the sandbox can be resized to (the template's
+            maxMemoryMB); omitted when the template has no memory hotplug and
+            the size is fixed.
         diskSizeMB:
           $ref: "#/components/schemas/DiskSizeMB"
         metadata:
@@ -919,7 +941,29 @@ components:
         cpuCount:
           $ref: "#/components/schemas/CPUCount"
         memoryMB:
-          $ref: "#/components/schemas/MemoryMB"
+          allOf:
+            - $ref: "#/components/schemas/MemoryMB"
+          description: >-
+            Guest memory requested for the sandbox, in MiB: the template's
+            memoryMB plus any hotplugged memory. For a running sandbox of a
+            memory-hotplug template this is the last size requested (create,
+            resume or PATCH); for a paused one the size it will resume with.
+        currentMemoryMB:
+          allOf:
+            - $ref: "#/components/schemas/MemoryMB"
+          description: >-
+            Guest memory the sandbox actually had when last observed (boot
+            memory plus plugged hotplug memory), in MiB. Below memoryMB while
+            the guest is still plugging, or when a shrink stalled on pinned
+            memory. Omitted for a paused sandbox and for templates without
+            memory hotplug.
+        maxMemoryMB:
+          allOf:
+            - $ref: "#/components/schemas/MaxMemoryMB"
+          description: >-
+            Largest memoryMB the sandbox can be resized to (the template's
+            maxMemoryMB); omitted when the template has no memory hotplug and
+            the size is fixed.
         diskSizeMB:
           $ref: "#/components/schemas/DiskSizeMB"
         metadata:
@@ -993,6 +1037,32 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SandboxVolumeMount"
+        memoryMB:
+          allOf:
+            - $ref: "#/components/schemas/MemoryMB"
+          description: >-
+            Guest memory for the sandbox, in MiB. Defaults to the template's
+            memoryMB. For a template built with maxMemoryMB (memory hotplug)
+            any size in [memoryMB, maxMemoryMB] within the team's limit may be
+            requested; the difference above the template's memoryMB is
+            hotplugged after the sandbox starts. 400 when outside that range;
+            409 (`error_code` `memory_not_hot_resizable`) for a template
+            without memory hotplug when the value differs from its memoryMB.
+
+    SandboxUpdate:
+      type: object
+      description: Fields of a running sandbox that can be changed in place.
+      properties:
+        memoryMB:
+          allOf:
+            - $ref: "#/components/schemas/MemoryMB"
+          description: >-
+            New guest memory, in MiB, within [memoryMB, maxMemoryMB] of the
+            sandbox's template. Grows plug memory within a second; shrinks
+            are best effort: the guest must give the memory back, and while
+            it pins it the response reports the achieved `currentMemoryMB`
+            below `memoryMB` (the guest finishes on its own once the memory
+            is freed). The sandbox keeps running in every case.
 
     SandboxIam:
       type: object
@@ -1052,6 +1122,13 @@ components:
             volumes keep their capacity. See `ResumeVolumeMount`.
           items:
             $ref: "#/components/schemas/ResumeVolumeMount"
+        memoryMB:
+          allOf:
+            - $ref: "#/components/schemas/MemoryMB"
+          description: >-
+            Guest memory to resume with, in MiB, for a sandbox of a memory
+            hotplug template; defaults to the size the sandbox had when it
+            was paused. Same bounds and errors as on create.
 
     ConnectSandbox:
       type: object
@@ -1080,6 +1157,13 @@ components:
             volumes keep their capacity. See `ResumeVolumeMount`.
           items:
             $ref: "#/components/schemas/ResumeVolumeMount"
+        memoryMB:
+          allOf:
+            - $ref: "#/components/schemas/MemoryMB"
+          description: >-
+            Guest memory to resume a paused sandbox with, in MiB (memory
+            hotplug templates only; ignored for a running sandbox). Same
+            bounds and errors as on create.
 
     ResumeVolumeMount:
       type: object
@@ -2368,7 +2452,9 @@ components:
             Block volume refusals (409): block_volume_shared_identity_required,
             volume_attached, volume_referenced_by_snapshot, volume_creating,
             template_layout_mismatch, volume_resize_invalid,
-            checkpoint_unsupported.
+            checkpoint_unsupported. Memory hotplug (409):
+            memory_not_hot_resizable (the template has no maxMemoryMB),
+            memory_resize_busy (a checkpoint of the sandbox is in progress).
         message:
           type: string
           description: Error
@@ -3157,6 +3243,56 @@ paths:
           $ref: "#/components/responses/404"
         "401":
           $ref: "#/components/responses/401"
+        "500":
+          $ref: "#/components/responses/500"
+
+    patch:
+      summary: Update sandbox
+      description: >-
+        Change a running sandbox in place. Today this resizes its guest memory
+        (`memoryMB`) for a sandbox of a template built with maxMemoryMB:
+        memory above the template's memoryMB is hotplugged into the running
+        guest, no restart and no snapshot. Returns the sandbox with the
+        requested `memoryMB` and the achieved `currentMemoryMB`.
+      tags: [sandboxes]
+      security:
+        - ApiKeyAuth: []
+        - AuthProviderBearerAuth: []
+          AuthProviderTeamAuth: []
+        - AdminApiKeyAuth: []
+          AdminTeamAuth: []
+        - AdminJWTAuth: []
+          AdminTeamAuth: []
+      parameters:
+        - $ref: "#/components/parameters/sandboxID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SandboxUpdate"
+      responses:
+        "200":
+          description: The sandbox was updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SandboxDetail"
+        "400":
+          $ref: "#/components/responses/400"
+        "401":
+          $ref: "#/components/responses/401"
+        "404":
+          $ref: "#/components/responses/404"
+        "409":
+          description: >-
+            The sandbox is not running, its template has no memory hotplug
+            (`error_code` `memory_not_hot_resizable`), or a checkpoint of it
+            is in progress (`memory_resize_busy`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "500":
           $ref: "#/components/responses/500"
 

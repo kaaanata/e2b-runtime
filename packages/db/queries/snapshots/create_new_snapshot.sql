@@ -58,6 +58,8 @@ new_build as (
     INSERT INTO "public"."env_builds" (
         vcpu,
         ram_mb,
+        max_ram_mb,
+        requested_ram_mb,
         free_disk_size_mb,
         kernel_version,
         firecracker_version,
@@ -75,6 +77,8 @@ new_build as (
     VALUES (
         @vcpu,
         @ram_mb,
+        sqlc.narg(max_ram_mb),
+        sqlc.narg(requested_ram_mb),
         @free_disk_size_mb,
         @kernel_version,
         @firecracker_version,

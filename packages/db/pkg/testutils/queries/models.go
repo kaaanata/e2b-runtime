@@ -137,6 +137,7 @@ type EnvBuild struct {
 	Layout                     pgtype.Text
 	WorkspaceSlotCapacityBytes []int64
 	MaxRamMb                   pgtype.Int8
+	RequestedRamMb             pgtype.Int8
 }
 
 type EnvBuildAssignment struct {

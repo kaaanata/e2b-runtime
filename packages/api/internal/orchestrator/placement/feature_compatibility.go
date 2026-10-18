@@ -41,6 +41,18 @@ var featureGates = []featureGate{
 			return len(req.GetSandbox().GetNetwork().GetIngress().GetHttpsPorts()) > 0
 		},
 	},
+	{
+		// An orchestrator without memory hotplug ignores requested_memory_mb
+		// and starts the sandbox at its boot memory while the API records the
+		// request; a template built with maxMemoryMB would not even restore
+		// there (its metadata capability is refused). The field landed in the
+		// fork's 0.16.1 line, so this floor is nominal: it documents the
+		// dependency and gates any older release string.
+		feature: Feature{name: "memory-hotplug", minVersion: semver.New(0, 16, 1, "", "")},
+		requested: func(req *orchestrator.SandboxCreateRequest) bool {
+			return req.GetSandbox().GetRequestedMemoryMb() > 0
+		},
+	},
 }
 
 // FeatureRequirement is the orchestrator-capability constraint a sandbox puts

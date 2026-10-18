@@ -382,7 +382,7 @@ func (o *Orchestrator) killSandboxOnNode(
 
 	node.OptimisticRemove(ctx, nodemanager.SandboxResources{
 		CPUs:      sbx.VCpu,
-		MiBMemory: sbx.RamMB,
+		MiBMemory: sbx.AccountedMemoryMB(),
 	})
 
 	return nil

@@ -428,6 +428,8 @@ func snapshotsToPaginatedSandboxes(ctx context.Context, snapshots []queries.GetS
 			logger.L().Error(ctx, "envd version is not set for the sandbox", logger.WithSandboxID(snapshot.SandboxID))
 		}
 
+		memoryMB, maxMemoryMB := pausedMemory(record.BuildRamMb, record.BuildMaxRamMb, record.BuildRequestedRamMb)
+
 		sandbox := utils.PaginatedSandbox{
 			ListedSandbox: api.ListedSandbox{
 				ClientID:    consts.ClientID, // for backwards compatibility we need to return a client id
@@ -436,7 +438,8 @@ func snapshotsToPaginatedSandboxes(ctx context.Context, snapshots []queries.GetS
 				SandboxID:   snapshot.SandboxID,
 				StartedAt:   snapshot.SandboxStartedAt.Time,
 				CpuCount:    int32(record.BuildVcpu),
-				MemoryMB:    int32(record.BuildRamMb),
+				MemoryMB:    memoryMB,
+				MaxMemoryMB: maxMemoryMB,
 				DiskSizeMB:  diskSize,
 				EndAt:       record.BuildCreatedAt,
 				State:       api.Paused,
@@ -479,7 +482,7 @@ func instanceInfoToPaginatedSandboxes(runningSandboxes []sandbox.Sandbox) []util
 				SandboxID:    info.SandboxID,
 				StartedAt:    info.StartTime,
 				CpuCount:     api.CPUCount(info.VCpu),
-				MemoryMB:     api.MemoryMB(info.RamMB),
+				MemoryMB:     api.MemoryMB(info.RequestedMemoryMB()),
 				DiskSizeMB:   api.DiskSizeMB(info.TotalDiskSizeMB),
 				EndAt:        info.EndTime,
 				State:        state,
@@ -493,6 +496,7 @@ func instanceInfoToPaginatedSandboxes(runningSandboxes []sandbox.Sandbox) []util
 			// pagination can re-emit rows that share a truncated microsecond with the cursor.
 			PaginationTimestamp: info.StartTime.Truncate(time.Microsecond),
 		}
+		setRunningMemory(&sandbox.ListedSandbox.CurrentMemoryMB, &sandbox.ListedSandbox.MaxMemoryMB, info)
 
 		if info.Metadata != nil {
 			meta := api.SandboxMetadata(info.Metadata)

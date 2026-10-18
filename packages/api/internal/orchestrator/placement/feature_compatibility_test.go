@@ -272,3 +272,21 @@ func TestRequiredFeatures_HTTPSBackendPorts(t *testing.T) {
 		})
 	}
 }
+
+func TestRequiredFeatures_MemoryHotplug(t *testing.T) {
+	t.Parallel()
+
+	plain := requiredFeatures(&orchestrator.SandboxCreateRequest{Sandbox: &orchestrator.SandboxConfig{RamMb: 8192}})
+	assert.Empty(t, plain.FeatureNames(), "a start at boot memory needs nothing")
+
+	hotplug := requiredFeatures(&orchestrator.SandboxCreateRequest{Sandbox: &orchestrator.SandboxConfig{RamMb: 8192, RequestedMemoryMb: 16384}})
+	assert.Equal(t, []string{"memory-hotplug"}, hotplug.FeatureNames())
+	assert.Equal(t, "0.16.1", hotplug.MinVersion())
+}
+
+func TestRequestedMemoryMiB(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, int64(8192), requestedMemoryMiB(&orchestrator.SandboxConfig{RamMb: 8192}))
+	assert.Equal(t, int64(16384), requestedMemoryMiB(&orchestrator.SandboxConfig{RamMb: 8192, RequestedMemoryMb: 16384}))
+}
