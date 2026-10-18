@@ -58,3 +58,7 @@ func (c Cgroup2Manager) Frozen(ProcessType) (bool, error) {
 func (c Cgroup2Manager) Close() error {
 	return nil
 }
+
+func (c Cgroup2Manager) SetMemoryLimit(ProcessType, uint64) error {
+	return nil
+}

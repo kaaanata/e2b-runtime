@@ -211,7 +211,7 @@ func run() error {
 	fsLogger := l.With().Str("logger", "filesystem").Logger()
 	filesystemService := filesystemRpc.Handle(m, &fsLogger, defaults)
 
-	cgroupManager := createCgroupManager()
+	cgroupManager := createCgroupManager(ctx)
 	defer func() {
 		err := cgroupManager.Close()
 		if err != nil {
@@ -457,7 +457,7 @@ func run() error {
 	return err
 }
 
-func createCgroupManager() (m cgroups.Manager) {
+func createCgroupManager(ctx context.Context) (m cgroups.Manager) {
 	defer func() {
 		if m == nil {
 			fmt.Fprintf(os.Stderr, "falling back to no-op cgroup manager\n")
@@ -482,8 +482,7 @@ func createCgroupManager() (m cgroups.Manager) {
 	}
 
 	// try to keep 1/8 of the memory free, but no more than 128 MB
-	maxMemoryReserved := min(metrics.MemTotal/8, uint64(128)*megabyte)
-	memoryMax := metrics.MemTotal - maxMemoryReserved
+	memoryMax := cgroups.MemoryLimit(metrics.MemTotal)
 	memoryHigh := memoryMax // same as memory.max — OOM-kill immediately when throttling can't reclaim enough
 
 	opts := []cgroups.Cgroup2ManagerOption{
@@ -516,6 +515,15 @@ func createCgroupManager() (m cgroups.Manager) {
 
 		return nil
 	}
+
+	// The limits above are for the memory at startup; follow MemTotal when
+	// the guest's memory is hot-resized (virtio-mem) or a snapshot resumes
+	// at another size.
+	go cgroups.FollowMemTotal(ctx, mgr,
+		[]cgroups.ProcessType{cgroups.ProcessTypePTY, cgroups.ProcessTypeUser},
+		metrics.MemTotal, cgroups.MemoryLimitFollowInterval,
+		func() (uint64, error) { return cgroups.ReadMemTotal(cgroups.ProcMeminfo) },
+		func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) })
 
 	return mgr
 }
