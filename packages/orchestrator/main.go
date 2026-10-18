@@ -4,10 +4,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
+	"path/filepath"
 
 	"github.com/launchdarkly/go-sdk-common/v3/ldvalue"
 
+	"github.com/e2b-dev/infra/packages/orchestrator/pkg/credproxy"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/factories"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/tcpfirewall"
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/version"
@@ -47,6 +50,30 @@ func defaultEgressFactory(_ context.Context, deps *factories.Deps) (*factories.E
 		deps.MeterProvider,
 		deps.FeatureFlags,
 	)
+
+	if root := os.Getenv("CREDPROXY_ROOT"); root != "" {
+		if !filepath.IsAbs(root) {
+			return nil, errors.New("CREDPROXY_ROOT must be absolute")
+		}
+		credentials, err := credproxy.New(root, os.Getenv("CREDPROXY_TEAM_ID"))
+		if err != nil {
+			return nil, err
+		}
+		fw.SetCredentialProxy(credentials)
+
+		return &factories.EgressSetup{Proxy: fw, Start: func(startCtx context.Context) error {
+			child, cancel := context.WithCancel(startCtx)
+			defer cancel()
+			results := make(chan error, 2)
+			go func() { results <- credentials.ServeManagement(child) }()
+			go func() { results <- fw.Start(child) }()
+			first := <-results
+			cancel()
+			second := <-results
+
+			return errors.Join(first, second)
+		}, Close: fw.Close}, nil
+	}
 
 	return &factories.EgressSetup{
 		Proxy: fw,

@@ -746,3 +746,34 @@ embed/                  E2B Embed: the whole stack on one machine (Compose, Terr
 Cross-service contracts are all generated: OpenAPI specs in `spec/`, gRPC protos in
 `packages/orchestrator/*.proto` and `packages/envd/spec/`, SQL in `packages/db/queries/`.
 Run `make generate` after changing any of them.
+
+### Opt-in owner credential proxy (fork track `volumes/credproxy`)
+
+The default orchestrator egress factory can enable `pkg/credproxy` with
+`CREDPROXY_ROOT` and a required `CREDPROXY_TEAM_ID`. The normal TCP firewall
+still owns admission, connection limits, TOS marking and private-address
+checks. `Sandbox.Config.CredentialTeamID` comes from the authenticated create
+request (including resume/fork); runtime log metadata and guest headers never
+authorize credentials. Templates and other teams use normal pass-through.
+
+For that team only, admitted TLS traffic to the exact four Anthropic/OpenAI
+hosts is terminated with a persisted node CA. `CABundle()` delivers the same
+CA through the existing envd `/init` trust-store path, including after resume.
+The HTTP authority is pinned to SNI, upstream TLS is verified, and only exact
+provider sentinel headers become real account credentials. Non-sentinel RC
+session tokens pass unchanged, including Claude server-mode work polling and
+Codex WebSocket paths. `net/http` handles h2 ALPN, streaming SSE and upgrades.
+Token endpoints accept only sentinel refresh grants and return masked tokens.
+
+The node owns one credential lineage per provider, a mode-0700 directory with
+mode-0600 atomic credential/CA files, and a mode-0600 Unix control socket.
+`cmd/credproxyctl` imports credentials from stdin and returns only masked guest
+documents; the umbrella Go CLI performs browser PKCE and deposits over SSH.
+One process lock owns refreshes, per-provider mutexes coalesce expiry/reactive
+refreshes, and a persistence failure retains the rotated token in memory and
+refuses service until it can be saved. The signed Codex ID token stays on the
+node; the guest receives unsigned allowlisted account/plan metadata in its
+ChatGPT-format cache. Credential proxy is disabled when `CREDPROXY_ROOT` is
+unset and introduces no externally reachable management listener. RC scoped
+session tokens can still exist in RAM; existing shared-identity fork admission
+continues to apply.

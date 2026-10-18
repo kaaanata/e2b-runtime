@@ -4,10 +4,12 @@ package tcpfirewall
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"math"
 	"net"
+	"net/http"
 	"net/netip"
 	"strings"
 	"syscall"
@@ -77,6 +79,30 @@ func domainHandler(ctx context.Context, c egressConn) {
 	}
 
 	c.metrics.RecordDecision(ctx, DecisionAllowed, c.protocol, matchType)
+	// Policy admission remains authoritative; scope comes from SandboxConfig.
+	if c.credentials != nil && c.protocol == ProtocolTLS && c.dstPort == 443 && c.credentials.EnabledFor(c.sbx.Config.CredentialTeamID) && c.credentials.Intercepts(hostname) {
+		tracker := c.metrics.TrackConnection(c.protocol)
+		defer tracker.Close(ctx)
+		transport := &http.Transport{ForceAttemptHTTP2: true, TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 90 * time.Second, DialContext: func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+			dialer := &net.Dialer{Timeout: upstreamDialTimeout, ControlContext: func(_ context.Context, _, address string, raw syscall.RawConn) error {
+				host, _, err := net.SplitHostPort(address)
+				if err != nil {
+					return err
+				}
+				if isResolvedUpstreamDenied(net.ParseIP(host), 443, c.egressAllow) {
+					return errors.New("credential upstream resolved to denied address")
+				}
+
+				return markDSCP(raw, c.tos)
+			}}
+
+			return dialer.DialContext(dialCtx, network, addr)
+		}}
+		defer transport.CloseIdleConnections()
+		c.credentials.ServeConn(ctx, c.conn, hostname, transport)
+
+		return
+	}
 
 	// When allowed by domain match, dial the hostname directly (not the sandbox's resolved IP).
 	// This prevents DNS spoofing attacks where the sandbox modifies /etc/hosts to redirect

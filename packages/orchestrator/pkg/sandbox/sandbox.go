@@ -114,6 +114,10 @@ var sandboxHttpClient = http.Client{
 }
 
 type Config struct {
+	// CredentialTeamID is copied only from the authenticated create request,
+	// never from best-effort runtime/log metadata or template metadata.
+	CredentialTeamID string
+
 	// TODO: Remove when the rootfs path is constant.
 	// Only used for v1 rootfs paths format.
 	BaseTemplateID string
