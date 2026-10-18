@@ -255,7 +255,8 @@ func (s *Server) Create(ctx context.Context, req *orchestrator.SandboxCreateRequ
 	}
 
 	config := sandbox.NewConfig(sandbox.Config{
-		BaseTemplateID: req.GetSandbox().GetBaseTemplateId(),
+		CredentialTeamID: req.GetSandbox().GetTeamId(),
+		BaseTemplateID:   req.GetSandbox().GetBaseTemplateId(),
 
 		Vcpu:            req.GetSandbox().GetVcpu(),
 		RamMB:           req.GetSandbox().GetRamMb(),
