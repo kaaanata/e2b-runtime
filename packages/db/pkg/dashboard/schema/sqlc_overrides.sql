@@ -11,4 +11,6 @@
 -- forward migration and removes this directory together with its
 -- `pkg/dashboard/schema` entry in sqlc.yaml: the entry is a bare path, so sqlc
 -- fails on a missing directory, and git does not keep an empty one.
+-- The database drop is migrations/20261018150000_drop_team_profile_picture.sql; this
+-- file goes with the consolidation that deletes pkg/dashboard/migrations.
 ALTER TABLE public.teams DROP COLUMN profile_picture_url;
