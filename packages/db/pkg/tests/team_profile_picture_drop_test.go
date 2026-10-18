@@ -58,7 +58,7 @@ func TestTeamProfilePictureColumnIsDropped(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, hasColumn(), "Down must re-add the column")
 
-	legacy := newProvider(filepath.Join("..", "dashboard", "migrations"), "_dashboard_migrations")
+	legacy := newProvider(filepath.Join("testdata", "legacy_dashboard"), "_dashboard_migrations")
 	_, err = legacy.Up(ctx)
 	require.NoError(t, err)
 	require.True(t, hasColumn())

@@ -147,6 +147,11 @@ type EnvBuildAssignment struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type EnvDefault struct {
+	EnvID       string
+	Description pgtype.Text
+}
+
 type ProjectLimit struct {
 	TeamID                   uuid.UUID
 	MaxLengthHours           int64
