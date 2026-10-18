@@ -65,6 +65,14 @@ message SandboxConfig {
   // Sandbox workload identity configuration requested at create time. Absent on
   // older serialized configs, which decode as no workload identity.
   optional SandboxIam iam = 27;
+
+  // Guest memory requested for this start, in MiB, for a template built with
+  // a virtio-mem hotplug device (maxMemoryMB): ram_mb stays the boot memory,
+  // the difference is plugged after the VM runs. 0 = the snapshot's size (a
+  // new sandbox: ram_mb; a resume: what was plugged at pause). Refused for a
+  // template without the device unless it equals ram_mb, and never above the
+  // template's maximum (the node reads both from the template metadata).
+  int64 requested_memory_mb = 28;
 }
 
 // Sandbox workload identity configuration. A non-empty tokens map defines the
@@ -228,6 +236,34 @@ message SandboxCreateResponse {
   // evaluation contexts differ. Empty from orchestrators that predate the
   // field.
   string resolved_firecracker_version = 4;
+
+  // Guest memory the sandbox runs with after the start, in MiB: boot memory
+  // plus what the guest had plugged when the start returned. Equals ram_mb
+  // for a template without a hotplug device. Below requested_memory_mb when
+  // the guest did not finish plugging within the node's timeout (accounting
+  // then uses the request; the guest keeps plugging on its own).
+  int64 memory_mb = 5;
+}
+
+// Resizes the guest memory of a running sandbox of a hotplug template.
+message SandboxResizeMemoryRequest {
+  string sandbox_id = 1;
+  // Target guest memory in MiB, within [ram_mb, maxMemoryMB] of the template.
+  int64 requested_memory_mb = 2;
+}
+
+message SandboxResizeMemoryResponse {
+  // The request as recorded on the node (block-aligned).
+  int64 requested_memory_mb = 1;
+  // Boot memory plus the hotplug memory plugged when the call returned.
+  int64 memory_mb = 2;
+  // The template's maximum.
+  int64 max_memory_mb = 3;
+  // Whether memory_mb reached requested_memory_mb before the node's timeout.
+  // A shrink stalls while the guest pins the memory being unplugged; the
+  // guest finishes on its own once it is freed, and accounting uses
+  // max(requested, plugged) meanwhile.
+  bool complete = 4;
 }
 
 message SandboxUpdateRequest {
@@ -281,6 +317,12 @@ message SandboxPauseResponse {
   // Fields 20+ belong to the workspace checkpoint track.
   // One sealed revision per bound workspace slot, in slot order.
   repeated SandboxWorkspaceRevision workspace_revisions = 20;
+
+  // Guest memory recorded in the snapshot (boot memory plus the hotplug
+  // memory plugged at pause), in MiB; a resume restores this size before it
+  // applies its own requested_memory_mb. 0 from orchestrators that predate
+  // memory hotplug or for a filesystem-only snapshot.
+  int64 memory_mb = 21;
 }
 
 message SandboxCheckpointRequest {
@@ -298,6 +340,9 @@ message SandboxCheckpointResponse {
   // Fields 20+ belong to the workspace checkpoint track.
   // One sealed revision per bound workspace slot, in slot order.
   repeated SandboxWorkspaceRevision workspace_revisions = 20;
+
+  // As SandboxPauseResponse.memory_mb.
+  int64 memory_mb = 21;
 }
 
 message RunningSandbox {
@@ -321,6 +366,9 @@ message RunningSandbox {
   string execution_id = 7;
   int64 vcpu = 8;
   int64 ram_mb = 9;
+  // Guest memory the node accounts for this sandbox (requested or plugged,
+  // whichever is larger), in MiB; equals ram_mb without hotplug.
+  int64 memory_mb = 10;
 }
 
 message SandboxListResponse {
@@ -334,4 +382,5 @@ service SandboxService {
   rpc Delete(SandboxDeleteRequest) returns (google.protobuf.Empty);
   rpc Pause(SandboxPauseRequest) returns (SandboxPauseResponse);
   rpc Checkpoint(SandboxCheckpointRequest) returns (SandboxCheckpointResponse);
+  rpc ResizeMemory(SandboxResizeMemoryRequest) returns (SandboxResizeMemoryResponse);
 }

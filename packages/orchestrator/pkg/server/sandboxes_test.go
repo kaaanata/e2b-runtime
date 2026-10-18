@@ -83,6 +83,7 @@ func Test_server_List(t *testing.T) {
 						ExecutionId: listExecutionID,
 						Vcpu:        2,
 						RamMb:       512,
+						MemoryMb:    512,
 					},
 				},
 			},

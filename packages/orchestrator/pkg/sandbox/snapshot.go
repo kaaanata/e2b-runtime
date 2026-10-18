@@ -51,6 +51,11 @@ type Snapshot struct {
 	// gate: after it returns nil the hazard is over.
 	MemoryExportDeferred bool
 
+	// MemoryMB is the guest memory recorded in a memory snapshot: boot memory
+	// plus the hotplug memory plugged at pause, the size a resume restores
+	// before applying its own request. 0 for a filesystem-only snapshot.
+	MemoryMB int64
+
 	// FilesystemSnapshot is true for filesystem-only snapshots: the memfile diff
 	// is empty (NoDiff) and the memfile, memfile header, and snapfile are not
 	// uploaded. It records the decision made at pause time, which can't be

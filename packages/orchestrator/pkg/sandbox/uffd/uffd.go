@@ -34,7 +34,10 @@ var tracer = otel.Tracer("github.com/e2b-dev/infra/packages/orchestrator/pkg/san
 const (
 	uffdMsgListenerTimeout = 10 * time.Second
 	fdSize                 = 4
-	regionMappingsSize     = 1024
+	// regionMappingsSize bounds the handshake's regions JSON. One region per
+	// guest memory region: boot memory, plus the virtio-mem hotplug region of a
+	// hotplug template.
+	regionMappingsSize = 4096
 )
 
 type Uffd struct {
@@ -52,6 +55,10 @@ type Uffd struct {
 	// build ids), so the serve loop and every component it hands the logger
 	// to inherit it instead of re-tagging each line.
 	logger logger.Logger
+
+	// hotplug is the memory-file range of the snapshot's virtio-mem hotplug
+	// region, nil for a snapshot without one (see ExpectMemoryHotplug).
+	hotplug *block.Range
 
 	// syncWP records whether the paired Firecracker was resumed with
 	// use_sync_wp (synchronous WP fault delivery). Set once at resume from
@@ -233,12 +240,22 @@ func (u *Uffd) handle(ctx context.Context, fdExit *fdexit.FdExit) error {
 		}
 	}()
 
+	memfdSize := int64(-1)
 	if len(fds) > 1 {
 		memfd, err := block.NewFromFd(fds[1])
 		if err != nil {
 			return fmt.Errorf("failed to wrap memfd: %w", err)
 		}
 		u.memfd.Store(memfd)
+		memfdSize = memfd.Size()
+	}
+
+	if err := validateHandshake(regions, memfdSize, u.hotplug); err != nil {
+		return err
+	}
+
+	if u.hotplug != nil && memfdSize >= 0 {
+		uffd.SetRemovedRangeHook(hotplugRemovedHook(u.memfd.Load, *u.hotplug, u.logger))
 	}
 
 	u.handler.SetValue(uffd)

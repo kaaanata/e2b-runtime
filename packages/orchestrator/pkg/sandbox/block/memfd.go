@@ -65,6 +65,33 @@ func NewFromFd(fd int) (*Memfd, error) {
 	return &Memfd{fd: fd, mmap: b}, nil
 }
 
+// Size is the length of the memfd (and of its mapping).
+func (m *Memfd) Size() int64 {
+	return int64(len(m.mmap))
+}
+
+// PunchHole releases the backing pages of [offset, offset+size) — host memory
+// (hugetlb pool pages for a hugetlb memfd) goes back immediately, every
+// mapping of the range is zapped and it reads as zeros afterwards. madvise
+// cannot do that for shared memory: MADV_DONTNEED on a shared mapping only
+// drops the page table entries, the pages stay in the memfd. offset and size
+// must be aligned to the memfd's page size (2 MiB for hugetlb).
+func (m *Memfd) PunchHole(offset, size int64) error {
+	if offset < 0 || size < 0 || offset+size > int64(len(m.mmap)) {
+		return fmt.Errorf("punch hole [%d, %d) out of bounds (size %d)", offset, offset+size, len(m.mmap))
+	}
+
+	if size == 0 {
+		return nil
+	}
+
+	if err := unix.Fallocate(m.fd, unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, offset, size); err != nil {
+		return fmt.Errorf("punch hole [%d, %d) in memfd: %w", offset, offset+size, err)
+	}
+
+	return nil
+}
+
 // Slice returns a zero-copy view of [offset, offset+size). Valid until Close.
 func (m *Memfd) Slice(offset, size int64) ([]byte, error) {
 	if offset < 0 || offset+size > int64(len(m.mmap)) {

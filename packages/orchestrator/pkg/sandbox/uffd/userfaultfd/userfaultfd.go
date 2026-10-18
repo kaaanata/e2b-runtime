@@ -173,6 +173,10 @@ type Userfaultfd struct {
 	wpResolveErrPages   map[uintptr]int32
 	wpResolveErrPending atomic.Int32
 
+	// removedHook, when set, is called for every memory-file range a REMOVE
+	// dropped (see SetRemovedRangeHook).
+	removedHook RemovedRangeHook
+
 	// cowWindow, when set, owns pre-image capture for an in-flight deferred
 	// memory export: WP resolves for its pages copy the pause-time content to
 	// the export sink BEFORE unprotecting (see resolveWriteProtect). Installed
@@ -458,41 +462,7 @@ func (u *Userfaultfd) Serve(
 
 			if len(removes) > 0 {
 				u.settleRequests.Lock()
-				for _, rm := range removes {
-					// rm.start (inclusive) and rm.end (exclusive) are page-aligned
-					// to u.pageSize for the registered VMA (UFFD invariant), so
-					// startOff is a multiple of pageSize and length is an integer
-					// number of pages — both divisions below are exact, and
-					// SetRange's half-open [startIdx, endIdx) lines up with the
-					// half-open [rm.start, rm.end).
-					startOff, err := u.ma.GetOffset(uintptr(rm.start))
-					if err != nil {
-						u.logger.Error(ctx, "UFFD REMOVE: failed to map start address",
-							zap.Uintptr("start", uintptr(rm.start)), zap.Error(err))
-
-						continue
-					}
-
-					startIdx := uint32(header.BlockIdx(startOff, int64(u.pageSize)))
-					endIdx := startIdx + uint32(uint64(rm.end-rm.start)/uint64(u.pageSize))
-					u.pageTracker.SetRange(startIdx, endIdx, block.Removed)
-
-					// Corruption tripwire: a REMOVE zapping a window page
-					// whose pre-image is not captured yet destroys content
-					// the export still owes. This must not happen — free-page
-					// reporting is paused for the window's lifetime — so any
-					// hit means the pause has a hole: fail the export cleanly
-					// (the checkpoint errors; the sandbox keeps running)
-					// instead of shipping a silently corrupt snapshot.
-					if w := u.cowWindow.Load(); w != nil && w.Overlaps(startIdx, endIdx) {
-						u.logger.Error(ctx, "uffd REMOVE overlaps CoW-window pages; canceling export",
-							zap.Uint32("start_idx", startIdx), zap.Uint32("end_idx", endIdx))
-						// The reason label is what separates a hole in the
-						// FPR pause (systemic) from ordinary I/O failures.
-						recordCoWCancel(ctx, "remove_tripwire")
-						w.Cancel(fmt.Errorf("REMOVE zapped window pages [%d, %d)", startIdx, endIdx))
-					}
-				}
+				u.applyRemovesLocked(ctx, removes)
 				u.settleRequests.Unlock()
 			}
 
@@ -1139,4 +1109,68 @@ func (u *Userfaultfd) Close() error {
 	syscall.Close(u.wakeupPipe[1])
 
 	return u.fd.close()
+}
+
+// RemovedRangeHook is told about every memory-file range a UFFD REMOVE
+// dropped, after the tracker recorded it Removed and while the REMOVE batch
+// still holds the serve lock, so no fault in the range can be served (and
+// re-populate it) before the hook returns. It must not block on guest
+// progress. The memory backend uses it to release host memory the guest
+// gave back (virtio-mem unplug).
+type RemovedRangeHook func(ctx context.Context, r block.Range)
+
+// SetRemovedRangeHook installs h. It must be called before Serve.
+func (u *Userfaultfd) SetRemovedRangeHook(h RemovedRangeHook) {
+	u.removedHook = h
+}
+
+// applyRemovesLocked records a batch of UFFD REMOVE events: every page in a
+// removed range becomes Removed (a later fault serves zeros, never the
+// pre-remove content, and the next diff exports the range as empty), the CoW
+// tripwire fires for ranges the export still owes, and the removed-range hook
+// runs. A REMOVE is translated range by range, region by region: it may span
+// regions, and the hotplug region removes whole slots at a time. The caller
+// holds settleRequests.Lock.
+func (u *Userfaultfd) applyRemovesLocked(ctx context.Context, removes []*UffdRemove) {
+	pageSize := int64(u.pageSize)
+
+	for _, rm := range removes {
+		// rm.start (inclusive) and rm.end (exclusive) are page-aligned to
+		// u.pageSize for the registered VMA (UFFD invariant), so every
+		// translated range starts on a page and spans whole pages — the
+		// divisions below are exact, and SetRange's half-open
+		// [startIdx, endIdx) lines up with the half-open range.
+		ranges, unmapped := u.ma.GetOffsetRanges(uintptr(rm.start), uintptr(rm.end))
+		if unmapped > 0 {
+			u.logger.Error(ctx, "UFFD REMOVE: range not (fully) in any mapped region",
+				zap.Uintptr("start", uintptr(rm.start)), zap.Uintptr("end", uintptr(rm.end)),
+				zap.Uintptr("unmapped_bytes", unmapped))
+		}
+
+		for _, r := range ranges {
+			startIdx := uint32(header.BlockIdx(r.Start, pageSize))
+			endIdx := startIdx + uint32(r.Size/pageSize)
+			u.pageTracker.SetRange(startIdx, endIdx, block.Removed)
+
+			// Corruption tripwire: a REMOVE zapping a window page
+			// whose pre-image is not captured yet destroys content
+			// the export still owes. This must not happen — free-page
+			// reporting is paused for the window's lifetime — so any
+			// hit means the pause has a hole: fail the export cleanly
+			// (the checkpoint errors; the sandbox keeps running)
+			// instead of shipping a silently corrupt snapshot.
+			if w := u.cowWindow.Load(); w != nil && w.Overlaps(startIdx, endIdx) {
+				u.logger.Error(ctx, "uffd REMOVE overlaps CoW-window pages; canceling export",
+					zap.Uint32("start_idx", startIdx), zap.Uint32("end_idx", endIdx))
+				// The reason label is what separates a hole in the
+				// FPR pause (systemic) from ordinary I/O failures.
+				recordCoWCancel(ctx, "remove_tripwire")
+				w.Cancel(fmt.Errorf("REMOVE zapped window pages [%d, %d)", startIdx, endIdx))
+			}
+
+			if u.removedHook != nil {
+				u.removedHook(ctx, r)
+			}
+		}
+	}
 }

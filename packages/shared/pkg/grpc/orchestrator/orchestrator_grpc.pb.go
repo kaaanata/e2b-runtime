@@ -20,12 +20,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SandboxService_Create_FullMethodName     = "/SandboxService/Create"
-	SandboxService_Update_FullMethodName     = "/SandboxService/Update"
-	SandboxService_List_FullMethodName       = "/SandboxService/List"
-	SandboxService_Delete_FullMethodName     = "/SandboxService/Delete"
-	SandboxService_Pause_FullMethodName      = "/SandboxService/Pause"
-	SandboxService_Checkpoint_FullMethodName = "/SandboxService/Checkpoint"
+	SandboxService_Create_FullMethodName       = "/SandboxService/Create"
+	SandboxService_Update_FullMethodName       = "/SandboxService/Update"
+	SandboxService_List_FullMethodName         = "/SandboxService/List"
+	SandboxService_Delete_FullMethodName       = "/SandboxService/Delete"
+	SandboxService_Pause_FullMethodName        = "/SandboxService/Pause"
+	SandboxService_Checkpoint_FullMethodName   = "/SandboxService/Checkpoint"
+	SandboxService_ResizeMemory_FullMethodName = "/SandboxService/ResizeMemory"
 )
 
 // SandboxServiceClient is the client API for SandboxService service.
@@ -38,6 +39,7 @@ type SandboxServiceClient interface {
 	Delete(ctx context.Context, in *SandboxDeleteRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Pause(ctx context.Context, in *SandboxPauseRequest, opts ...grpc.CallOption) (*SandboxPauseResponse, error)
 	Checkpoint(ctx context.Context, in *SandboxCheckpointRequest, opts ...grpc.CallOption) (*SandboxCheckpointResponse, error)
+	ResizeMemory(ctx context.Context, in *SandboxResizeMemoryRequest, opts ...grpc.CallOption) (*SandboxResizeMemoryResponse, error)
 }
 
 type sandboxServiceClient struct {
@@ -108,6 +110,16 @@ func (c *sandboxServiceClient) Checkpoint(ctx context.Context, in *SandboxCheckp
 	return out, nil
 }
 
+func (c *sandboxServiceClient) ResizeMemory(ctx context.Context, in *SandboxResizeMemoryRequest, opts ...grpc.CallOption) (*SandboxResizeMemoryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SandboxResizeMemoryResponse)
+	err := c.cc.Invoke(ctx, SandboxService_ResizeMemory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SandboxServiceServer is the server API for SandboxService service.
 // All implementations must embed UnimplementedSandboxServiceServer
 // for forward compatibility.
@@ -118,6 +130,7 @@ type SandboxServiceServer interface {
 	Delete(context.Context, *SandboxDeleteRequest) (*emptypb.Empty, error)
 	Pause(context.Context, *SandboxPauseRequest) (*SandboxPauseResponse, error)
 	Checkpoint(context.Context, *SandboxCheckpointRequest) (*SandboxCheckpointResponse, error)
+	ResizeMemory(context.Context, *SandboxResizeMemoryRequest) (*SandboxResizeMemoryResponse, error)
 	mustEmbedUnimplementedSandboxServiceServer()
 }
 
@@ -145,6 +158,9 @@ func (UnimplementedSandboxServiceServer) Pause(context.Context, *SandboxPauseReq
 }
 func (UnimplementedSandboxServiceServer) Checkpoint(context.Context, *SandboxCheckpointRequest) (*SandboxCheckpointResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Checkpoint not implemented")
+}
+func (UnimplementedSandboxServiceServer) ResizeMemory(context.Context, *SandboxResizeMemoryRequest) (*SandboxResizeMemoryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResizeMemory not implemented")
 }
 func (UnimplementedSandboxServiceServer) mustEmbedUnimplementedSandboxServiceServer() {}
 func (UnimplementedSandboxServiceServer) testEmbeddedByValue()                        {}
@@ -275,6 +291,24 @@ func _SandboxService_Checkpoint_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxService_ResizeMemory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SandboxResizeMemoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxServiceServer).ResizeMemory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxService_ResizeMemory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxServiceServer).ResizeMemory(ctx, req.(*SandboxResizeMemoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SandboxService_ServiceDesc is the grpc.ServiceDesc for SandboxService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -305,6 +339,10 @@ var SandboxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Checkpoint",
 			Handler:    _SandboxService_Checkpoint_Handler,
+		},
+		{
+			MethodName: "ResizeMemory",
+			Handler:    _SandboxService_ResizeMemory_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

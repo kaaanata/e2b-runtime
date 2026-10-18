@@ -118,3 +118,33 @@ func TestNewFromFd_HugetlbReservesNothing(t *testing.T) {
 	// view would add all 8 pages at once.
 	assert.Less(t, rsvdAfter-rsvdBefore, int64(pages), "mapping reserved the whole hugetlb file")
 }
+
+func TestMemfd_PunchHole(t *testing.T) {
+	t.Parallel()
+
+	page := int64(os.Getpagesize())
+	m, data := newTestMemfd(t, 8*page)
+	defer m.Close()
+
+	var before unix.Stat_t
+	require.NoError(t, unix.Fstat(m.fd, &before))
+
+	require.NoError(t, m.PunchHole(2*page, 4*page))
+
+	// Before reading: a read fault on a shmem hole allocates a page again.
+	var after unix.Stat_t
+	require.NoError(t, unix.Fstat(m.fd, &after))
+	assert.Less(t, after.Blocks, before.Blocks, "the punched pages are released")
+
+	got := make([]byte, 8*page)
+	_, err := m.ReadAt(got, 0)
+	require.NoError(t, err)
+
+	assert.Equal(t, data[:2*page], got[:2*page], "before the hole is untouched")
+	assert.Equal(t, make([]byte, 4*page), got[2*page:6*page], "the hole reads as zeros")
+	assert.Equal(t, data[6*page:], got[6*page:], "after the hole is untouched")
+	assert.Equal(t, 8*page, m.Size(), "KEEP_SIZE: the memfd keeps its length")
+
+	require.Error(t, m.PunchHole(6*page, 4*page), "out of bounds")
+	require.NoError(t, m.PunchHole(0, 0))
+}
