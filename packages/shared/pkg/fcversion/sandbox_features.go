@@ -58,3 +58,11 @@ func (v *Info) HasFreePageHinting() bool {
 func (v *Info) HasMemfd() bool {
 	return v.lastReleaseVersion.Major() > 1 || (v.lastReleaseVersion.Major() == 1 && v.lastReleaseVersion.Minor() >= 14)
 }
+
+// HasMemoryHotplug reports whether this build has the virtio-mem device
+// (PUT/PATCH/GET /hotplug/memory), introduced in Firecracker 1.14. The guest
+// kernel must also carry CONFIG_VIRTIO_MEM; that is the template's concern
+// (a PATCH against a device the guest never activated is refused by FC).
+func (v *Info) HasMemoryHotplug() bool {
+	return v.lastReleaseVersion.Major() > 1 || (v.lastReleaseVersion.Major() == 1 && v.lastReleaseVersion.Minor() >= 14)
+}

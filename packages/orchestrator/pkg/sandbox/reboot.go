@@ -30,7 +30,6 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/header"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
-	"github.com/e2b-dev/infra/packages/shared/pkg/units"
 	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
 )
 
@@ -135,13 +134,19 @@ func (f *Factory) RebootSandbox(
 		config.Envd.DefaultWorkdir = meta.Context.WorkDir
 	}
 
+	// The device the lineage was built with; a cold boot configures it again
+	// (fc.Create) and plugs the requested size once envd is up.
+	if err := config.adoptMemoryHotplug(meta); err != nil {
+		return nil, err
+	}
+
 	// The masked empty memfile is used only for sizing NoopMemory — guest RAM
 	// is FC's own fresh anonymous memory.
 	pageSize := int64(header.PageSize)
 	if config.HugePages {
 		pageSize = int64(header.HugepageSize)
 	}
-	memfile, err := block.NewEmpty(units.MBToBytes(config.RamMB), pageSize, buildID)
+	memfile, err := block.NewEmpty(config.memfileSizeBytes(), pageSize, buildID)
 	if err != nil {
 		return nil, fmt.Errorf("create empty memfile: %w", err)
 	}
@@ -237,6 +242,13 @@ func (f *Factory) RebootSandbox(
 		closeErr := sbx.Close(context.WithoutCancel(ctx))
 
 		return nil, errors.Join(fmt.Errorf("wait for envd after reboot: %w", err), closeErr)
+	}
+
+	// A cold boot starts at plugged 0: plug the requested size now.
+	if err := sbx.settleRequestedMemory(ctx, false); err != nil {
+		closeErr := sbx.Close(context.WithoutCancel(ctx))
+
+		return nil, errors.Join(err, closeErr)
 	}
 
 	// deferMarkRunning: the caller promotes the sandbox to live itself after a

@@ -27,9 +27,16 @@ WITH finished AS (
         workspace_slot_capacity_bytes = CASE
             WHEN $6::text IS NULL THEN workspace_slot_capacity_bytes
             ELSE $7::bigint[]
+        END,
+        -- Reported with the layout: a template-manager that reports a layout
+        -- reports the maximum memory of a hotplug build and none (NULL) for a
+        -- fixed-size one, so the requested value is replaced either way.
+        max_ram_mb = CASE
+            WHEN $6::text IS NULL THEN max_ram_mb
+            ELSE $8::bigint
         END
     WHERE
-        id = $8
+        id = $9
         AND status_group NOT IN ('ready', 'failed')
     RETURNING id
 )
@@ -45,6 +52,7 @@ type FinishTemplateBuildParams struct {
 	FirecrackerVersion         string
 	Layout                     *string
 	WorkspaceSlotCapacityBytes []int64
+	MaxRamMb                   *int64
 	BuildID                    uuid.UUID
 }
 
@@ -55,7 +63,7 @@ type FinishTemplateBuildParams struct {
 // case so we do not clobber the values the API seeded at build registration.
 // layout and workspace_slot_capacity_bytes are the device layout the build
 // was made with; an unset layout (an older template-manager) leaves both
-// unknown.
+// unknown. max_ram_mb (memory hotplug maximum) follows the same rule.
 // The build keeps the first terminal outcome recorded: a build failed for
 // running out of time has had its artifacts deleted, so a later success must
 // not publish it.
@@ -68,6 +76,7 @@ func (q *Queries) FinishTemplateBuild(ctx context.Context, arg FinishTemplateBui
 		arg.FirecrackerVersion,
 		arg.Layout,
 		arg.WorkspaceSlotCapacityBytes,
+		arg.MaxRamMb,
 		arg.BuildID,
 	)
 	return err

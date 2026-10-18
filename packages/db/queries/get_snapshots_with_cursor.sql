@@ -4,6 +4,8 @@ SELECT COALESCE(ea.aliases, ARRAY[]::text[])::text[] AS aliases, COALESCE(ea.nam
     eb.id AS build_id,
     eb.vcpu AS build_vcpu,
     eb.ram_mb AS build_ram_mb,
+    eb.max_ram_mb AS build_max_ram_mb,
+    eb.requested_ram_mb AS build_requested_ram_mb,
     eb.total_disk_size_mb AS build_total_disk_size_mb,
     eb.envd_version AS build_envd_version,
     eb.created_at AS build_created_at
@@ -17,7 +19,7 @@ LEFT JOIN LATERAL (
     WHERE env_id = s.base_env_id
 ) ea ON TRUE
 JOIN LATERAL (
-    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.total_disk_size_mb, eb.envd_version, eb.created_at
+    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.max_ram_mb, eb.requested_ram_mb, eb.total_disk_size_mb, eb.envd_version, eb.created_at
     FROM "public"."env_build_assignments" eba
     JOIN "public"."env_builds" eb ON eb.id = eba.build_id
     WHERE
@@ -45,6 +47,8 @@ SELECT COALESCE(ea.aliases, ARRAY[]::text[])::text[] AS aliases, COALESCE(ea.nam
     eb.id AS build_id,
     eb.vcpu AS build_vcpu,
     eb.ram_mb AS build_ram_mb,
+    eb.max_ram_mb AS build_max_ram_mb,
+    eb.requested_ram_mb AS build_requested_ram_mb,
     eb.total_disk_size_mb AS build_total_disk_size_mb,
     eb.envd_version AS build_envd_version,
     eb.created_at AS build_created_at
@@ -58,7 +62,7 @@ LEFT JOIN LATERAL (
     WHERE env_id = s.base_env_id
 ) ea ON TRUE
 JOIN LATERAL (
-    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.total_disk_size_mb, eb.envd_version, eb.created_at
+    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.max_ram_mb, eb.requested_ram_mb, eb.total_disk_size_mb, eb.envd_version, eb.created_at
     FROM "public"."env_build_assignments" eba
     JOIN "public"."env_builds" eb ON eb.id = eba.build_id
     WHERE
@@ -85,6 +89,8 @@ SELECT COALESCE(ea.aliases, ARRAY[]::text[])::text[] AS aliases, COALESCE(ea.nam
     eb.id AS build_id,
     eb.vcpu AS build_vcpu,
     eb.ram_mb AS build_ram_mb,
+    eb.max_ram_mb AS build_max_ram_mb,
+    eb.requested_ram_mb AS build_requested_ram_mb,
     eb.total_disk_size_mb AS build_total_disk_size_mb,
     eb.envd_version AS build_envd_version,
     eb.created_at AS build_created_at
@@ -98,7 +104,7 @@ LEFT JOIN LATERAL (
     WHERE env_id = s.base_env_id
 ) ea ON TRUE
 JOIN LATERAL (
-    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.total_disk_size_mb, eb.envd_version, eb.created_at
+    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.max_ram_mb, eb.requested_ram_mb, eb.total_disk_size_mb, eb.envd_version, eb.created_at
     FROM "public"."env_build_assignments" eba
     JOIN "public"."env_builds" eb ON eb.id = eba.build_id
     WHERE
@@ -123,6 +129,8 @@ SELECT COALESCE(ea.aliases, ARRAY[]::text[])::text[] AS aliases, COALESCE(ea.nam
     eb.id AS build_id,
     eb.vcpu AS build_vcpu,
     eb.ram_mb AS build_ram_mb,
+    eb.max_ram_mb AS build_max_ram_mb,
+    eb.requested_ram_mb AS build_requested_ram_mb,
     eb.total_disk_size_mb AS build_total_disk_size_mb,
     eb.envd_version AS build_envd_version,
     eb.created_at AS build_created_at
@@ -136,7 +144,7 @@ LEFT JOIN LATERAL (
     WHERE env_id = s.base_env_id
 ) ea ON TRUE
 JOIN LATERAL (
-    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.total_disk_size_mb, eb.envd_version, eb.created_at
+    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.max_ram_mb, eb.requested_ram_mb, eb.total_disk_size_mb, eb.envd_version, eb.created_at
     FROM "public"."env_build_assignments" eba
     JOIN "public"."env_builds" eb ON eb.id = eba.build_id
     WHERE

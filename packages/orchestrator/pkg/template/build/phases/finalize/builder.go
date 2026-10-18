@@ -147,6 +147,11 @@ func (ppb *PostProcessingBuilder) Layer(
 		result.Workspace = &ws
 	}
 
+	// The hotplug device, stamped the same way: every boot of this build
+	// carried it, and WithMemoryHotplug pairs it with the capability a reader
+	// needs. A nil device clears both, whatever the source layer recorded.
+	result = result.WithMemoryHotplug(ppb.Config.MemoryHotplug)
+
 	return phases.LayerResult{
 		Metadata: result,
 		Cached:   false,

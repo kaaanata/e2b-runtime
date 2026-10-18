@@ -652,14 +652,33 @@ func (c *apiClient) memoryInfo(ctx context.Context, blockSize int64) (*header.Di
 		Context: ctx,
 	}
 
-	res, err := c.client.Operations.GetMemory(&params)
+	var res *operations.GetMemoryOK
+	regions, err := c.readStableMappings(ctx, func() error {
+		var err error
+		res, err = c.client.Operations.GetMemory(&params)
+		if err != nil {
+			return fmt.Errorf("error getting memory: %w", err)
+		}
+
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("error getting memory: %w", err)
+		return nil, err
+	}
+
+	dirty, err := fcPagesToMemfilePages(regions, blockSize, roaring.FromDense(res.Payload.Resident, false))
+	if err != nil {
+		return nil, fmt.Errorf("resident pages: %w", err)
+	}
+
+	empty, err := fcPagesToMemfilePages(regions, blockSize, roaring.FromDense(res.Payload.Empty, false))
+	if err != nil {
+		return nil, fmt.Errorf("empty pages: %w", err)
 	}
 
 	return &header.DiffMetadata{
-		Dirty:     roaring.FromDense(res.Payload.Resident, false),
-		Empty:     roaring.FromDense(res.Payload.Empty, false),
+		Dirty:     dirty,
+		Empty:     empty,
 		BlockSize: blockSize,
 	}, nil
 }
@@ -669,13 +688,27 @@ func (c *apiClient) dirtyMemory(ctx context.Context, blockSize int64) (*header.D
 		Context: ctx,
 	}
 
-	res, err := c.client.Operations.GetDirtyMemory(&params)
+	var res *operations.GetDirtyMemoryOK
+	regions, err := c.readStableMappings(ctx, func() error {
+		var err error
+		res, err = c.client.Operations.GetDirtyMemory(&params)
+		if err != nil {
+			return fmt.Errorf("error getting dirty memory: %w", err)
+		}
+
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("error getting dirty memory: %w", err)
+		return nil, err
+	}
+
+	dirty, err := fcPagesToMemfilePages(regions, blockSize, roaring.FromDense(res.Payload.Bitmap, false))
+	if err != nil {
+		return nil, fmt.Errorf("dirty pages: %w", err)
 	}
 
 	return &header.DiffMetadata{
-		Dirty:     roaring.FromDense(res.Payload.Bitmap, false),
+		Dirty:     dirty,
 		Empty:     roaring.New(),
 		BlockSize: blockSize,
 	}, nil

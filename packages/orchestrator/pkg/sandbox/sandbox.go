@@ -146,6 +146,19 @@ type Config struct {
 
 	MaxSandboxLengthHours int64
 
+	// MemoryHotplug is the virtio-mem device of the template lineage, nil
+	// when its memory is fixed at RamMB. RamMB stays the boot memory (the
+	// device's base). A cold boot configures the device from it; a memory
+	// resume restores it from the snapshot and must agree with it.
+	MemoryHotplug *metadata.MemoryHotplugLayout
+
+	// memoryMB is the guest memory requested for this sandbox (boot memory plus
+	// hotplug), pluggedMB the hotplug memory the guest had plugged when it was
+	// last read. Both change on a resize; read them through the accessors
+	// (guarded by mu). Without a device memoryMB == RamMB and pluggedMB == 0.
+	memoryMB  int64
+	pluggedMB int64
+
 	// mu protects mutable sub-fields of Network (Egress, Ingress).
 	// The Network pointer itself is set once at construction and never replaced.
 	mu      *sync.RWMutex
@@ -162,6 +175,15 @@ func NewConfig(c Config) *Config {
 	c.mu = &sync.RWMutex{}
 
 	return &c
+}
+
+// WithRequestedMemoryMB records the guest memory a start asks for; 0 keeps
+// the default (the boot memory, or for a resume the size recorded in the
+// snapshot, see adoptMemoryHotplug). Call before the sandbox starts.
+func (c *Config) WithRequestedMemoryMB(memoryMB int64) *Config {
+	c.memoryMB = memoryMB
+
+	return c
 }
 
 // GetNetworkEgress returns the egress config in a thread-safe manner.
@@ -467,6 +489,12 @@ type Sandbox struct {
 	// and stops the moment a newer window pauses reporting again, so a stray
 	// late resume cannot undo the newer window's pause.
 	fprPauseGen atomic.Uint64
+
+	// memResizeMu serializes memory resizes (ResizeMemory) with pauses and
+	// checkpoints of this sandbox: a resize changes the plug state the
+	// snapshot records and the mapping list the dirty readout translates
+	// with, and an unplug's REMOVE would cancel a CoW export window.
+	memResizeMu sync.Mutex
 
 	// memSealMu guards memSealDone and inPlaceExportedDirty.
 	memSealMu sync.Mutex
@@ -1023,6 +1051,17 @@ func (f *Factory) CreateSandbox(
 		return nil, fmt.Errorf("failed to get memfile size: %w", err)
 	}
 
+	// A hotplug template's memory file covers boot memory and the whole
+	// hotplug region; every snapshot diff inherits that size, so a mismatch
+	// here would corrupt the lineage at the first pause.
+	if config.MemoryHotplug != nil {
+		if want := config.memfileSizeBytes(); memfileSize != want {
+			return nil, fmt.Errorf("memfile is %d bytes, the memory hotplug layout needs %d", memfileSize, want)
+		}
+
+		processOptions.MemoryHotplug = config.MemoryHotplug.Clone()
+	}
+
 	// / ==== END of resources initialization ====
 	ips, err := ipsPromise.Wait(ctx)
 	if err != nil {
@@ -1366,7 +1405,20 @@ func (f *Factory) ResumeSandbox(
 
 		telemetry.ReportEvent(ctx, "got template memfile")
 
-		return uffd.New(memfile, fcUffdPath, sbxLogger), nil
+		u := uffd.New(memfile, fcUffdPath, sbxLogger)
+
+		// A hotplug template's snapshot registers its hotplug region with the
+		// UFFD too; the backend checks the handshake against it and releases
+		// unplugged memory.
+		meta, err := t.Metadata()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get metadata: %w", err)
+		}
+		if l := meta.MemoryHotplug; l != nil {
+			u.ExpectMemoryHotplug(l.HotplugOffsetBytes(), l.HotplugSizeBytes())
+		}
+
+		return u, nil
 	})
 
 	// Prefetching. Derive the prefetch context and register its cancel with the
@@ -1579,6 +1631,17 @@ func (f *Factory) ResumeSandbox(
 	meta, err := t.Metadata()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get metadata: %w", err)
+	}
+
+	if err := config.adoptMemoryHotplug(meta); err != nil {
+		return nil, err
+	}
+
+	// A different size than the snapshot recorded: Firecracker takes the
+	// request on the paused VM and the guest plugs as soon as it runs.
+	resizeOnResume, err := config.resumeHotplugRequest(meta)
+	if err != nil {
+		return nil, err
 	}
 
 	// The default user lives only in the restored envd's memory, so a resume that sends it
@@ -1798,6 +1861,10 @@ func (f *Factory) ResumeSandbox(
 		return nil
 	})
 
+	if resizeOnResume != nil {
+		fcHandle.SetResumeMemoryHotplug(*resizeOnResume)
+	}
+
 	uffdStartCtx, cancelUffdStartCtx := context.WithCancelCause(ctx)
 	defer cancelUffdStartCtx(errors.New("uffd finished starting"))
 	go func() {
@@ -1855,6 +1922,12 @@ func (f *Factory) ResumeSandbox(
 		// A workspace volume grown while paused: FC already re-read the device
 		// size before the resume, now the guest grows the mounted ext4.
 		if err := sbx.resizeWorkspaceFilesystems(ctx); err != nil {
+			return nil, err
+		}
+
+		// The memory size requested for this start: already requested from
+		// the paused VM above, now wait for the guest to plug it.
+		if err := sbx.settleRequestedMemory(ctx, resizeOnResume != nil); err != nil {
 			return nil, err
 		}
 	}
@@ -2163,6 +2236,12 @@ func (s *Sandbox) Pause(
 		return nil, fmt.Errorf("previous memory capture did not complete: %w", err)
 	}
 
+	// No memory resize may run while the VM is paused and snapshotted: the
+	// plugged size is stamped into the snapshot below, and the dirty readout
+	// pairs page bitmaps with the mappings of that exact plug state.
+	s.memResizeMu.Lock()
+	defer s.memResizeMu.Unlock()
+
 	// Stop the health check before pausing the VM
 	s.Checks.Stop()
 
@@ -2388,6 +2467,19 @@ func (s *Sandbox) Pause(
 
 	m = stampWorkspaceMetadata(m, workspaceSeals)
 
+	// The hotplug memory plugged at this snapshot: a memory resume restores
+	// exactly this much before it applies its own request. Read while the
+	// VM is paused (it cannot change). Nothing for a filesystem-only
+	// snapshot, whose cold boot plugs from scratch.
+	m, err = s.stampMemoryHotplugPlugged(ctx, m, pauseOpts.filesystemSnapshot)
+	if err != nil {
+		return nil, err
+	}
+	snapshotMemoryMB := int64(0)
+	if !pauseOpts.filesystemSnapshot {
+		snapshotMemoryMB = s.Config.RamMB + m.MemoryHotplugPluggedMiB
+	}
+
 	// Gather data for postprocessing
 	originalRootfs, err := s.Template.Rootfs()
 	if err != nil {
@@ -2554,6 +2646,7 @@ func (s *Sandbox) Pause(
 		RootfsDiffHeader:     rootfsDiffHeader,
 		SchedulingMetadata:   schedulingMetadata,
 		FilesystemSnapshot:   pauseOpts.filesystemSnapshot,
+		MemoryMB:             snapshotMemoryMB,
 		RootfsBlockSize:      originalRootfs.Header().Metadata.BlockSize,
 		WorkspaceRevisions:   m.WorkspaceRevisions,
 		WorkspaceSeals:       workspaceSeals,

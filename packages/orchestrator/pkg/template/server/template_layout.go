@@ -18,6 +18,28 @@ import (
 // parentMetadata reads the metadata of the template a build starts from.
 type parentMetadata func(ctx context.Context, buildID string) (metadata.Template, error)
 
+// memoizedParentMetadata reads the parent's metadata once for every resolver
+// of one build request (layout, memory hotplug), so they decide on the same
+// object and the storage is read once.
+func memoizedParentMetadata(read parentMetadata) parentMetadata {
+	type result struct {
+		buildID string
+		meta    metadata.Template
+		err     error
+	}
+
+	var cached *result
+
+	return func(ctx context.Context, buildID string) (metadata.Template, error) {
+		if cached == nil || cached.buildID != buildID {
+			meta, err := read(ctx, buildID)
+			cached = &result{buildID: buildID, meta: meta, err: err}
+		}
+
+		return cached.meta, cached.err
+	}
+}
+
 // resolveTemplateLayout derives a build's device layout from its request. A
 // build from another template inherits that template's layout (the base
 // snapshot's device table is lineage state every later layer restores) and

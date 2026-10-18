@@ -152,6 +152,14 @@ func baseLayerKey(indexVersion, provisionVersion, baseSource string, buildContex
 		keys = append(keys, strings.Join(parts, ":"))
 	}
 
+	// The virtio-mem device is part of the base snapshot too (device table,
+	// memory file size, guest kernel command line), so a layer built with one
+	// cannot serve a build without it or with another size. Appended only for
+	// a build with a device so every existing key stays byte-identical.
+	if l := buildContext.Config.MemoryHotplug; l != nil {
+		keys = append(keys, fmt.Sprintf("memory-hotplug:%d:%d:%d:%d", l.BaseMiB, l.TotalMiB, l.SlotMiB, l.BlockMiB))
+	}
+
 	// The rendered files differ between on and off while the template file set,
 	// and so FilesHash, does not, so the values themselves are the contribution.
 	// Made only when this build renders the files with the option on: a

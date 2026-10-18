@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/e2b-dev/infra/packages/orchestrator/pkg/template/metadata"
 )
 
 const testIPv4 = "169.254.0.21::169.254.0.22:255.255.255.252:instance:eth0:off:tap0"
@@ -212,4 +214,25 @@ func TestValidateCmdlineArgs(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A boot with a hotplug device onlines its memory movable, and a cmdline
+// overlay cannot turn that off; a boot without one is unaffected.
+func TestBuildKernelArgs_MemoryHotplugOnlinesMovable(t *testing.T) {
+	t.Parallel()
+
+	layout := &metadata.MemoryHotplugLayout{BaseMiB: 1024, TotalMiB: 1024, SlotMiB: 128, BlockMiB: 2}
+
+	args := buildKernelArgs(testIPv4, ProcessOptions{InitScriptPath: "/sbin/init", MemoryHotplug: layout})
+	assert.Equal(t, "online_movable", args["memhp_default_state"])
+
+	overridden := buildKernelArgs(testIPv4, ProcessOptions{
+		InitScriptPath: "/sbin/init",
+		MemoryHotplug:  layout,
+		CmdlineArgs:    map[string]string{"memhp_default_state": "online"},
+	})
+	assert.Equal(t, "online_movable", overridden["memhp_default_state"])
+
+	_, set := buildKernelArgs(testIPv4, ProcessOptions{InitScriptPath: "/sbin/init"})["memhp_default_state"]
+	assert.False(t, set)
 }

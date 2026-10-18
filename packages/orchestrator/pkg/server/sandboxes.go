@@ -278,7 +278,7 @@ func (s *Server) Create(ctx context.Context, req *orchestrator.SandboxCreateRequ
 		VolumeMounts:          volumeMounts,
 		WorkspaceVolumes:      workspaceVolumesFromRequest(req.GetWorkspaceSlots()),
 		MaxSandboxLengthHours: req.GetSandbox().GetMaxSandboxLength(),
-	})
+	}).WithRequestedMemoryMB(req.GetSandbox().GetRequestedMemoryMb())
 	childSpan.SetAttributes(
 		telemetry.WithFirecrackerVersion(config.FirecrackerConfig.FirecrackerVersion),
 	)
@@ -342,6 +342,14 @@ func (s *Server) Create(ctx context.Context, req *orchestrator.SandboxCreateRequ
 		// cannot host them: nothing was started, the request can be corrected.
 		if st := workspaceRefusalStatus(err); st != nil {
 			telemetry.ReportError(ctx, "workspace volumes refused", err, telemetry.WithSandboxID(req.GetSandbox().GetSandboxId()))
+
+			return nil, st
+		}
+
+		// The requested memory does not fit the template (no device, or out
+		// of its range): nothing was started, the request can be corrected.
+		if st := memoryRefusalStatus(err); st != nil {
+			telemetry.ReportError(ctx, "memory size refused", err, telemetry.WithSandboxID(req.GetSandbox().GetSandboxId()))
 
 			return nil, st
 		}
@@ -433,6 +441,7 @@ func (s *Server) Create(ctx context.Context, req *orchestrator.SandboxCreateRequ
 		// key off the running binary exactly instead of re-resolving the
 		// flag, which drifts from this frozen value whenever the flag moves.
 		ResolvedFirecrackerVersion: resolvedFCVersion,
+		MemoryMb:                   sbx.Config.CurrentMemoryMB(),
 	}, nil
 }
 
@@ -679,6 +688,7 @@ func (s *Server) List(ctx context.Context, _ *emptypb.Empty) (*orchestrator.Sand
 			ExecutionId: sbx.Runtime.ExecutionID,
 			Vcpu:        sbx.Config.Vcpu,
 			RamMb:       sbx.Config.RamMB,
+			MemoryMb:    sbx.Config.AccountedMemoryMB(),
 		})
 	}
 
@@ -1016,6 +1026,7 @@ func (s *Server) Pause(ctx context.Context, in *orchestrator.SandboxPauseRequest
 	return &orchestrator.SandboxPauseResponse{
 		SchedulingMetadata: res.schedulingMetadata,
 		WorkspaceRevisions: workspaceRevisionsToProto(res.workspaceSeals),
+		MemoryMb:           res.memoryMB,
 	}, nil
 }
 
@@ -1341,6 +1352,7 @@ func (s *Server) checkpointInPlace(ctx context.Context, sbx *sandbox.Sandbox, in
 	return &orchestrator.SandboxCheckpointResponse{
 		SchedulingMetadata: res.schedulingMetadata,
 		WorkspaceRevisions: workspaceRevisionsToProto(res.workspaceSeals),
+		MemoryMb:           res.memoryMB,
 	}, nil
 }
 
@@ -1480,6 +1492,7 @@ func (s *Server) checkpointResumeFresh(ctx context.Context, sbx *sandbox.Sandbox
 	return &orchestrator.SandboxCheckpointResponse{
 		SchedulingMetadata: res.schedulingMetadata,
 		WorkspaceRevisions: workspaceRevisionsToProto(res.workspaceSeals),
+		MemoryMb:           res.memoryMB,
 	}, nil
 }
 
@@ -1511,7 +1524,7 @@ func (s *Server) getSandboxExecutionData(sbx *sandbox.Sandbox) map[string]any {
 	return map[string]any{
 		"started_at":     startedAt.UTC().Format(time.RFC3339),
 		"vcpu_count":     sbx.Config.Vcpu,
-		"memory_mb":      sbx.Config.RamMB,
+		"memory_mb":      sbx.Config.RequestedMemoryMB(),
 		"execution_time": time.Since(startedAt).Milliseconds(),
 	}
 }
@@ -1540,7 +1553,10 @@ type snapshotResult struct {
 	// runCheckpointUpload, which must not answer async success before
 	// waitMemorySealed (Snapshot.WaitMemorySealed) settles.
 	memoryExportDeferred bool
-	waitMemorySealed     func(ctx context.Context) error
+	// memoryMB is the guest memory recorded in the snapshot (boot + plugged
+	// hotplug), 0 for a filesystem-only one.
+	memoryMB         int64
+	waitMemorySealed func(ctx context.Context) error
 	// workspaceSeals are the workspace revisions the pause sealed, for the
 	// response (the control plane records them as snapshot_volume_refs).
 	workspaceSeals []sandbox.SealedWorkspace
@@ -1670,6 +1686,7 @@ func (s *Server) snapshotAndCacheSandbox(
 		filesystemOnly:       filesystemOnly,
 		rootfsDiff:           snapshot.RootfsDiff,
 		memoryExportDeferred: snapshot.MemoryExportDeferred,
+		memoryMB:             snapshot.MemoryMB,
 		waitMemorySealed:     snapshot.WaitMemorySealed,
 		workspaceSeals:       snapshot.WorkspaceSeals,
 	}, nil

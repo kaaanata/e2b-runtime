@@ -119,6 +119,7 @@ func (a *APIStore) GetTemplatesTemplateID(c *gin.Context, templateID api.Templat
 			MemoryMB:                 api.MemoryMB(item.RamMb),
 			DiskSizeMB:               sharedUtils.CastPtr(item.TotalDiskSizeMb, func(v int64) api.DiskSizeMB { return api.DiskSizeMB(v) }),
 			EnvdVersion:              item.EnvdVersion,
+			MaxMemoryMB:              maxMemoryToAPI(item.MaxRamMb),
 		})
 	}
 

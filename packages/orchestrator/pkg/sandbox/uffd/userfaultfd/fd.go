@@ -97,6 +97,14 @@ func newUffdioAPI(api, features CULong) UffdioAPI {
 	}
 }
 
+// newUffdRemove builds the payload of a UFFD_EVENT_REMOVE for [start, end).
+func newUffdRemove(start, end uintptr) UffdRemove {
+	return UffdRemove{
+		start: C.__u64(start),
+		end:   C.__u64(end),
+	}
+}
+
 func newUffdioRange(start, length CULong) UffdioRange {
 	return UffdioRange{
 		start: start,

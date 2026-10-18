@@ -15,6 +15,7 @@ import (
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	templatecache "github.com/e2b-dev/infra/packages/api/internal/cache/templates"
+	teamlimits "github.com/e2b-dev/infra/packages/api/internal/team"
 	templatemanager "github.com/e2b-dev/infra/packages/api/internal/template-manager"
 	"github.com/e2b-dev/infra/packages/db/pkg/types"
 	"github.com/e2b-dev/infra/packages/db/queries"
@@ -132,6 +133,25 @@ func (a *APIStore) PostV2TemplatesTemplateIDBuildsBuildID(c *gin.Context, templa
 		return
 	}
 
+	// The memory hotplug maximum given at registration, unless the start
+	// overrides it. Validated before anything about the build is updated.
+	maxMemoryMB := build.MaxRamMb
+	if body.MaxMemoryMB != nil {
+		maxRamMB, apiErr := teamlimits.LimitMaxMemory(team.Limits, build.RamMb, body.MaxMemoryMB)
+		if apiErr != nil {
+			a.sendAPIStoreError(c, apiErr.Code, apiErr.ClientMsg)
+
+			return
+		}
+
+		// Explicitly fixed size: send the boot memory, so a build from a
+		// hotplug template is refused instead of silently inheriting it.
+		if maxRamMB == nil {
+			maxRamMB = new(build.RamMb)
+		}
+		maxMemoryMB = maxRamMB
+	}
+
 	stepsMarshalled, err := json.Marshal(dockerfileStore{
 		FromImage:    body.FromImage,
 		FromTemplate: body.FromTemplate,
@@ -186,6 +206,8 @@ func (a *APIStore) PostV2TemplatesTemplateIDBuildsBuildID(c *gin.Context, templa
 
 		return
 	}
+
+	layout.MaxMemoryMB = maxMemoryMB
 
 	// Call the Template Manager to build the environment
 	err = a.templateManager.CreateTemplate(

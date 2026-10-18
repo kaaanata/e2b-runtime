@@ -41,6 +41,10 @@ func (rs *ResumeSandbox) Sandbox(
 	}
 	defer releaseWorkspace()
 
+	// The layer snapshot carries the build's hotplug device; the resume checks
+	// the snapshot against it.
+	rs.config.MemoryHotplug = layerExecutor.Config.MemoryHotplug.Clone()
+
 	sbx, err := rs.sandboxFactory.ResumeSandbox(
 		ctx,
 		template,

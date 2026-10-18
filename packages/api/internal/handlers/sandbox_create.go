@@ -287,6 +287,16 @@ func (a *APIStore) PostSandboxes(c *gin.Context) {
 		}
 	}
 
+	// Guest memory: the template's boot memory unless a hotplug template is
+	// asked for more.
+	requestedMemoryMB := requestedOrDefault(body.MemoryMB, build.RamMb)
+	if apiErr := validateSandboxMemory(teamInfo.Limits, build.RamMb, build.MaxRamMb, requestedMemoryMB); apiErr != nil {
+		telemetry.ReportErrorByCode(ctx, apiErr.Code, "invalid sandbox memory", apiErr.Err, telemetry.WithTemplateID(env.TemplateID))
+		apierrors.SendAPIError(c, apiErr)
+
+		return
+	}
+
 	sbxVolumeMounts, blockMounts, err := convertAPIVolumesToOrchestratorVolumes(
 		ctx, a.sqlcDB, a.featureFlags, teamInfo.ID, apiVolumeMounts, build,
 	)
@@ -358,6 +368,7 @@ func (a *APIStore) PostSandboxes(c *gin.Context) {
 			Iam:                     iamCfg,
 			RequiredNodeID:          requiredNodeID,
 			VolumeAttacher:          volumeAttacher,
+			RequestedMemoryMB:       requestedMemoryMB,
 		}, nil
 	}
 

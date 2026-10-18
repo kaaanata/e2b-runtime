@@ -8,6 +8,7 @@ SELECT sqlc.embed(e),
        COALESCE(eb.firecracker_version, 'N/A') as build_firecracker_version,
        eb.layout as build_layout,
        eb.workspace_slot_capacity_bytes as build_workspace_slot_capacity_bytes,
+       eb.max_ram_mb as build_max_ram_mb,
        COALESCE(latest_build.status_group, 'pending') as build_status,
        COALESCE(ea.aliases, ARRAY[]::text[])::text[] AS aliases,
        COALESCE(ea.names, ARRAY[]::text[])::text[] AS names

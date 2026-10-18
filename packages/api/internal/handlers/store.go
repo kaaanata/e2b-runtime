@@ -203,6 +203,7 @@ type APIStore struct {
 	resumeBackendOverride  resumeWaitOrchestrator
 	forkBackendOverride    forkOrchestrator
 	connectBackendOverride connectOrchestrator
+	resizeBackendOverride  memoryResizeOrchestrator
 	teamSandboxCounter     teamRunningSandboxCounter
 	templateManager        *template_manager.TemplateManager
 	sqlcDB                 *sqlcdb.Client

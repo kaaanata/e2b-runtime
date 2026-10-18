@@ -41,7 +41,9 @@ type RegisterBuildData struct {
 	ReadyCmd           *string
 	CpuCount           *int32
 	MemoryMB           *int32
-	Version            string
+	// MaxMemoryMB is the memory hotplug maximum, nil for a fixed-size build.
+	MaxMemoryMB *int32
+	Version     string
 
 	// The requested minimum free space after build steps, or nil for the team's default.
 	// Zero disables requested growth and reaches the row as zero.
@@ -194,6 +196,14 @@ func registerBuild(
 		return nil, apiError
 	}
 
+	maxRamMB, apiError := team.LimitMaxMemory(data.Team.Limits, ramMB, data.MaxMemoryMB)
+	if apiError != nil {
+		return nil, apiError
+	}
+	if maxRamMB != nil {
+		telemetry.SetAttributes(ctx, attribute.Int64("env.max_memory_mb", *maxRamMB))
+	}
+
 	// Start a transaction to prevent partial updates
 	client, tx, err := db.WithTx(ctx)
 	if err != nil {
@@ -289,6 +299,7 @@ func registerBuild(
 		BuildID:            buildID,
 		Status:             dbtypes.BuildStatusWaiting,
 		RamMb:              ramMB,
+		MaxRamMb:           maxRamMB,
 		Vcpu:               cpuCount,
 		KernelVersion:      data.KernelVersion,
 		FirecrackerVersion: data.FirecrackerVersion,

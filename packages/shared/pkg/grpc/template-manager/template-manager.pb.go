@@ -701,8 +701,16 @@ type TemplateConfig struct {
 	// "block-v1" build, one entry per slot; a block volume of exactly that size
 	// takes the slot at runtime.
 	WorkspaceSlotCapacityBytes []int64 `protobuf:"varint,19,rep,packed,name=workspaceSlotCapacityBytes,proto3" json:"workspaceSlotCapacityBytes,omitempty"`
-	unknownFields              protoimpl.UnknownFields
-	sizeCache                  protoimpl.SizeCache
+	// maxMemoryMB is the largest guest memory a sandbox of this template can be
+	// resized to while it runs. When above memoryMB the template's base snapshot
+	// carries a virtio-mem hotplug device of maxMemoryMB - memoryMB (a multiple
+	// of 128 MiB); memoryMB stays the boot memory, the always-present minimum.
+	// Unset or equal to memoryMB: no device, memory is fixed at memoryMB. A
+	// build from another template inherits that template's device when unset
+	// and must not change it.
+	MaxMemoryMB   *int32 `protobuf:"varint,20,opt,name=maxMemoryMB,proto3,oneof" json:"maxMemoryMB,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TemplateConfig) Reset() {
@@ -880,6 +888,13 @@ func (x *TemplateConfig) GetWorkspaceSlotCapacityBytes() []int64 {
 		return x.WorkspaceSlotCapacityBytes
 	}
 	return nil
+}
+
+func (x *TemplateConfig) GetMaxMemoryMB() int32 {
+	if x != nil && x.MaxMemoryMB != nil {
+		return *x.MaxMemoryMB
+	}
+	return 0
 }
 
 type isTemplateConfig_Source interface {
@@ -1130,8 +1145,13 @@ type TemplateBuildMetadata struct {
 	Layout *string `protobuf:"bytes,6,opt,name=layout,proto3,oneof" json:"layout,omitempty"`
 	// Capacity of each workspace slot of a "block-v1" template, in bytes.
 	WorkspaceSlotCapacityBytes []int64 `protobuf:"varint,7,rep,packed,name=workspaceSlotCapacityBytes,proto3" json:"workspaceSlotCapacityBytes,omitempty"`
-	unknownFields              protoimpl.UnknownFields
-	sizeCache                  protoimpl.SizeCache
+	// Maximum guest memory of a template built with a virtio-mem hotplug
+	// device (after inheritance), in MiB. Unset when the build has no device;
+	// with layout set (a template-manager that knows layouts) an unset value
+	// therefore means "no device", without layout it means unknown.
+	MaxMemoryMB   *int32 `protobuf:"varint,8,opt,name=maxMemoryMB,proto3,oneof" json:"maxMemoryMB,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TemplateBuildMetadata) Reset() {
@@ -1211,6 +1231,13 @@ func (x *TemplateBuildMetadata) GetWorkspaceSlotCapacityBytes() []int64 {
 		return x.WorkspaceSlotCapacityBytes
 	}
 	return nil
+}
+
+func (x *TemplateBuildMetadata) GetMaxMemoryMB() int32 {
+	if x != nil && x.MaxMemoryMB != nil {
+		return *x.MaxMemoryMB
+	}
+	return 0
 }
 
 type TemplateBuildLogEntry struct {
@@ -1444,7 +1471,7 @@ const file_template_manager_proto_rawDesc = "" +
 	"\x03aws\x18\x01 \x01(\v2\f.AWSRegistryH\x00R\x03aws\x12 \n" +
 	"\x03gcp\x18\x02 \x01(\v2\f.GCPRegistryH\x00R\x03gcp\x12,\n" +
 	"\ageneral\x18\x03 \x01(\v2\x10.GeneralRegistryH\x00R\ageneralB\x06\n" +
-	"\x04type\"\xb8\x06\n" +
+	"\x04type\"\xef\x06\n" +
 	"\x0eTemplateConfig\x12\x1e\n" +
 	"\n" +
 	"templateID\x18\x01 \x01(\tR\n" +
@@ -1469,12 +1496,14 @@ const file_template_manager_proto_rawDesc = "" +
 	"\x06teamID\x18\x10 \x01(\tR\x06teamID\x12+\n" +
 	"\x0efreeDiskSizeMB\x18\x11 \x01(\x05H\x03R\x0efreeDiskSizeMB\x88\x01\x01\x12\x1b\n" +
 	"\x06layout\x18\x12 \x01(\tH\x04R\x06layout\x88\x01\x01\x12>\n" +
-	"\x1aworkspaceSlotCapacityBytes\x18\x13 \x03(\x03R\x1aworkspaceSlotCapacityBytesB\b\n" +
+	"\x1aworkspaceSlotCapacityBytes\x18\x13 \x03(\x03R\x1aworkspaceSlotCapacityBytes\x12%\n" +
+	"\vmaxMemoryMB\x18\x14 \x01(\x05H\x05R\vmaxMemoryMB\x88\x01\x01B\b\n" +
 	"\x06sourceB\b\n" +
 	"\x06_forceB\x14\n" +
 	"\x12_fromImageRegistryB\x11\n" +
 	"\x0f_freeDiskSizeMBB\t\n" +
-	"\a_layout\"\xa3\x01\n" +
+	"\a_layoutB\x0e\n" +
+	"\f_maxMemoryMB\"\xa3\x01\n" +
 	"\x15TemplateCreateRequest\x12+\n" +
 	"\btemplate\x18\x01 \x01(\v2\x0f.TemplateConfigR\btemplate\x12#\n" +
 	"\n" +
@@ -1506,7 +1535,7 @@ const file_template_manager_proto_rawDesc = "" +
 	"\abuildID\x18\x01 \x01(\tR\abuildID\x12\x1e\n" +
 	"\n" +
 	"templateID\x18\x02 \x01(\tR\n" +
-	"templateID\"\xe8\x02\n" +
+	"templateID\"\x9f\x03\n" +
 	"\x15TemplateBuildMetadata\x12$\n" +
 	"\rrootfsSizeKey\x18\x01 \x01(\x05R\rrootfsSizeKey\x12&\n" +
 	"\x0eenvdVersionKey\x18\x02 \x01(\tR\x0eenvdVersionKey\x12$\n" +
@@ -1514,8 +1543,10 @@ const file_template_manager_proto_rawDesc = "" +
 	"\x12firecrackerVersion\x18\x04 \x01(\tR\x12firecrackerVersion\x12C\n" +
 	"\x12schedulingMetadata\x18\x05 \x01(\v2\x13.SchedulingMetadataR\x12schedulingMetadata\x12\x1b\n" +
 	"\x06layout\x18\x06 \x01(\tH\x00R\x06layout\x88\x01\x01\x12>\n" +
-	"\x1aworkspaceSlotCapacityBytes\x18\a \x03(\x03R\x1aworkspaceSlotCapacityBytesB\t\n" +
-	"\a_layout\"\x83\x02\n" +
+	"\x1aworkspaceSlotCapacityBytes\x18\a \x03(\x03R\x1aworkspaceSlotCapacityBytes\x12%\n" +
+	"\vmaxMemoryMB\x18\b \x01(\x05H\x01R\vmaxMemoryMB\x88\x01\x01B\t\n" +
+	"\a_layoutB\x0e\n" +
+	"\f_maxMemoryMB\"\x83\x02\n" +
 	"\x15TemplateBuildLogEntry\x128\n" +
 	"\ttimestamp\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1f\n" +

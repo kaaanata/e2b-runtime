@@ -17,6 +17,7 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/sandbox"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
 	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
+	authtypes "github.com/e2b-dev/infra/packages/auth/pkg/types"
 	"github.com/e2b-dev/infra/packages/db/pkg/types"
 	"github.com/e2b-dev/infra/packages/db/queries"
 	"github.com/e2b-dev/infra/packages/shared/pkg/apierrors"
@@ -209,7 +210,7 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 		sandboxID,
 		timeout,
 		teamInfo,
-		a.buildResumeSandboxData(sandboxID, body.AutoPause, body.Memory, resize),
+		a.buildResumeSandboxData(sandboxID, body.AutoPause, body.Memory, resize, body.MemoryMB, teamInfo.Limits),
 		&c.Request.Header,
 		true,
 		demandsFilesystemBoot(body.Memory, lastSnapshot.Snapshot),
@@ -246,8 +247,8 @@ func convertDatabaseMountsToOrchestratorMounts(volumes []*types.SandboxVolumeMou
 // from its own snapshot. memory is the request's optional memory field; nil
 // (the implicit paths: auto-resume, fork) means a plain resume.
 // resize is the request's validated volumeMounts (nil: no resize).
-func (a *APIStore) buildResumeSandboxData(sandboxID string, autoPauseOverride, memory *bool, resize map[string]int64) orchestrator.SandboxDataFetcher {
-	return a.buildResumeSandboxDataFromSnapshot(sandboxID, sandboxID, autoPauseOverride, memory, false, resize)
+func (a *APIStore) buildResumeSandboxData(sandboxID string, autoPauseOverride, memory *bool, resize map[string]int64, memoryMB *api.MemoryMB, limits *authtypes.TeamLimits) orchestrator.SandboxDataFetcher {
+	return a.buildResumeSandboxDataFromSnapshot(sandboxID, sandboxID, autoPauseOverride, memory, false, resize, memoryMB, limits)
 }
 
 const errCodeMemoryOverrideDisabled = "sandbox_memory_override_disabled"
@@ -327,7 +328,10 @@ func resolveFilesystemBoot(ctx context.Context, flags featureFlagsClient, memory
 // for resume operations. sandboxID is the ID the sandbox will run under — it
 // differs from snapshotSandboxID when forking — and scopes the envd access token.
 // The returned callback is called inside the sandbox lock to prevent race conditions.
-func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandboxID string, autoPauseOverride, memory *bool, allowSharedIdentity bool, resize map[string]int64) orchestrator.SandboxDataFetcher {
+// memoryMB is the request's optional guest memory (memory hotplug templates;
+// nil keeps the size recorded at pause), validated against the snapshot
+// build and limits (nil: no tier check).
+func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandboxID string, autoPauseOverride, memory *bool, allowSharedIdentity bool, resize map[string]int64, memoryMB *api.MemoryMB, limits *authtypes.TeamLimits) orchestrator.SandboxDataFetcher {
 	return func(ctx context.Context) (orchestrator.SandboxMetadata, *api.APIError) {
 		lastSnapshot, err := a.snapshotCache.Get(ctx, snapshotSandboxID)
 		if err != nil {
@@ -392,6 +396,14 @@ func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandbox
 
 		volumeMounts := convertDatabaseMountsToOrchestratorMounts(volumes)
 
+		// Guest memory to resume with: the request, else the size recorded
+		// at pause. Sent explicitly (not 0) so the node and the API agree on
+		// what is accounted; a fixed template only ever gets its ram_mb.
+		requestedMemoryMB := requestedOrDefault(memoryMB, snapshotMemoryDefault(build.RamMb, build.RequestedRamMb))
+		if apiErr := validateSandboxMemory(limits, build.RamMb, build.MaxRamMb, requestedMemoryMB); apiErr != nil {
+			return orchestrator.SandboxMetadata{}, apiErr
+		}
+
 		// Block volumes bind to the revisions recorded with this snapshot
 		// build; resume and fork differ in which incarnation they write.
 		attacher, apiErr := a.planResumeBlockVolumes(ctx, snap.TeamID, build.ID, volumeMounts,
@@ -429,6 +441,7 @@ func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandbox
 			SnapshotSandboxID:       snapshotSandboxID,
 			FilesystemBoot:          filesystemBoot,
 			FilesystemOnlySnapshot:  snapshotIsFilesystemOnly(snap),
+			RequestedMemoryMB:       requestedMemoryMB,
 		}, nil
 	}
 }

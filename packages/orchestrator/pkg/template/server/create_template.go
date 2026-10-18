@@ -133,11 +133,21 @@ func (s *ServerStore) TemplateCreate(ctx context.Context, templateRequest *templ
 
 	freeDiskSizeMB := resolveFreeDiskSizeMB(cfg)
 
-	layout, workspaceLayout, err := resolveTemplateLayout(ctx, cfg, func(ctx context.Context, buildID string) (templatemetadata.Template, error) {
+	parent := memoizedParentMetadata(func(ctx context.Context, buildID string) (templatemetadata.Template, error) {
 		return templatemetadata.FromBuildID(ctx, s.templateStorage, buildID)
 	})
+
+	layout, workspaceLayout, err := resolveTemplateLayout(ctx, cfg, parent)
 	if err != nil {
 		return nil, err
+	}
+
+	memoryHotplug, err := resolveMemoryHotplug(ctx, cfg, parent, fcInfo.HasMemoryHotplug())
+	if err != nil {
+		return nil, err
+	}
+	if memoryHotplug != nil {
+		childSpan.SetAttributes(attribute.Int64("env.max_memory_mb", memoryHotplug.MaxMiB()))
 	}
 
 	template := config.TemplateConfig{
@@ -166,6 +176,9 @@ func (s *ServerStore) TemplateCreate(ctx context.Context, templateRequest *templ
 		// request asks for it (the bridge-reader rule).
 		Layout:    layout,
 		Workspace: workspaceLayout,
+		// Same rule for the hotplug device: its capability is in this
+		// reader's KnownCapabilities before any build can produce it.
+		MemoryHotplug: memoryHotplug,
 	}
 
 	logs := buildlogger.NewLogEntryLogger()
@@ -243,13 +256,13 @@ func (s *ServerStore) TemplateCreate(ctx context.Context, templateRequest *templ
 
 			buildInfo.SetFail(userError)
 		} else {
-			buildInfo.SetSuccess(withBuildLayout(&templatemanager.TemplateBuildMetadata{
+			buildInfo.SetSuccess(withBuildMemoryHotplug(withBuildLayout(&templatemanager.TemplateBuildMetadata{
 				RootfsSizeKey:      int32(res.RootfsSizeMB),
 				EnvdVersionKey:     res.EnvdVersion,
 				KernelVersion:      res.KernelVersion,
 				FirecrackerVersion: res.FirecrackerVersion,
 				SchedulingMetadata: res.SchedulingMetadata,
-			}, template.Layout, template.Workspace))
+			}, template.Layout, template.Workspace), template.MemoryHotplug))
 			telemetry.ReportEvent(ctx, "Environment built")
 		}
 	}(context.WithoutCancel(ctx))

@@ -57,10 +57,12 @@ func TestNew_LegacyFormatGoldens(t *testing.T) {
 		memfd               bool
 		freePageReporting   bool
 		freePageHinting     bool
+		memoryHotplug       bool
 	}{
-		{"v1.10.1_30cbb07", 1, 10, 1, true, false, false, false},
-		{"v1.12.1_210cbac", 1, 12, 1, true, false, false, false},
-		{"v1.14.1_431f1fc", 1, 14, 1, true, true, true, true},
+		{"v1.10.1_30cbb07", 1, 10, 1, true, false, false, false, false},
+		{"v1.12.1_210cbac", 1, 12, 1, true, false, false, false, false},
+		{"v1.14.1_431f1fc", 1, 14, 1, true, true, true, true, true},
+		{"v1.14-0.2.0", 1, 14, 0, true, true, true, true, true},
 	}
 
 	for _, tc := range cases {
@@ -78,6 +80,7 @@ func TestNew_LegacyFormatGoldens(t *testing.T) {
 			assert.Equal(t, tc.memfd, info.HasMemfd())
 			assert.Equal(t, tc.freePageReporting, info.HasFreePageReporting())
 			assert.Equal(t, tc.freePageHinting, info.HasFreePageHinting())
+			assert.Equal(t, tc.memoryHotplug, info.HasMemoryHotplug())
 		})
 	}
 }

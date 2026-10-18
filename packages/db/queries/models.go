@@ -74,6 +74,8 @@ type EnvBuild struct {
 	TeamID                     *uuid.UUID
 	Layout                     *string
 	WorkspaceSlotCapacityBytes []int64
+	MaxRamMb                   *int64
+	RequestedRamMb             *int64
 }
 
 type Snapshot struct {

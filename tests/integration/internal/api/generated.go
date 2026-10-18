@@ -485,6 +485,9 @@ type ConnectSandbox struct {
 	// Memory Defaults to true. When false and the sandbox is paused, resume from disk state only: the sandbox cold-boots fresh and any memory in the snapshot is ignored, never modified or deleted. Disk state has crash-recovery semantics — writes not flushed before the pause may be lost. A no-op for snapshots that contain no memory. Rejected with an error in environments where this capability is not enabled, never silently downgraded to a memory restore.
 	Memory *bool `json:"memory,omitempty"`
 
+	// MemoryMB Guest memory to resume a paused sandbox with, in MiB (memory hotplug templates only; ignored for a running sandbox). Same bounds and errors as on create.
+	MemoryMB *MemoryMB `json:"memoryMB,omitempty"`
+
 	// Timeout Timeout in seconds from the current time after which the sandbox should expire
 	Timeout int32 `json:"timeout"`
 
@@ -553,7 +556,7 @@ type Error struct {
 	// Code Error code
 	Code int32 `json:"code"`
 
-	// ErrorCode Machine-readable semantic error code. Not a closed set; initial values: sandbox_capacity_unavailable, sandbox_placement_timeout, sandbox_no_compatible_node, sandbox_create_failed, internal_server_error. Block volume refusals (409): block_volume_shared_identity_required, volume_attached, volume_referenced_by_snapshot, volume_creating, template_layout_mismatch, volume_resize_invalid.
+	// ErrorCode Machine-readable semantic error code. Not a closed set; initial values: sandbox_capacity_unavailable, sandbox_placement_timeout, sandbox_no_compatible_node, sandbox_create_failed, internal_server_error. Block volume refusals (409): block_volume_shared_identity_required, volume_attached, volume_referenced_by_snapshot, volume_creating, template_layout_mismatch, volume_resize_invalid, checkpoint_unsupported. Memory hotplug (409): memory_not_hot_resizable (the template has no maxMemoryMB), memory_resize_busy (a checkpoint of the sandbox is in progress).
 	ErrorCode *string `json:"error_code,omitempty"`
 
 	// Message Error
@@ -619,6 +622,9 @@ type ListedSandbox struct {
 	// CpuCount CPU cores for the sandbox
 	CpuCount CPUCount `json:"cpuCount"`
 
+	// CurrentMemoryMB Guest memory the sandbox actually had when last observed (boot memory plus plugged hotplug memory), in MiB. Below memoryMB while the guest is still plugging, or when a shrink stalled on pinned memory. Omitted for a paused sandbox and for templates without memory hotplug.
+	CurrentMemoryMB *MemoryMB `json:"currentMemoryMB,omitempty"`
+
 	// DiskSizeMB Disk size for the sandbox in MiB
 	DiskSizeMB DiskSizeMB `json:"diskSizeMB"`
 
@@ -628,7 +634,10 @@ type ListedSandbox struct {
 	// EnvdVersion Version of the envd running in the sandbox
 	EnvdVersion EnvdVersion `json:"envdVersion"`
 
-	// MemoryMB Memory for the sandbox in MiB
+	// MaxMemoryMB Largest memoryMB the sandbox can be resized to (the template's maxMemoryMB); omitted when the template has no memory hotplug and the size is fixed.
+	MaxMemoryMB *MaxMemoryMB `json:"maxMemoryMB,omitempty"`
+
+	// MemoryMB Guest memory requested for the sandbox, in MiB: the template's memoryMB plus any hotplugged memory. For a running sandbox of a memory-hotplug template this is the last size requested (create, resume or PATCH); for a paused one the size it will resume with.
 	MemoryMB MemoryMB         `json:"memoryMB"`
 	Metadata *SandboxMetadata `json:"metadata,omitempty"`
 
@@ -669,6 +678,9 @@ type MachineInfo struct {
 	// CpuModelName CPU model name of the node
 	CpuModelName string `json:"cpuModelName"`
 }
+
+// MaxMemoryMB Largest memory, in MiB, a sandbox of the template can be resized to while it runs (virtio-mem memory hotplug). The template's memoryMB stays the boot memory, always backed; the rest is plugged on demand. maxMemoryMB - memoryMB must be a multiple of 128 MiB. Omitted (or equal to memoryMB) for a fixed-size template. Needs a guest kernel with CONFIG_VIRTIO_MEM.
+type MaxMemoryMB = int32
 
 // MaxTeamMetric Team metric with timestamp
 type MaxTeamMetric struct {
@@ -711,7 +723,10 @@ type NewSandbox struct {
 	Iam *SandboxIam `json:"iam,omitempty"`
 
 	// Mcp MCP configuration for the sandbox
-	Mcp      *Mcp                  `json:"mcp,omitempty"`
+	Mcp *Mcp `json:"mcp,omitempty"`
+
+	// MemoryMB Guest memory for the sandbox, in MiB. Defaults to the template's memoryMB. For a template built with maxMemoryMB (memory hotplug) any size in [memoryMB, maxMemoryMB] within the team's limit may be requested; the difference above the template's memoryMB is hotplugged after the sandbox starts. 400 when outside that range; 409 (`error_code` `memory_not_hot_resizable`) for a template without memory hotplug when the value differs from its memoryMB.
+	MemoryMB *MemoryMB             `json:"memoryMB,omitempty"`
 	Metadata *SandboxMetadata      `json:"metadata,omitempty"`
 	Network  *SandboxNetworkConfig `json:"network,omitempty"`
 
@@ -912,6 +927,9 @@ type ResumedSandbox struct {
 	// Memory Defaults to true. When false, resume from disk state only: the sandbox cold-boots fresh and any memory in the snapshot is ignored, never modified or deleted. Disk state has crash-recovery semantics — writes not flushed before the pause may be lost. A no-op for snapshots that contain no memory. Rejected with an error in environments where this capability is not enabled, never silently downgraded to a memory restore.
 	Memory *bool `json:"memory,omitempty"`
 
+	// MemoryMB Guest memory to resume with, in MiB, for a sandbox of a memory hotplug template; defaults to the size the sandbox had when it was paused. Same bounds and errors as on create.
+	MemoryMB *MemoryMB `json:"memoryMB,omitempty"`
+
 	// Timeout Time to live for the sandbox in seconds.
 	Timeout *int32 `json:"timeout,omitempty"`
 
@@ -1034,6 +1052,9 @@ type SandboxDetail struct {
 	// CpuCount CPU cores for the sandbox
 	CpuCount CPUCount `json:"cpuCount"`
 
+	// CurrentMemoryMB Guest memory the sandbox actually had when last observed (boot memory plus plugged hotplug memory), in MiB. Below memoryMB while the guest is still plugging, or when a shrink stalled on pinned memory. Omitted for a paused sandbox and for templates without memory hotplug.
+	CurrentMemoryMB *MemoryMB `json:"currentMemoryMB,omitempty"`
+
 	// DiskSizeMB Disk size for the sandbox in MiB
 	DiskSizeMB DiskSizeMB `json:"diskSizeMB"`
 
@@ -1052,7 +1073,10 @@ type SandboxDetail struct {
 	// Lifecycle Sandbox lifecycle policy returned by sandbox info.
 	Lifecycle *SandboxLifecycle `json:"lifecycle,omitempty"`
 
-	// MemoryMB Memory for the sandbox in MiB
+	// MaxMemoryMB Largest memoryMB the sandbox can be resized to (the template's maxMemoryMB); omitted when the template has no memory hotplug and the size is fixed.
+	MaxMemoryMB *MaxMemoryMB `json:"maxMemoryMB,omitempty"`
+
+	// MemoryMB Guest memory requested for the sandbox, in MiB: the template's memoryMB plus any hotplugged memory. For a running sandbox of a memory-hotplug template this is the last size requested (create, resume or PATCH); for a paused one the size it will resume with.
 	MemoryMB MemoryMB              `json:"memoryMB"`
 	Metadata *SandboxMetadata      `json:"metadata,omitempty"`
 	Network  *SandboxNetworkConfig `json:"network,omitempty"`
@@ -1284,6 +1308,12 @@ type SandboxTimeoutRequest struct {
 	Timeout int32 `json:"timeout"`
 }
 
+// SandboxUpdate Fields of a running sandbox that can be changed in place.
+type SandboxUpdate struct {
+	// MemoryMB New guest memory, in MiB, within [memoryMB, maxMemoryMB] of the sandbox's template. Grows plug memory within a second; shrinks are best effort: the guest must give the memory back, and while it pins it the response reports the achieved `currentMemoryMB` below `memoryMB` (the guest finishes on its own once the memory is freed). The sandbox keeps running in every case.
+	MemoryMB *MemoryMB `json:"memoryMB,omitempty"`
+}
+
 // SandboxVolumeMount defines model for SandboxVolumeMount.
 type SandboxVolumeMount struct {
 	// ConsistencyProfile How a shared (NFS) volume is mounted. `strict` sends every operation to the server with no attribute or name caching, so changes from other sandboxes are visible immediately. `cto` is close-to-open: a writer's changes are visible to a reader that opens the file after the writer closed it, at a fraction of the metadata cost. Omitted keeps the sandbox's built-in options. Chosen per mount, not per volume. Rejected with 400 for block volumes, which have a single writer.
@@ -1435,6 +1465,9 @@ type Template struct {
 	// Layout Guest device layout a build was made with (after inheritance from its base template): `rootfs` (no workspace slots; block volumes cannot be mounted) or `block-v1`. Omitted when the build did not record it (builds from before layouts were recorded); creating a sandbox with block mounts from such a template is then decided by its node.
 	Layout *TemplateBuildLayout `json:"layout,omitempty"`
 
+	// MaxMemoryMB Maximum memory of the last successful build when it has memory hotplug (sandboxes can be created and resized between memoryMB and this); omitted for a fixed-size template.
+	MaxMemoryMB *MaxMemoryMB `json:"maxMemoryMB,omitempty"`
+
 	// MemoryMB Memory for the sandbox in MiB
 	MemoryMB MemoryMB `json:"memoryMB"`
 
@@ -1488,6 +1521,9 @@ type TemplateBuild struct {
 
 	// Layout Guest device layout a build was made with (after inheritance from its base template): `rootfs` (no workspace slots; block volumes cannot be mounted) or `block-v1`. Omitted when the build did not record it (builds from before layouts were recorded); creating a sandbox with block mounts from such a template is then decided by its node.
 	Layout *TemplateBuildLayout `json:"layout,omitempty"`
+
+	// MaxMemoryMB Maximum memory of a build with memory hotplug; omitted for a fixed-size build.
+	MaxMemoryMB *MaxMemoryMB `json:"maxMemoryMB,omitempty"`
 
 	// MemoryMB Memory for the sandbox in MiB
 	MemoryMB MemoryMB `json:"memoryMB"`
@@ -1588,6 +1624,9 @@ type TemplateBuildRequestV3 struct {
 	// CpuCount CPU cores for the sandbox
 	CpuCount *CPUCount `json:"cpuCount,omitempty"`
 
+	// MaxMemoryMB Largest memory, in MiB, a sandbox of the template can be resized to while it runs (virtio-mem memory hotplug). The template's memoryMB stays the boot memory, always backed; the rest is plugged on demand. maxMemoryMB - memoryMB must be a multiple of 128 MiB. Omitted (or equal to memoryMB) for a fixed-size template. Needs a guest kernel with CONFIG_VIRTIO_MEM.
+	MaxMemoryMB *MaxMemoryMB `json:"maxMemoryMB,omitempty"`
+
 	// MemoryMB Memory for the sandbox in MiB
 	MemoryMB *MemoryMB `json:"memoryMB,omitempty"`
 
@@ -1619,6 +1658,9 @@ type TemplateBuildStartV2 struct {
 
 	// Layout Guest device layout of a template. `block-v1` reserves workspace block slots in the base snapshot so block volumes can be mounted into its sandboxes. Omitted keeps the rootfs-only layout (or, for a build from another template, inherits that template's layout, which cannot be changed).
 	Layout *TemplateLayout `json:"layout,omitempty"`
+
+	// MaxMemoryMB Overrides the maxMemoryMB given when the build was requested. A build from another template inherits that template's maximum and may only repeat it.
+	MaxMemoryMB *MaxMemoryMB `json:"maxMemoryMB,omitempty"`
 
 	// ReadyCmd Ready check command to execute in the template after the build
 	ReadyCmd *string `json:"readyCmd,omitempty"`
@@ -2178,6 +2220,9 @@ type PostNodesNodeIDJSONRequestBody = NodeStatusChange
 // PostSandboxesJSONRequestBody defines body for PostSandboxes for application/json ContentType.
 type PostSandboxesJSONRequestBody = NewSandbox
 
+// PatchSandboxesSandboxIDJSONRequestBody defines body for PatchSandboxesSandboxID for application/json ContentType.
+type PatchSandboxesSandboxIDJSONRequestBody = SandboxUpdate
+
 // PostSandboxesSandboxIDConnectJSONRequestBody defines body for PostSandboxesSandboxIDConnect for application/json ContentType.
 type PostSandboxesSandboxIDConnectJSONRequestBody = ConnectSandbox
 
@@ -2697,6 +2742,24 @@ type ClientInterface interface {
 	// Corresponds with GET /sandboxes/{sandboxID} (the `GetSandboxesSandboxID` operationId).
 	GetSandboxesSandboxID(ctx context.Context, sandboxID SandboxID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// PatchSandboxesSandboxIDWithBody Update sandbox
+	//
+	// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with PATCH /sandboxes/{sandboxID} (the `PatchSandboxesSandboxID` operationId).
+	PatchSandboxesSandboxIDWithBody(ctx context.Context, sandboxID SandboxID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PatchSandboxesSandboxID Update sandbox
+	//
+	// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with PATCH /sandboxes/{sandboxID} (the `PatchSandboxesSandboxID` operationId).
+	PatchSandboxesSandboxID(ctx context.Context, sandboxID SandboxID, body PatchSandboxesSandboxIDJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// PostSandboxesSandboxIDConnectWithBody Connect sandbox
 	//
 	// Returns sandbox details. If the sandbox is paused, it will be resumed. TTL is only extended.
@@ -2717,7 +2780,7 @@ type ClientInterface interface {
 
 	// PostSandboxesSandboxIDForkWithBody Fork sandbox
 	//
-	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
+	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`). 409 with `error_code` `checkpoint_unsupported` when the node rejects the in-place checkpoint while keeping the sandbox running (e.g. block volumes on a node without in-place checkpoint support); no fork is attempted and no snapshot or revision is recorded.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -2726,7 +2789,7 @@ type ClientInterface interface {
 
 	// PostSandboxesSandboxIDFork Fork sandbox
 	//
-	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
+	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`). 409 with `error_code` `checkpoint_unsupported` when the node rejects the in-place checkpoint while keeping the sandbox running (e.g. block volumes on a node without in-place checkpoint support); no fork is attempted and no snapshot or revision is recorded.
 	//
 	// Takes a body of the `application/json` content type.
 	//
@@ -3807,6 +3870,44 @@ func (c *Client) GetSandboxesSandboxID(ctx context.Context, sandboxID SandboxID,
 	return c.Client.Do(req)
 }
 
+// PatchSandboxesSandboxIDWithBody Update sandbox
+//
+// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with PATCH /sandboxes/{sandboxID} (the `PatchSandboxesSandboxID` operationId).
+func (c *Client) PatchSandboxesSandboxIDWithBody(ctx context.Context, sandboxID SandboxID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPatchSandboxesSandboxIDRequestWithBody(c.Server, sandboxID, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PatchSandboxesSandboxID Update sandbox
+//
+// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with PATCH /sandboxes/{sandboxID} (the `PatchSandboxesSandboxID` operationId).
+func (c *Client) PatchSandboxesSandboxID(ctx context.Context, sandboxID SandboxID, body PatchSandboxesSandboxIDJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPatchSandboxesSandboxIDRequest(c.Server, sandboxID, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // PostSandboxesSandboxIDConnectWithBody Connect sandbox
 //
 // Returns sandbox details. If the sandbox is paused, it will be resumed. TTL is only extended.
@@ -3847,7 +3948,7 @@ func (c *Client) PostSandboxesSandboxIDConnect(ctx context.Context, sandboxID Sa
 
 // PostSandboxesSandboxIDForkWithBody Fork sandbox
 //
-// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
+// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`). 409 with `error_code` `checkpoint_unsupported` when the node rejects the in-place checkpoint while keeping the sandbox running (e.g. block volumes on a node without in-place checkpoint support); no fork is attempted and no snapshot or revision is recorded.
 //
 // Takes any type of body and a specified content type.
 //
@@ -3866,7 +3967,7 @@ func (c *Client) PostSandboxesSandboxIDForkWithBody(ctx context.Context, sandbox
 
 // PostSandboxesSandboxIDFork Fork sandbox
 //
-// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
+// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`). 409 with `error_code` `checkpoint_unsupported` when the node rejects the in-place checkpoint while keeping the sandbox running (e.g. block volumes on a node without in-place checkpoint support); no fork is attempted and no snapshot or revision is recorded.
 //
 // Takes a body of the `application/json` content type.
 //
@@ -6066,6 +6167,53 @@ func NewGetSandboxesSandboxIDRequest(server string, sandboxID SandboxID) (*http.
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewPatchSandboxesSandboxIDRequest calls the generic PatchSandboxesSandboxID builder with application/json body
+func NewPatchSandboxesSandboxIDRequest(server string, sandboxID SandboxID, body PatchSandboxesSandboxIDJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPatchSandboxesSandboxIDRequestWithBody(server, sandboxID, "application/json", bodyReader)
+}
+
+// NewPatchSandboxesSandboxIDRequestWithBody constructs an http.Request for the PatchSandboxesSandboxID method, with any body, and a specified content type
+func NewPatchSandboxesSandboxIDRequestWithBody(server string, sandboxID SandboxID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "sandboxID", sandboxID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/sandboxes/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPatch, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -8872,6 +9020,24 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /sandboxes/{sandboxID} (the `GetSandboxesSandboxID` operationId).
 	GetSandboxesSandboxIDWithResponse(ctx context.Context, sandboxID SandboxID, reqEditors ...RequestEditorFn) (*GetSandboxesSandboxIDResponse, error)
 
+	// PatchSandboxesSandboxIDWithBodyWithResponse Update sandbox
+	//
+	// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PATCH /sandboxes/{sandboxID} (the `PatchSandboxesSandboxID` operationId).
+	PatchSandboxesSandboxIDWithBodyWithResponse(ctx context.Context, sandboxID SandboxID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchSandboxesSandboxIDResponse, error)
+
+	// PatchSandboxesSandboxIDWithResponse Update sandbox
+	//
+	// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PATCH /sandboxes/{sandboxID} (the `PatchSandboxesSandboxID` operationId).
+	PatchSandboxesSandboxIDWithResponse(ctx context.Context, sandboxID SandboxID, body PatchSandboxesSandboxIDJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchSandboxesSandboxIDResponse, error)
+
 	// PostSandboxesSandboxIDConnectWithBodyWithResponse Connect sandbox
 	//
 	// Returns sandbox details. If the sandbox is paused, it will be resumed. TTL is only extended.
@@ -8892,7 +9058,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostSandboxesSandboxIDForkWithBodyWithResponse Fork sandbox
 	//
-	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
+	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`). 409 with `error_code` `checkpoint_unsupported` when the node rejects the in-place checkpoint while keeping the sandbox running (e.g. block volumes on a node without in-place checkpoint support); no fork is attempted and no snapshot or revision is recorded.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -8901,7 +9067,7 @@ type ClientWithResponsesInterface interface {
 
 	// PostSandboxesSandboxIDForkWithResponse Fork sandbox
 	//
-	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
+	// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`). 409 with `error_code` `checkpoint_unsupported` when the node rejects the in-place checkpoint while keeping the sandbox running (e.g. block volumes on a node without in-place checkpoint support); no fork is attempted and no snapshot or revision is recorded.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -11015,6 +11181,82 @@ func (r GetSandboxesSandboxIDResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetSandboxesSandboxIDResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PatchSandboxesSandboxIDResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *SandboxDetail
+	// JSON400 the response for an HTTP 400 `application/json` response
+	JSON400 *N400
+	// JSON401 the response for an HTTP 401 `application/json` response
+	JSON401 *N401
+	// JSON404 the response for an HTTP 404 `application/json` response
+	JSON404 *N404
+	// JSON409 the response for an HTTP 409 `application/json` response
+	JSON409 *Error
+	// JSON500 the response for an HTTP 500 `application/json` response
+	JSON500 *N500
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r PatchSandboxesSandboxIDResponse) GetJSON200() *SandboxDetail {
+	return r.JSON200
+}
+
+// GetJSON400 returns the response for an HTTP 400 `application/json` response
+func (r PatchSandboxesSandboxIDResponse) GetJSON400() *N400 {
+	return r.JSON400
+}
+
+// GetJSON401 returns the response for an HTTP 401 `application/json` response
+func (r PatchSandboxesSandboxIDResponse) GetJSON401() *N401 {
+	return r.JSON401
+}
+
+// GetJSON404 returns the response for an HTTP 404 `application/json` response
+func (r PatchSandboxesSandboxIDResponse) GetJSON404() *N404 {
+	return r.JSON404
+}
+
+// GetJSON409 returns the response for an HTTP 409 `application/json` response
+func (r PatchSandboxesSandboxIDResponse) GetJSON409() *Error {
+	return r.JSON409
+}
+
+// GetJSON500 returns the response for an HTTP 500 `application/json` response
+func (r PatchSandboxesSandboxIDResponse) GetJSON500() *N500 {
+	return r.JSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r PatchSandboxesSandboxIDResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PatchSandboxesSandboxIDResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PatchSandboxesSandboxIDResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PatchSandboxesSandboxIDResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -14696,6 +14938,36 @@ func (c *ClientWithResponses) GetSandboxesSandboxIDWithResponse(ctx context.Cont
 	return ParseGetSandboxesSandboxIDResponse(rsp)
 }
 
+// PatchSandboxesSandboxIDWithBodyWithResponse Update sandbox
+//
+// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PATCH /sandboxes/{sandboxID} (the `PatchSandboxesSandboxID` operationId).
+func (c *ClientWithResponses) PatchSandboxesSandboxIDWithBodyWithResponse(ctx context.Context, sandboxID SandboxID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchSandboxesSandboxIDResponse, error) {
+	rsp, err := c.PatchSandboxesSandboxIDWithBody(ctx, sandboxID, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePatchSandboxesSandboxIDResponse(rsp)
+}
+
+// PatchSandboxesSandboxIDWithResponse Update sandbox
+//
+// Change a running sandbox in place. Today this resizes its guest memory (`memoryMB`) for a sandbox of a template built with maxMemoryMB: memory above the template's memoryMB is hotplugged into the running guest, no restart and no snapshot. Returns the sandbox with the requested `memoryMB` and the achieved `currentMemoryMB`.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PATCH /sandboxes/{sandboxID} (the `PatchSandboxesSandboxID` operationId).
+func (c *ClientWithResponses) PatchSandboxesSandboxIDWithResponse(ctx context.Context, sandboxID SandboxID, body PatchSandboxesSandboxIDJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchSandboxesSandboxIDResponse, error) {
+	rsp, err := c.PatchSandboxesSandboxID(ctx, sandboxID, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePatchSandboxesSandboxIDResponse(rsp)
+}
+
 // PostSandboxesSandboxIDConnectWithBodyWithResponse Connect sandbox
 //
 // Returns sandbox details. If the sandbox is paused, it will be resumed. TTL is only extended.
@@ -14728,7 +15000,7 @@ func (c *ClientWithResponses) PostSandboxesSandboxIDConnectWithResponse(ctx cont
 
 // PostSandboxesSandboxIDForkWithBodyWithResponse Fork sandbox
 //
-// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
+// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`). 409 with `error_code` `checkpoint_unsupported` when the node rejects the in-place checkpoint while keeping the sandbox running (e.g. block volumes on a node without in-place checkpoint support); no fork is attempted and no snapshot or revision is recorded.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -14743,7 +15015,7 @@ func (c *ClientWithResponses) PostSandboxesSandboxIDForkWithBodyWithResponse(ctx
 
 // PostSandboxesSandboxIDForkWithResponse Fork sandbox
 //
-// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`).
+// Fork the sandbox: checkpoint the running sandbox in place (it is briefly paused, snapshotted with its full memory state, and resumed on its node, keeping its ID and expiration untouched) and create count new sandboxes from that snapshot. Returns one result per requested fork, each carrying either the created sandbox or the error that prevented it from starting. A non-201 status means the request failed before any fork was attempted, and before the checkpoint: a refused fork leaves no snapshot and no block volume revision behind. 409 when the sandbox is not running (e.g. paused) or when it mounts block volumes and `allowSharedIdentity` is not true (`error_code` `block_volume_shared_identity_required`). 409 with `error_code` `checkpoint_unsupported` when the node rejects the in-place checkpoint while keeping the sandbox running (e.g. block volumes on a node without in-place checkpoint support); no fork is attempted and no snapshot or revision is recorded.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -16892,6 +17164,67 @@ func ParseGetSandboxesSandboxIDResponse(rsp *http.Response) (*GetSandboxesSandbo
 			return nil, err
 		}
 		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest N500
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePatchSandboxesSandboxIDResponse parses an HTTP response from a PatchSandboxesSandboxIDWithResponse call
+func ParsePatchSandboxesSandboxIDResponse(rsp *http.Response) (*PatchSandboxesSandboxIDResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PatchSandboxesSandboxIDResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest SandboxDetail
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest N400
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest N401
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest N404
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest N500

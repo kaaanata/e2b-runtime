@@ -21,7 +21,6 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/fc/models"
 	"github.com/e2b-dev/infra/packages/shared/pkg/featureflags"
 	"github.com/e2b-dev/infra/packages/shared/pkg/id"
-	"github.com/e2b-dev/infra/packages/shared/pkg/units"
 	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
 )
 
@@ -112,10 +111,15 @@ func (cs *CreateSandbox) Sandbox(
 	layerExecutor *LayerExecutor,
 	sourceTemplate sbxtemplate.Template,
 ) (s *sandbox.Sandbox, err error) {
+	// Every boot of a build with a hotplug device carries it (plugged 0), so
+	// this layer's snapshot records the device and the full-size memory file.
+	cs.config.MemoryHotplug = layerExecutor.Config.MemoryHotplug.Clone()
+
 	// Create new memfile with the size of the sandbox RAM, this updates the underlying memfile.
-	// This is ok as the sandbox is started from the beginning.
+	// This is ok as the sandbox is started from the beginning. With a hotplug
+	// device it also covers the hotplug region (holes read as zeros).
 	memfile, err := block.NewEmpty(
-		units.MBToBytes(cs.config.RamMB),
+		cs.config.MemfileSizeBytes(),
 		config.MemfilePageSize(cs.config.HugePages),
 		uuid.MustParse(sourceTemplate.Files().BuildID),
 	)
@@ -188,6 +192,12 @@ func (cs *CreateSandbox) Sandbox(
 	)
 	if err != nil {
 		return nil, fmt.Errorf("wait for envd: %w", err)
+	}
+
+	// Fail the build now, not the first resize of a sandbox: a guest kernel
+	// without CONFIG_VIRTIO_MEM never activates the device.
+	if err := sbx.VerifyMemoryHotplug(ctx); err != nil {
+		return nil, err
 	}
 
 	return sbx, nil
