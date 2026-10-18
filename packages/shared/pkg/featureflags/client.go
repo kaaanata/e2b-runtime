@@ -57,8 +57,14 @@ func NewClientWithDatasource(source *ldtestdata.TestDataSource) (*Client, error)
 
 func NewClient() (*Client, error) {
 	if launchDarklyApiKey == "" {
+		if err := applyEnvOverrides(context.Background()); err != nil {
+			return nil, err
+		}
+
 		return NewClientWithDatasource(launchDarklyOfflineStore)
 	}
+
+	warnIgnoredOverrides(context.Background())
 
 	ldClient, err := ldclient.MakeClient(launchDarklyApiKey, waitForInit)
 	if err != nil {
@@ -76,6 +82,10 @@ func NewClientWithLogLevel(logLevel ldlog.LogLevel) (*Client, error) {
 	}
 
 	if launchDarklyApiKey == "" {
+		if err := applyEnvOverrides(context.Background()); err != nil {
+			return nil, err
+		}
+
 		cfg.DataSource = launchDarklyOfflineStore
 		// Disable all outbound network traffic when no API key is configured.
 		cfg.Events = ldcomponents.NoEvents()
@@ -87,6 +97,8 @@ func NewClientWithLogLevel(logLevel ldlog.LogLevel) (*Client, error) {
 
 		return &Client{ld: ldClient}, nil
 	}
+
+	warnIgnoredOverrides(context.Background())
 
 	ldClient, err := ldclient.MakeCustomClient(launchDarklyApiKey, cfg, waitForInit)
 	if err != nil {
