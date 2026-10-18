@@ -40,12 +40,26 @@ type Firewall struct {
 	userDenySet  set.Set
 	userAllowSet set.Set
 
+	// Deployment egress allow-list (SANDBOX_EGRESS_ALLOW). Each set is nil when
+	// it has no entries, so nodes without the feature keep the exact previous
+	// ruleset. egressAllowSet holds the port-less entries (all protocols),
+	// egressAllowPortSet the port-scoped ones (ip daddr . tcp dport).
+	egressAllowSet     *set.Set
+	egressAllowCIDRs   []string
+	egressAllowPortSet *nftables.Set
+	egressAllowPorts   []sandbox_network.EgressAllowEntry
+
 	tapInterface string
 
 	allowedRanges []string
 }
 
-func NewFirewall(tapIf string, orchestratorInternalIP string, extraAllowedCIDRs []string) (_ *Firewall, err error) {
+// NewFirewall creates the per-slot nftables firewall. extraAllowedCIDRs
+// (ALLOW_SANDBOX_INTERNAL_CIDRS) are accepted for every protocol ahead of the
+// predefined deny set. egressAllow (SANDBOX_EGRESS_ALLOW) is accepted ahead of
+// the predefined deny set too, but unlike extraAllowedCIDRs the sandbox's own
+// allowOut/denyOut still apply to it (see installRules).
+func NewFirewall(tapIf string, orchestratorInternalIP string, extraAllowedCIDRs []string, egressAllow sandbox_network.EgressAllowList) (_ *Firewall, err error) {
 	conn, err := nftables.New(nftables.AsLasting())
 	if err != nil {
 		return nil, fmt.Errorf("new nftables conn: %w", err)
@@ -93,6 +107,38 @@ func NewFirewall(tapIf string, orchestratorInternalIP string, extraAllowedCIDRs 
 		return nil, fmt.Errorf("new allow set: %w", err)
 	}
 
+	// Port-less deployment allow-list entries: a plain IPv4 interval set.
+	var egressAllowSet *set.Set
+	egressAllowCIDRs := egressAllow.PortlessCIDRs()
+	if len(egressAllowCIDRs) > 0 {
+		s, err := set.New(conn, table, egressAllowSetName, nftables.TypeIPAddr)
+		if err != nil {
+			return nil, fmt.Errorf("new egress allow set: %w", err)
+		}
+		egressAllowSet = &s
+	}
+
+	// Port-scoped deployment allow-list entries need a concatenated interval set
+	// (ip . port ranges); only create it when there is something to put in it.
+	var egressAllowPortSet *nftables.Set
+	egressAllowPorts := egressAllow.PortScoped()
+	if len(egressAllowPorts) > 0 {
+		keyType, err := egressAllowPortKeyType()
+		if err != nil {
+			return nil, fmt.Errorf("egress allow port set key type: %w", err)
+		}
+		egressAllowPortSet = &nftables.Set{
+			Table:         table,
+			Name:          egressAllowPortSetName,
+			KeyType:       keyType,
+			Interval:      true,
+			Concatenation: true,
+		}
+		if err := conn.AddSet(egressAllowPortSet, nil); err != nil {
+			return nil, fmt.Errorf("new egress allow port set: %w", err)
+		}
+	}
+
 	controlIP := fmt.Sprintf("%s/32", orchestratorInternalIP)
 
 	fw := &Firewall{
@@ -102,12 +148,13 @@ func NewFirewall(tapIf string, orchestratorInternalIP string, extraAllowedCIDRs 
 		predefinedAllowSet: alwaysAllowSet,
 		userDenySet:        denySet,
 		userAllowSet:       allowSet,
+		egressAllowSet:     egressAllowSet,
+		egressAllowCIDRs:   egressAllowCIDRs,
+		egressAllowPortSet: egressAllowPortSet,
+		egressAllowPorts:   egressAllowPorts,
 		tapInterface:       tapIf,
-		allowedRanges: append(
-			[]string{controlIP},
-			extraAllowedCIDRs...,
-		),
-		filterChain: filterChain,
+		allowedRanges:      append([]string{controlIP}, extraAllowedCIDRs...),
+		filterChain:        filterChain,
 	}
 
 	// Install default rules and initial set data in a single flush.
@@ -248,6 +295,69 @@ func (fw *Firewall) addNonTCPSetFilterRule(ipSet *nftables.Set, drop bool) {
 	})
 }
 
+// addTCPPortSetAcceptRule buffers a rule that accepts TCP packets whose
+// destination address . destination port is in a concatenated
+// ipv4_addr . inet_service set. Non-TCP traffic is NOT affected. Buffer-only;
+// the caller flushes.
+func (fw *Firewall) addTCPPortSetAcceptRule(ipPortSet *nftables.Set) {
+	fw.conn.AddRule(&nftables.Rule{
+		Table: fw.table,
+		Chain: fw.filterChain,
+		Exprs: append(append(fw.tapIfaceMatch(),
+			// Match TCP only (the port is a TCP port).
+			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpEq,
+				Register: 1,
+				Data:     []byte{unix.IPPROTO_TCP},
+			},
+			// ip daddr -> register 1, tcp dport -> the next 32-bit register, so the
+			// lookup key starting at register 1 is the concatenation ip . port.
+			expressions.IPv4DestinationAddress(1),
+			&expr.Payload{
+				DestRegister: egressAllowPortRegister,
+				Base:         expr.PayloadBaseTransportHeader,
+				Offset:       2, // TCP destination port
+				Len:          2,
+			},
+			&expr.Lookup{
+				SourceRegister: 1,
+				SetName:        ipPortSet.Name,
+				SetID:          ipPortSet.ID,
+			}),
+			accept()...,
+		),
+	})
+}
+
+// addNonTCPSetPairFilterRule buffers a rule that matches ONLY non-TCP traffic
+// whose destination address is in BOTH sets. If drop is true, packets are
+// dropped, otherwise accepted. Buffer-only; the caller flushes.
+func (fw *Firewall) addNonTCPSetPairFilterRule(first, second *nftables.Set, drop bool) {
+	verdict := accept()
+	if drop {
+		verdict = []expr.Any{&expr.Verdict{Kind: expr.VerdictDrop}}
+	}
+
+	fw.conn.AddRule(&nftables.Rule{
+		Table: fw.table,
+		Chain: fw.filterChain,
+		Exprs: append(append(fw.tapIfaceMatch(),
+			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+			&expr.Cmp{
+				Op:       expr.CmpOpNeq,
+				Register: 1,
+				Data:     []byte{unix.IPPROTO_TCP},
+			},
+			// A lookup only reads the register, so both sets see the same address.
+			expressions.IPv4DestinationAddress(1),
+			expressions.IPSetLookUp(first, 1),
+			expressions.IPSetLookUp(second, 1)),
+			verdict...,
+		),
+	})
+}
+
 // addEstablishedAcceptRule buffers a rule that accepts ESTABLISHED/RELATED
 // return traffic from the tap interface, so response packets are allowed even
 // when the source sits in a deny set. Buffer-only; the caller flushes.
@@ -294,11 +404,26 @@ func (fw *Firewall) addTapDropRule() {
 func (fw *Firewall) installRules(byop bool) {
 	// FILTER CHAIN (PREROUTING, priority -150)
 	//   1. ESTABLISHED/RELATED → accept
-	//   2. predefinedAllowSet → accept (all protocols)
+	//   2. predefinedAllowSet → accept (all protocols): orchestrator IP and
+	//      ALLOW_SANDBOX_INTERNAL_CIDRS
+	//   2a. TCP: egressAllowPortSet (ip daddr . tcp dport) → accept
+	//   2b. Non-TCP: egressAllowSet ∩ userAllowSet → accept
+	//   2c. Non-TCP: egressAllowSet ∩ userDenySet → DROP
+	//   2d. egressAllowSet → accept (all protocols)
 	//   3. predefinedDenySet → DROP (all protocols, or non-TCP only when byop)
 	//   4. Non-TCP: userAllowSet → accept
 	//   5. Non-TCP: userDenySet → DROP
 	//   6. Default: ACCEPT (TCP handled by iptables REDIRECT in host netns)
+	//
+	// Rules 2a–2d exist only when SANDBOX_EGRESS_ALLOW has entries of that kind.
+	// Precedence: the deployment allow-list is an operator decision for the whole
+	// node, so it beats the predefined private-range deny set (rule 3), but the
+	// sandbox's own rules still apply to it. TCP it accepts still goes through
+	// the iptables REDIRECT to the TCP firewall, which evaluates allowOut/denyOut;
+	// rules 2b/2c give non-TCP the same allowOut-before-denyOut order as rules
+	// 4/5. Port-scoped entries cover TCP only, so non-TCP to them falls through
+	// to rule 3 and stays denied. DenyEgress replaces the whole chain and ignores
+	// the allow-list.
 
 	// Rule 1: Allow ESTABLISHED/RELATED connections - all protocols
 	// This ensures response packets are allowed even if the source is in predefinedDenySet
@@ -306,6 +431,18 @@ func (fw *Firewall) installRules(byop bool) {
 
 	// Rule 2: predefinedAllowSet → accept (all protocols)
 	fw.addSetFilterRule(fw.predefinedAllowSet.Set(), false)
+
+	// Rule 2a: TCP + egressAllowPortSet → accept, ahead of the deny verdict.
+	if fw.egressAllowPortSet != nil {
+		fw.addTCPPortSetAcceptRule(fw.egressAllowPortSet)
+	}
+
+	// Rules 2b–2d: port-less deployment entries, honouring the sandbox's rules.
+	if fw.egressAllowSet != nil {
+		fw.addNonTCPSetPairFilterRule(fw.egressAllowSet.Set(), fw.userAllowSet.Set(), false)
+		fw.addNonTCPSetPairFilterRule(fw.egressAllowSet.Set(), fw.userDenySet.Set(), true)
+		fw.addSetFilterRule(fw.egressAllowSet.Set(), false)
+	}
 
 	// Rule 3: predefinedDenySet → DROP (all protocols, or non-TCP only in BYOP).
 	if byop {
@@ -342,6 +479,25 @@ func (fw *Firewall) bufferUserRules(allowedCIDRs, deniedCIDRs []string) error {
 	}
 	if err := fw.predefinedAllowSet.ClearAndAddElements(fw.conn, allowedSetData); err != nil {
 		return fmt.Errorf("reset predefined allow set: %w", err)
+	}
+
+	// 2a. Reset the port-less deployment allow set (buffered, no flush).
+	if fw.egressAllowSet != nil {
+		if err := clearAndReplaceCIDRs(fw.conn, *fw.egressAllowSet, fw.egressAllowCIDRs); err != nil {
+			return fmt.Errorf("reset egress allow set: %w", err)
+		}
+	}
+
+	// 2b. Reset the port-scoped deployment allow set (buffered, no flush).
+	if fw.egressAllowPortSet != nil {
+		elements, err := egressAllowPortSetElements(fw.egressAllowPorts)
+		if err != nil {
+			return fmt.Errorf("encode egress allow port set: %w", err)
+		}
+		fw.conn.FlushSet(fw.egressAllowPortSet)
+		if err := fw.conn.SetAddElements(fw.egressAllowPortSet, elements); err != nil {
+			return fmt.Errorf("reset egress allow port set: %w", err)
+		}
 	}
 
 	// 3. Replace user deny set with new denied CIDRs (buffered, no flush).
