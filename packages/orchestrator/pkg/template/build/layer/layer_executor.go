@@ -142,11 +142,7 @@ func (lb *LayerExecutor) BuildLayer(
 	}
 
 	// Prepare metadata
-	meta = meta.NewVersionTemplate(metadata.TemplateMetadata{
-		BuildID:            cmd.CurrentLayer.Template.BuildID,
-		KernelVersion:      sbx.Config.FirecrackerConfig.KernelVersion,
-		FirecrackerVersion: sbx.Config.FirecrackerConfig.FirecrackerVersion,
-	})
+	meta = layerMetadata(meta, cmd.CurrentLayer.Template.BuildID, sbx.Config)
 	err = lb.PauseAndUpload(
 		ctx,
 		userLogger,
@@ -160,6 +156,23 @@ func (lb *LayerExecutor) BuildLayer(
 	}
 
 	return meta, nil
+}
+
+// layerMetadata derives the metadata of the layer snapshot about to be taken
+// of a build VM with the given config. It is the one place every VM-built
+// layer of a build (base, each step, finalize) passes through, so it also
+// stamps the virtio-mem device the VM actually carries: the snapshot's device
+// table and memory file have it whichever phase produced the layer, and the
+// next layer's resume (sandbox.Config.adoptMemoryHotplug) checks the build's
+// device against this metadata. The VM's config is the truth here, not the
+// build config: a create boots with the build's device, a resume adopts the
+// snapshot's. A nil device clears the field and its capability.
+func layerMetadata(meta metadata.Template, buildID string, sbxConfig *sandbox.Config) metadata.Template {
+	return meta.NewVersionTemplate(metadata.TemplateMetadata{
+		BuildID:            buildID,
+		KernelVersion:      sbxConfig.FirecrackerConfig.KernelVersion,
+		FirecrackerVersion: sbxConfig.FirecrackerConfig.FirecrackerVersion,
+	}).WithMemoryHotplug(sbxConfig.MemoryHotplug)
 }
 
 // updateEnvdInSandbox updates the envd binary in the sandbox to the latest version.
