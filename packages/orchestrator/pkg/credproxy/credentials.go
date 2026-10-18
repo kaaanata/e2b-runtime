@@ -159,5 +159,6 @@ func accessExpiry(token string) time.Time {
 	if json.Unmarshal(raw, &claims) != nil || claims.Exp <= 0 {
 		return time.Time{}
 	}
+
 	return time.Unix(claims.Exp, 0)
 }

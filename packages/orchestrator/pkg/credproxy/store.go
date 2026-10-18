@@ -173,6 +173,7 @@ func (s *Store) current(ctx context.Context, p Provider, force bool) (Credential
 			e.credential = next
 			e.pending = s.save(next) != nil
 		}
+
 		return Credential{}, err
 	}
 	// Retain a rotated refresh token in memory even if disk persistence fails.
@@ -251,6 +252,7 @@ func (s *Store) refresh(ctx context.Context, c Credential) (Credential, error) {
 	}
 	if out.Access == "" || !c.ExpiresAt.After(time.Now()) {
 		c.ExpiresAt = time.Now()
+
 		return c, errors.New("invalid refresh token expiry")
 	}
 	if len(out.Scope) > 0 {
