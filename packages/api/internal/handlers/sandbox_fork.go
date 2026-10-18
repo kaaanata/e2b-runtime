@@ -17,7 +17,6 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/sandbox"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
 	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
-	"github.com/e2b-dev/infra/packages/db/pkg/types"
 	"github.com/e2b-dev/infra/packages/shared/pkg/apierrors"
 	"github.com/e2b-dev/infra/packages/shared/pkg/ginutils"
 	"github.com/e2b-dev/infra/packages/shared/pkg/id"
@@ -140,7 +139,7 @@ func (a *APIStore) PostSandboxesSandboxIDFork(c *gin.Context, sandboxID api.Sand
 	// that before checkpointing: the checkpoint would seal a revision of
 	// every block volume for forks that can never start.
 	allowSharedIdentity := sharedUtils.DerefOrDefault(body.AllowSharedIdentity, false)
-	if !allowSharedIdentity && hasBlockVolumeMounts(original.VolumeMounts) {
+	if !allowSharedIdentity && original.HasBlockVolumeMounts() {
 		apierrors.SendAPIError(c, &api.APIError{
 			Code:      http.StatusConflict,
 			ErrorCode: errCodeSharedIdentityRequired,
@@ -155,6 +154,7 @@ func (a *APIStore) PostSandboxesSandboxIDFork(c *gin.Context, sandboxID api.Sand
 	// keeps its ID, expiration, and concurrency slot.
 	err = backend.CheckpointSandbox(ctx, teamID, sandboxID)
 	var transErr *sandbox.InvalidStateTransitionError
+	var rejectedErr *orchestrator.CheckpointRejectedError
 
 	switch {
 	case err == nil:
@@ -169,6 +169,17 @@ func (a *APIStore) PostSandboxesSandboxIDFork(c *gin.Context, sandboxID api.Sand
 		return
 	case errors.Is(err, orchestrator.PauseQueueExhaustedError{}):
 		a.sendAPIStoreError(c, http.StatusServiceUnavailable, fmt.Sprintf("Sandbox '%s' cannot be forked right now because its node is busy, please retry", sandboxID))
+
+		return
+	case errors.As(err, &rejectedErr):
+		// The node refused before (or rolled back) the pause: the sandbox
+		// keeps running and was restored to Running, so this is a conflict
+		// with its current state, not a server error.
+		apierrors.SendAPIError(c, &api.APIError{
+			Code:      http.StatusConflict,
+			ErrorCode: errCodeCheckpointUnsupported,
+			ClientMsg: fmt.Sprintf("Sandbox '%s' cannot be forked: the checkpoint was rejected: %s", sandboxID, rejectedErr.Reason),
+		})
 
 		return
 	default:
@@ -234,15 +245,4 @@ func forkHandleNotRunningSandbox(ctx context.Context, a *APIStore, sandboxID str
 	}
 
 	return apiErr
-}
-
-// hasBlockVolumeMounts reports whether a sandbox record mounts a block volume.
-func hasBlockVolumeMounts(mounts []*types.SandboxVolumeMountConfig) bool {
-	for _, m := range mounts {
-		if m.IsBlock() {
-			return true
-		}
-	}
-
-	return false
 }

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,8 +14,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
+	"github.com/e2b-dev/infra/packages/api/internal/orchestrator"
 	"github.com/e2b-dev/infra/packages/api/internal/sandbox"
 	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
 	authtypes "github.com/e2b-dev/infra/packages/auth/pkg/types"
@@ -23,11 +28,12 @@ import (
 )
 
 // forkBackendStub serves a fixed sandbox record and counts checkpoints; the
-// checkpoint answers with an invalid state transition so the handler stops
-// before starting any fork.
+// checkpoint answers with checkpointErr, by default an invalid state
+// transition, so the handler stops before starting any fork.
 type forkBackendStub struct {
-	sbx         sandbox.Sandbox
-	checkpoints int
+	sbx           sandbox.Sandbox
+	checkpoints   int
+	checkpointErr error
 }
 
 func (s *forkBackendStub) GetSandbox(context.Context, uuid.UUID, string) (sandbox.Sandbox, error) {
@@ -36,6 +42,10 @@ func (s *forkBackendStub) GetSandbox(context.Context, uuid.UUID, string) (sandbo
 
 func (s *forkBackendStub) CheckpointSandbox(context.Context, uuid.UUID, string) error {
 	s.checkpoints++
+
+	if s.checkpointErr != nil {
+		return s.checkpointErr
+	}
 
 	return &sandbox.InvalidStateTransitionError{CurrentState: sandbox.StatePausing, TargetState: sandbox.StateRunning}
 }
@@ -112,4 +122,46 @@ func TestSandboxFork_AdmittedForksCheckpoint(t *testing.T) {
 	backend = &forkBackendStub{sbx: nfsOnly}
 	postFork(t, backend, api.SandboxForkRequest{})
 	assert.Equal(t, 1, backend.checkpoints, "sandboxes without block volumes need no allowSharedIdentity")
+}
+
+// A checkpoint the node refuses with FailedPrecondition leaves the sandbox
+// running (CheckpointSandbox restored it to Running), so the fork is a 409
+// with a machine-readable code, never a 500 — whatever the node's reason.
+func TestSandboxFork_CheckpointRejectedIsConflict(t *testing.T) {
+	t.Parallel()
+
+	for name, reason := range map[string]string{
+		"capability":   "sandbox 'x' cannot be checkpointed: sandboxes with workspace block volumes require an in-place checkpoint",
+		"artifact":     "error snapshotting sandbox 'x': disk full",
+		"envd too old": "envd version 0.1.0 does not support snapshots",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			grpcErr := status.Error(codes.FailedPrecondition, reason)
+			backend := &forkBackendStub{
+				sbx:           blockSandbox(),
+				checkpointErr: fmt.Errorf("wrapped: %w", &orchestrator.CheckpointRejectedError{Reason: reason, Err: grpcErr}),
+			}
+			recorder := postFork(t, backend, api.SandboxForkRequest{AllowSharedIdentity: new(true)})
+
+			require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
+			assert.Equal(t, 1, backend.checkpoints)
+
+			var apiErr api.Error
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &apiErr))
+			require.NotNil(t, apiErr.ErrorCode)
+			assert.Equal(t, errCodeCheckpointUnsupported, *apiErr.ErrorCode)
+			assert.Contains(t, apiErr.Message, reason)
+		})
+	}
+}
+
+// Any other checkpoint failure (the node killed the sandbox) stays a 500.
+func TestSandboxFork_CheckpointFailureIsServerError(t *testing.T) {
+	t.Parallel()
+
+	backend := &forkBackendStub{sbx: blockSandbox(), checkpointErr: errors.New("checkpoint failed: boom")}
+	recorder := postFork(t, backend, api.SandboxForkRequest{AllowSharedIdentity: new(true)})
+	require.Equal(t, http.StatusInternalServerError, recorder.Code, recorder.Body.String())
 }

@@ -22,6 +22,11 @@ const (
 	// errCodeVolumeResizeInvalid: a resume asked to shrink a block volume, or
 	// to resize the volumes of a sandbox that is running (409).
 	errCodeVolumeResizeInvalid = "volume_resize_invalid"
+	// errCodeCheckpointUnsupported: the node refused the in-place checkpoint
+	// of a fork (FailedPrecondition, e.g. a workspace block volume on a
+	// Firecracker without in-place checkpoint); the sandbox keeps running
+	// (409).
+	errCodeCheckpointUnsupported = "checkpoint_unsupported"
 )
 
 const errMsgSharedIdentityRequired = "Forking a sandbox with block volumes resumes the same memory and filesystem identity in every fork; " +

@@ -134,6 +134,18 @@ type Sandbox struct {
 	State State `json:"state"`
 }
 
+// HasBlockVolumeMounts reports whether the sandbox mounts a workspace block
+// volume.
+func (s Sandbox) HasBlockVolumeMounts() bool {
+	for _, m := range s.VolumeMounts {
+		if m.IsBlock() {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (s Sandbox) ToAPISandbox() *api.Sandbox {
 	return &api.Sandbox{
 		SandboxID:          s.SandboxID,
