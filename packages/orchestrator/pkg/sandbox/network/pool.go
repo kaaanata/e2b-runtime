@@ -17,6 +17,7 @@ import (
 
 	"github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
+	sandbox_network "github.com/e2b-dev/infra/packages/shared/pkg/sandbox-network"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 	"github.com/e2b-dev/infra/packages/shared/pkg/utils"
 )
@@ -70,6 +71,17 @@ type Config struct {
 	// These are allowed before the private-range deny rules, so they can
 	// reach hosts in the 10.0.0.0/8, 172.16.0.0/12, etc. blocks.
 	AllowSandboxInternalCIDRs []string `env:"ALLOW_SANDBOX_INTERNAL_CIDRS" envDefault:"" envSeparator:","`
+
+	// Deployment-level egress allow-list: comma-separated IP[/prefix][:port]
+	// entries (IPv4), e.g. "192.168.0.232:18781,10.1.0.0/16". Every sandbox and
+	// template-build VM on the node may reach them even though they fall into
+	// the predefined private-range deny set. An entry with a port opens TCP to
+	// that port only; one without a port opens every protocol and port. Unlike
+	// ALLOW_SANDBOX_INTERNAL_CIDRS, a sandbox's own allowOut/denyOut still apply
+	// to it (TCP in the TCP firewall, other protocols in the slot nftables
+	// chain), so a sandbox's explicit denyOut can block it. Parsed and validated
+	// at startup: an invalid value refuses to start.
+	SandboxEgressAllow sandbox_network.EgressAllowList `env:"SANDBOX_EGRESS_ALLOW" envDefault:""`
 
 	// TCP firewall ports - separate ports for different traffic types to avoid
 	// protocol detection blocking on server-first protocols like SSH.

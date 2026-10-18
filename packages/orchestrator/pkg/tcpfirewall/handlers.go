@@ -6,7 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
+	"net/netip"
 	"strings"
 	"syscall"
 	"time"
@@ -171,7 +173,7 @@ func proxyWithIPVerification(ctx context.Context, c egressConn, upstreamAddr str
 						return fmt.Errorf("failed to parse IP from resolved address %q", host)
 					}
 
-					if isIPInAlwaysDeniedCIDRs(resolvedIP) {
+					if isResolvedUpstreamDenied(resolvedIP, c.dstPort, c.egressAllow) {
 						c.logger.Warn(ctx, "Blocked connection to internal IP via hostname",
 							zap.String("upstream_addr", addr),
 							zap.String("resolved_ip", resolvedIP.String()))
@@ -259,6 +261,24 @@ func matchDomain(hostname, pattern string) bool {
 	}
 
 	return false
+}
+
+// isResolvedUpstreamDenied reports whether a hostname that resolved to ip must
+// not be dialed on port: ip is in the predefined private-range deny set and the
+// deployment egress allow-list does not open ip:port. This mirrors the kernel
+// rule order (deployment allow-list ahead of the predefined deny set), so a
+// domain-allowed hostname may resolve to an operator-allowed LAN host:port.
+func isResolvedUpstreamDenied(ip net.IP, port int, egressAllow sandbox_network.EgressAllowList) bool {
+	if !isIPInAlwaysDeniedCIDRs(ip) {
+		return false
+	}
+
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok || port <= 0 || port > math.MaxUint16 {
+		return true
+	}
+
+	return !egressAllow.Allows(addr, uint16(port))
 }
 
 // isIPInAlwaysDeniedCIDRs checks if an IP is within the denied sandbox CIDRs (internal/private ranges).
