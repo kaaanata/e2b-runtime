@@ -150,6 +150,9 @@ func (ppb *PostProcessingBuilder) Layer(
 	// The hotplug device, stamped the same way: every boot of this build
 	// carried it, and WithMemoryHotplug pairs it with the capability a reader
 	// needs. A nil device clears both, whatever the source layer recorded.
+	// layer.BuildLayer stamps the finalize VM's device again when it pauses,
+	// as it does for every layer of the build; the two agree, as the finalize
+	// VM boots with this config's device.
 	result = result.WithMemoryHotplug(ppb.Config.MemoryHotplug)
 
 	return phases.LayerResult{

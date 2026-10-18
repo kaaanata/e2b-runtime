@@ -155,10 +155,12 @@ func (c *Config) setMemory(requestedMB, pluggedMB int64) {
 
 // adoptMemoryHotplug reconciles the config with the snapshot it starts from.
 // The snapshot is authoritative for the device (it carries it in its device
-// table and memory file); a config that names one must name the same one,
-// and the boot memory must be the device's base. A request of 0 takes the
-// size recorded in the snapshot, so an older caller never changes it; any
-// other request must be within the device's range.
+// table and memory file): a config that names one must name the same one,
+// and the boot memory must be the device's base; a config naming none adopts
+// the snapshot's. A config naming a device the snapshot lacks is refused, as
+// that snapshot's VM has no device to resize. A request of 0 takes the size
+// recorded in the snapshot, so an older caller never changes it; any other
+// request must be within the device's range.
 func (c *Config) adoptMemoryHotplug(meta metadata.Template) error {
 	requested := c.RequestedMemoryMB()
 

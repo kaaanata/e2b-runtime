@@ -127,6 +127,28 @@ func TestConfig_AdoptMemoryHotplug(t *testing.T) {
 		require.ErrorIs(t, low.adoptMemoryHotplug(withDevice), metadata.ErrMemorySizeOutOfRange)
 	})
 
+	// A template build resumes each intermediate layer with a config naming
+	// the build's device (layer.ResumeSandbox). Its layer snapshot was taken
+	// with nothing plugged, so the resume keeps the boot size; the same config
+	// against a layer metadata missing the device is the failure every step of
+	// a hotplug build hit before every layer was stamped.
+	t.Run("build resume of a layer that carries the device", func(t *testing.T) {
+		t.Parallel()
+
+		buildLayer := metadata.Template{}.WithMemoryHotplug(hotplugLayout()).MarkMemoryHotplugPlugged(0)
+		c := NewConfig(Config{RamMB: 8192, MemoryHotplug: hotplugLayout()})
+		require.NoError(t, c.adoptMemoryHotplug(buildLayer))
+		assert.Equal(t, hotplugLayout(), c.MemoryHotplug)
+		assert.Equal(t, int64(8192), c.RequestedMemoryMB())
+
+		want, err := c.resumeHotplugRequest(buildLayer)
+		require.NoError(t, err)
+		assert.Nil(t, want, "the layer restores at boot size")
+
+		unstamped := NewConfig(Config{RamMB: 8192, MemoryHotplug: hotplugLayout()})
+		require.ErrorIs(t, unstamped.adoptMemoryHotplug(metadata.Template{}.MarkMemoryHotplugPlugged(0)), ErrMemoryNotHotResizable)
+	})
+
 	t.Run("hotplug template refuses another boot memory", func(t *testing.T) {
 		t.Parallel()
 
