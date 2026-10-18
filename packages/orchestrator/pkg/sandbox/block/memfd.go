@@ -31,6 +31,23 @@ type Memfd struct {
 	mmap []byte
 }
 
+// memfdMmapFlags are the flags of the read-only view of the guest memfd.
+//
+// MAP_NORESERVE mirrors Firecracker's own mapping of guest memory. Without it,
+// a plain MAP_SHARED mapping of a hugetlb memfd reserves hugepages for the
+// whole file (HugePages_Rsvd rises by the file size and stays reserved until
+// the fd is closed, because hugetlbfs reserves per file), so every resumed VM
+// pinned its full guest size — boot memory plus any hotpluggable region — in
+// the pool even though only touched pages hold data. With MAP_NORESERVE pool
+// pages are consumed only when touched.
+//
+// Trade-off: nothing is reserved up front any more, so an exhausted hugepage
+// pool no longer fails the mapping at resume; instead the faulting access
+// (the guest, or this process when it reads a page that was never populated)
+// gets SIGBUS. Admission must therefore account guest memory against a
+// configured pool budget instead of relying on the reservation to refuse.
+const memfdMmapFlags = unix.MAP_SHARED | unix.MAP_NORESERVE
+
 func NewFromFd(fd int) (*Memfd, error) {
 	var st unix.Stat_t
 	if err := unix.Fstat(fd, &st); err != nil {
@@ -38,7 +55,7 @@ func NewFromFd(fd int) (*Memfd, error) {
 
 		return nil, fmt.Errorf("fstat memfd: %w", err)
 	}
-	b, err := unix.Mmap(fd, 0, int(st.Size), unix.PROT_READ, unix.MAP_SHARED)
+	b, err := unix.Mmap(fd, 0, int(st.Size), unix.PROT_READ, memfdMmapFlags)
 	if err != nil {
 		_ = unix.Close(fd)
 
