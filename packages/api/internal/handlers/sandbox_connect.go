@@ -208,7 +208,7 @@ func (a *APIStore) PostSandboxesSandboxIDConnect(c *gin.Context, sandboxID api.S
 		sandboxID,
 		timeout,
 		teamInfo,
-		a.buildResumeSandboxData(sandboxID, nil, body.Memory, resize, body.MemoryMB, teamInfo.Limits),
+		a.buildResumeSandboxData(sandboxID, nil, body.Memory, resize, body.MemoryMB, body.CpuCount, teamInfo.Limits),
 		&c.Request.Header,
 		true,
 		demandsFilesystemBoot(body.Memory, lastSnapshot.Snapshot),

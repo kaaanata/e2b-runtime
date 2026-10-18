@@ -297,6 +297,16 @@ func (a *APIStore) PostSandboxes(c *gin.Context) {
 		return
 	}
 
+	// vCPUs: the template's count unless a CPU hot resize template is asked
+	// for more.
+	requestedVCPUs := cpuRequestedOrDefault(body.CpuCount, build.Vcpu)
+	if apiErr := validateSandboxCPU(teamInfo.Limits, build.Vcpu, build.MaxVcpu, requestedVCPUs); apiErr != nil {
+		telemetry.ReportErrorByCode(ctx, apiErr.Code, "invalid sandbox vCPU count", apiErr.Err, telemetry.WithTemplateID(env.TemplateID))
+		apierrors.SendAPIError(c, apiErr)
+
+		return
+	}
+
 	sbxVolumeMounts, blockMounts, err := convertAPIVolumesToOrchestratorVolumes(
 		ctx, a.sqlcDB, a.featureFlags, teamInfo.ID, apiVolumeMounts, build,
 	)
@@ -369,6 +379,7 @@ func (a *APIStore) PostSandboxes(c *gin.Context) {
 			RequiredNodeID:          requiredNodeID,
 			VolumeAttacher:          volumeAttacher,
 			RequestedMemoryMB:       requestedMemoryMB,
+			RequestedVCPUs:          requestedVCPUs,
 		}, nil
 	}
 

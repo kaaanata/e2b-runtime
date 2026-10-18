@@ -429,6 +429,7 @@ func snapshotsToPaginatedSandboxes(ctx context.Context, snapshots []queries.GetS
 		}
 
 		memoryMB, maxMemoryMB := pausedMemory(record.BuildRamMb, record.BuildMaxRamMb, record.BuildRequestedRamMb)
+		cpuCount, maxCPUCount := pausedCPU(record.BuildVcpu, record.BuildMaxVcpu, record.BuildRequestedVcpu)
 
 		sandbox := utils.PaginatedSandbox{
 			ListedSandbox: api.ListedSandbox{
@@ -437,7 +438,8 @@ func snapshotsToPaginatedSandboxes(ctx context.Context, snapshots []queries.GetS
 				TemplateID:  snapshot.BaseEnvID,
 				SandboxID:   snapshot.SandboxID,
 				StartedAt:   snapshot.SandboxStartedAt.Time,
-				CpuCount:    int32(record.BuildVcpu),
+				CpuCount:    cpuCount,
+				MaxCpuCount: maxCPUCount,
 				MemoryMB:    memoryMB,
 				MaxMemoryMB: maxMemoryMB,
 				DiskSizeMB:  diskSize,
@@ -481,7 +483,7 @@ func instanceInfoToPaginatedSandboxes(runningSandboxes []sandbox.Sandbox) []util
 				Alias:        info.Alias,
 				SandboxID:    info.SandboxID,
 				StartedAt:    info.StartTime,
-				CpuCount:     api.CPUCount(info.VCpu),
+				CpuCount:     api.CPUCount(info.RequestedVCPUs()),
 				MemoryMB:     api.MemoryMB(info.RequestedMemoryMB()),
 				DiskSizeMB:   api.DiskSizeMB(info.TotalDiskSizeMB),
 				EndAt:        info.EndTime,
@@ -497,6 +499,7 @@ func instanceInfoToPaginatedSandboxes(runningSandboxes []sandbox.Sandbox) []util
 			PaginationTimestamp: info.StartTime.Truncate(time.Microsecond),
 		}
 		setRunningMemory(&sandbox.ListedSandbox.CurrentMemoryMB, &sandbox.ListedSandbox.MaxMemoryMB, info)
+		setRunningCPU(&sandbox.ListedSandbox.CurrentCpuCount, &sandbox.ListedSandbox.MaxCpuCount, info)
 
 		if info.Metadata != nil {
 			meta := api.SandboxMetadata(info.Metadata)

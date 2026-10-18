@@ -397,6 +397,20 @@ components:
       minimum: 128
       description: Memory for the sandbox in MiB
 
+    MaxCPUCount:
+      type: integer
+      format: int32
+      minimum: 1
+      maximum: 32
+      description: >-
+        Largest vCPU count a sandbox of the template can be resized to while it
+        runs (CPU hot resize). The VM is created with this many vCPUs and the
+        guest boots with the template's cpuCount online; the rest stay offline
+        (no host CPU) until a sandbox asks for them, and a host cgroup quota
+        enforces the granted count. At most 32 (Firecracker) and even on x86.
+        Omitted (or equal to cpuCount) for a fixed vCPU count. Needs a guest
+        kernel with CONFIG_HOTPLUG_CPU.
+
     MaxMemoryMB:
       type: integer
       format: int32
@@ -864,7 +878,26 @@ components:
           nullable: true
           description: Base domain where the sandbox traffic is accessible
         cpuCount:
-          $ref: "#/components/schemas/CPUCount"
+          allOf:
+            - $ref: "#/components/schemas/CPUCount"
+          description: >-
+            vCPUs granted to the sandbox. For a running sandbox of a CPU hot
+            resize template this is the last count requested (create, resume or
+            PATCH), enforced by a host CPU quota; for a paused one the count it
+            will resume with. Otherwise the template's cpuCount.
+        currentCpuCount:
+          allOf:
+            - $ref: "#/components/schemas/CPUCount"
+          description: >-
+            CPUs online in the guest when last observed (what nproc reports).
+            Equals cpuCount once a resize settled; omitted for a paused sandbox
+            and for templates without CPU hot resize.
+        maxCpuCount:
+          allOf:
+            - $ref: "#/components/schemas/MaxCPUCount"
+          description: >-
+            Largest cpuCount the sandbox can be resized to (the template's
+            maxCpuCount); omitted when the vCPU count is fixed.
         memoryMB:
           allOf:
             - $ref: "#/components/schemas/MemoryMB"
@@ -939,7 +972,26 @@ components:
           format: date-time
           description: Time when the sandbox will expire
         cpuCount:
-          $ref: "#/components/schemas/CPUCount"
+          allOf:
+            - $ref: "#/components/schemas/CPUCount"
+          description: >-
+            vCPUs granted to the sandbox. For a running sandbox of a CPU hot
+            resize template this is the last count requested (create, resume or
+            PATCH), enforced by a host CPU quota; for a paused one the count it
+            will resume with. Otherwise the template's cpuCount.
+        currentCpuCount:
+          allOf:
+            - $ref: "#/components/schemas/CPUCount"
+          description: >-
+            CPUs online in the guest when last observed (what nproc reports).
+            Equals cpuCount once a resize settled; omitted for a paused sandbox
+            and for templates without CPU hot resize.
+        maxCpuCount:
+          allOf:
+            - $ref: "#/components/schemas/MaxCPUCount"
+          description: >-
+            Largest cpuCount the sandbox can be resized to (the template's
+            maxCpuCount); omitted when the vCPU count is fixed.
         memoryMB:
           allOf:
             - $ref: "#/components/schemas/MemoryMB"
@@ -1048,6 +1100,17 @@ components:
             hotplugged after the sandbox starts. 400 when outside that range;
             409 (`error_code` `memory_not_hot_resizable`) for a template
             without memory hotplug when the value differs from its memoryMB.
+        cpuCount:
+          allOf:
+            - $ref: "#/components/schemas/CPUCount"
+          description: >-
+            vCPUs for the sandbox. Defaults to the template's cpuCount. For a
+            template built with maxCpuCount (CPU hot resize) any count in
+            [cpuCount, maxCpuCount] within the team's limit may be requested:
+            the extra CPUs are brought online in the guest after it starts and
+            a host CPU quota enforces the count. 400 when outside that range;
+            409 (`error_code` `cpu_not_hot_resizable`) for a template without
+            CPU hot resize when the value differs from its cpuCount.
 
     SandboxUpdate:
       type: object
@@ -1063,6 +1126,15 @@ components:
             it pins it the response reports the achieved `currentMemoryMB`
             below `memoryMB` (the guest finishes on its own once the memory
             is freed). The sandbox keeps running in every case.
+        cpuCount:
+          allOf:
+            - $ref: "#/components/schemas/CPUCount"
+          description: >-
+            New vCPU count, within [cpuCount, maxCpuCount] of the sandbox's
+            template. The host CPU quota moves first (immediately, in both
+            directions), then the guest brings CPUs online or offline (~60 ms
+            per CPU); the response's `currentCpuCount` is what the guest has
+            online. Can be combined with memoryMB (memory is resized first).
 
     SandboxIam:
       type: object
@@ -1129,6 +1201,13 @@ components:
             Guest memory to resume with, in MiB, for a sandbox of a memory
             hotplug template; defaults to the size the sandbox had when it
             was paused. Same bounds and errors as on create.
+        cpuCount:
+          allOf:
+            - $ref: "#/components/schemas/CPUCount"
+          description: >-
+            vCPUs to resume with, for a sandbox of a CPU hot resize template;
+            defaults to the count it had when it was paused. Same bounds and
+            errors as on create.
 
     ConnectSandbox:
       type: object
@@ -1164,6 +1243,13 @@ components:
             Guest memory to resume a paused sandbox with, in MiB (memory
             hotplug templates only; ignored for a running sandbox). Same
             bounds and errors as on create.
+        cpuCount:
+          allOf:
+            - $ref: "#/components/schemas/CPUCount"
+          description: >-
+            vCPUs to resume a paused sandbox with (CPU hot resize templates
+            only; ignored for a running sandbox). Same bounds and errors as on
+            create.
 
     ResumeVolumeMount:
       type: object
@@ -1458,6 +1544,12 @@ components:
             Maximum memory of the last successful build when it has memory
             hotplug (sandboxes can be created and resized between memoryMB
             and this); omitted for a fixed-size template.
+        maxCpuCount:
+          allOf:
+            - $ref: "#/components/schemas/MaxCPUCount"
+          description: >-
+            Maximum vCPU count of the last successful build when it has CPU
+            hot resize; omitted for a fixed vCPU count.
 
     TemplateRequestResponseV3:
       required:
@@ -1611,6 +1703,12 @@ components:
           description: >-
             Maximum memory of a build with memory hotplug; omitted for a
             fixed-size build.
+        maxCpuCount:
+          allOf:
+            - $ref: "#/components/schemas/MaxCPUCount"
+          description: >-
+            Maximum vCPU count of a build with CPU hot resize; omitted for a
+            fixed vCPU count.
 
     TemplateWithBuilds:
       required:
@@ -1748,6 +1846,8 @@ components:
           $ref: "#/components/schemas/MemoryMB"
         maxMemoryMB:
           $ref: "#/components/schemas/MaxMemoryMB"
+        maxCpuCount:
+          $ref: "#/components/schemas/MaxCPUCount"
         minFreeDiskMb:
           $ref: "#/components/schemas/MinFreeDiskMb"
 
@@ -1865,6 +1965,13 @@ components:
             - $ref: "#/components/schemas/MaxMemoryMB"
           description: >-
             Overrides the maxMemoryMB given when the build was requested. A
+            build from another template inherits that template's maximum and
+            may only repeat it.
+        maxCpuCount:
+          allOf:
+            - $ref: "#/components/schemas/MaxCPUCount"
+          description: >-
+            Overrides the maxCpuCount given when the build was requested. A
             build from another template inherits that template's maximum and
             may only repeat it.
         layout:
@@ -2455,6 +2562,8 @@ components:
             checkpoint_unsupported. Memory hotplug (409):
             memory_not_hot_resizable (the template has no maxMemoryMB),
             memory_resize_busy (a checkpoint of the sandbox is in progress).
+            CPU hot resize (409): cpu_not_hot_resizable (the template has no
+            maxCpuCount).
         message:
           type: string
           description: Error
@@ -3249,11 +3358,13 @@ paths:
     patch:
       summary: Update sandbox
       description: >-
-        Change a running sandbox in place. Today this resizes its guest memory
-        (`memoryMB`) for a sandbox of a template built with maxMemoryMB:
-        memory above the template's memoryMB is hotplugged into the running
-        guest, no restart and no snapshot. Returns the sandbox with the
-        requested `memoryMB` and the achieved `currentMemoryMB`.
+        Change a running sandbox in place: its guest memory (`memoryMB`) for a
+        sandbox of a template built with maxMemoryMB (memory above the
+        template's memoryMB is hotplugged into the running guest) and/or its
+        vCPU count (`cpuCount`) for a template built with maxCpuCount (guest
+        CPUs brought online/offline, host CPU quota moved). No restart and no
+        snapshot. Returns the sandbox with the requested `memoryMB`/`cpuCount`
+        and the achieved `currentMemoryMB`/`currentCpuCount`.
       tags: [sandboxes]
       security:
         - ApiKeyAuth: []
@@ -3287,8 +3398,9 @@ paths:
         "409":
           description: >-
             The sandbox is not running, its template has no memory hotplug
-            (`error_code` `memory_not_hot_resizable`), or a checkpoint of it
-            is in progress (`memory_resize_busy`).
+            (`error_code` `memory_not_hot_resizable`) or no CPU hot resize
+            (`cpu_not_hot_resizable`), or a checkpoint of it is in progress
+            (`memory_resize_busy`).
           content:
             application/json:
               schema:

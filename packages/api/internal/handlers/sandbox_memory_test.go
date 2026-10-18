@@ -87,10 +87,27 @@ func TestMemoryDefaults(t *testing.T) {
 // resizeBackendStub answers GetSandbox with a fixed record and records the
 // resize it is asked for; resizeErr, when set, is what the node answered.
 type resizeBackendStub struct {
-	sbx       sandbox.Sandbox
-	getErr    error
-	resizeErr *api.APIError
-	resized   []int64
+	sbx        sandbox.Sandbox
+	getErr     error
+	resizeErr  *api.APIError
+	resized    []int64
+	cpuErr     *api.APIError
+	resizedCPU []int64
+	// order records which resize ran, in order ("memory", "cpu").
+	order []string
+}
+
+func (s *resizeBackendStub) ResizeSandboxCPU(_ context.Context, _ uuid.UUID, _ string, vcpus int64) (sandbox.Sandbox, *api.APIError) {
+	s.resizedCPU = append(s.resizedCPU, vcpus)
+	s.order = append(s.order, "cpu")
+	if s.cpuErr != nil {
+		return sandbox.Sandbox{}, s.cpuErr
+	}
+
+	s.sbx.CPUCount = vcpus
+	s.sbx.CurrentCPUCount = vcpus
+
+	return s.sbx, nil
 }
 
 func (s *resizeBackendStub) GetSandbox(context.Context, uuid.UUID, string) (sandbox.Sandbox, error) {
@@ -99,16 +116,16 @@ func (s *resizeBackendStub) GetSandbox(context.Context, uuid.UUID, string) (sand
 
 func (s *resizeBackendStub) ResizeSandboxMemory(_ context.Context, _ uuid.UUID, _ string, memoryMB int64) (sandbox.Sandbox, *api.APIError) {
 	s.resized = append(s.resized, memoryMB)
+	s.order = append(s.order, "memory")
 	if s.resizeErr != nil {
 		return sandbox.Sandbox{}, s.resizeErr
 	}
 
 	// The node reached the request: a grow completes within a second.
-	updated := s.sbx
-	updated.MemoryMB = memoryMB
-	updated.CurrentMemoryMB = memoryMB
+	s.sbx.MemoryMB = memoryMB
+	s.sbx.CurrentMemoryMB = memoryMB
 
-	return updated, nil
+	return s.sbx, nil
 }
 
 func patchSandbox(t *testing.T, backend *resizeBackendStub, teamID uuid.UUID, body any) *httptest.ResponseRecorder {
@@ -128,7 +145,7 @@ func patchSandbox(t *testing.T, backend *resizeBackendStub, teamID uuid.UUID, bo
 	ginCtx.Request.Header.Set("Content-Type", "application/json")
 	auth.SetTeamInfoForTest(t, ginCtx, &authtypes.Team{
 		Team:   &authqueries.Team{ID: teamID},
-		Limits: &authtypes.TeamLimits{MaxLengthHours: 24, MaxRamMb: 65536},
+		Limits: &authtypes.TeamLimits{MaxLengthHours: 24, MaxRamMb: 65536, MaxVcpu: 16},
 	})
 
 	store := &APIStore{resizeBackendOverride: backend}

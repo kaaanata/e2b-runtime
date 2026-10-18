@@ -70,6 +70,8 @@ new_build as (
         ram_mb,
         max_ram_mb,
         requested_ram_mb,
+        max_vcpu,
+        requested_vcpu,
         free_disk_size_mb,
         kernel_version,
         firecracker_version,
@@ -94,14 +96,16 @@ new_build as (
         $19,
         $20,
         $21,
-        $10,
         $22,
+        $23,
+        $10,
+        $24,
         now(),
-        (SELECT eb.cpu_architecture FROM "public"."env_builds" eb WHERE eb.id = $23),
-        (SELECT eb.cpu_family FROM "public"."env_builds" eb WHERE eb.id = $23),
-        (SELECT eb.cpu_model FROM "public"."env_builds" eb WHERE eb.id = $23),
-        (SELECT eb.cpu_model_name FROM "public"."env_builds" eb WHERE eb.id = $23),
-        (SELECT eb.cpu_flags FROM "public"."env_builds" eb WHERE eb.id = $23)
+        (SELECT eb.cpu_architecture FROM "public"."env_builds" eb WHERE eb.id = $25),
+        (SELECT eb.cpu_family FROM "public"."env_builds" eb WHERE eb.id = $25),
+        (SELECT eb.cpu_model FROM "public"."env_builds" eb WHERE eb.id = $25),
+        (SELECT eb.cpu_model_name FROM "public"."env_builds" eb WHERE eb.id = $25),
+        (SELECT eb.cpu_flags FROM "public"."env_builds" eb WHERE eb.id = $25)
     )
     RETURNING id as build_id
 ),
@@ -136,6 +140,8 @@ type UpsertSnapshotParams struct {
 	RamMb               int64
 	MaxRamMb            *int64
 	RequestedRamMb      *int64
+	MaxVcpu             *int64
+	RequestedVcpu       *int64
 	FreeDiskSizeMb      int64
 	KernelVersion       string
 	FirecrackerVersion  string
@@ -174,6 +180,8 @@ func (q *Queries) UpsertSnapshot(ctx context.Context, arg UpsertSnapshotParams) 
 		arg.RamMb,
 		arg.MaxRamMb,
 		arg.RequestedRamMb,
+		arg.MaxVcpu,
+		arg.RequestedVcpu,
 		arg.FreeDiskSizeMb,
 		arg.KernelVersion,
 		arg.FirecrackerVersion,

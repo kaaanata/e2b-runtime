@@ -152,6 +152,22 @@ func (a *APIStore) PostV2TemplatesTemplateIDBuildsBuildID(c *gin.Context, templa
 		maxMemoryMB = maxRamMB
 	}
 
+	// The CPU hot resize maximum, by the same rule.
+	maxCPUCount := build.MaxVcpu
+	if body.MaxCpuCount != nil {
+		maxVCPU, apiErr := teamlimits.LimitMaxCPU(team.Limits, build.Vcpu, body.MaxCpuCount)
+		if apiErr != nil {
+			a.sendAPIStoreError(c, apiErr.Code, apiErr.ClientMsg)
+
+			return
+		}
+
+		if maxVCPU == nil {
+			maxVCPU = new(build.Vcpu)
+		}
+		maxCPUCount = maxVCPU
+	}
+
 	stepsMarshalled, err := json.Marshal(dockerfileStore{
 		FromImage:    body.FromImage,
 		FromTemplate: body.FromTemplate,
@@ -208,6 +224,7 @@ func (a *APIStore) PostV2TemplatesTemplateIDBuildsBuildID(c *gin.Context, templa
 	}
 
 	layout.MaxMemoryMB = maxMemoryMB
+	layout.MaxCPUCount = maxCPUCount
 
 	// Call the Template Manager to build the environment
 	err = a.templateManager.CreateTemplate(

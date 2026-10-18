@@ -88,6 +88,7 @@ func (a *APIStore) GetTemplates(c *gin.Context, params api.GetTemplatesParams) {
 		}
 		tpl.Layout, tpl.WorkspaceSlotCapacityGiB = templateBuildLayoutToAPI(item.BuildLayout, item.BuildWorkspaceSlotCapacityBytes)
 		tpl.MaxMemoryMB = maxMemoryToAPI(item.BuildMaxRamMb)
+		tpl.MaxCpuCount = maxCPUToAPI(item.BuildMaxVcpu)
 		templates = append(templates, tpl)
 	}
 

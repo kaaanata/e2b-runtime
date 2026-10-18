@@ -11,3 +11,13 @@ func maxMemoryToAPI(maxRamMB *int64) *api.MaxMemoryMB {
 
 	return new(api.MaxMemoryMB(*maxRamMB))
 }
+
+// maxCPUToAPI renders env_builds.max_vcpu: the CPU hot resize maximum of a
+// build, nil for a fixed vCPU count (or one that did not record it).
+func maxCPUToAPI(maxVCPU *int64) *api.MaxCPUCount {
+	if maxVCPU == nil {
+		return nil
+	}
+
+	return new(api.MaxCPUCount(*maxVCPU))
+}

@@ -138,6 +138,8 @@ type EnvBuild struct {
 	WorkspaceSlotCapacityBytes []int64
 	MaxRamMb                   pgtype.Int8
 	RequestedRamMb             pgtype.Int8
+	MaxVcpu                    pgtype.Int8
+	RequestedVcpu              pgtype.Int8
 }
 
 type EnvBuildAssignment struct {

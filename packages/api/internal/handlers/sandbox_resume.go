@@ -210,7 +210,7 @@ func (a *APIStore) PostSandboxesSandboxIDResume(c *gin.Context, sandboxID api.Sa
 		sandboxID,
 		timeout,
 		teamInfo,
-		a.buildResumeSandboxData(sandboxID, body.AutoPause, body.Memory, resize, body.MemoryMB, teamInfo.Limits),
+		a.buildResumeSandboxData(sandboxID, body.AutoPause, body.Memory, resize, body.MemoryMB, body.CpuCount, teamInfo.Limits),
 		&c.Request.Header,
 		true,
 		demandsFilesystemBoot(body.Memory, lastSnapshot.Snapshot),
@@ -247,8 +247,8 @@ func convertDatabaseMountsToOrchestratorMounts(volumes []*types.SandboxVolumeMou
 // from its own snapshot. memory is the request's optional memory field; nil
 // (the implicit paths: auto-resume, fork) means a plain resume.
 // resize is the request's validated volumeMounts (nil: no resize).
-func (a *APIStore) buildResumeSandboxData(sandboxID string, autoPauseOverride, memory *bool, resize map[string]int64, memoryMB *api.MemoryMB, limits *authtypes.TeamLimits) orchestrator.SandboxDataFetcher {
-	return a.buildResumeSandboxDataFromSnapshot(sandboxID, sandboxID, autoPauseOverride, memory, false, resize, memoryMB, limits)
+func (a *APIStore) buildResumeSandboxData(sandboxID string, autoPauseOverride, memory *bool, resize map[string]int64, memoryMB *api.MemoryMB, cpuCount *api.CPUCount, limits *authtypes.TeamLimits) orchestrator.SandboxDataFetcher {
+	return a.buildResumeSandboxDataFromSnapshot(sandboxID, sandboxID, autoPauseOverride, memory, false, resize, memoryMB, cpuCount, limits)
 }
 
 const errCodeMemoryOverrideDisabled = "sandbox_memory_override_disabled"
@@ -329,9 +329,10 @@ func resolveFilesystemBoot(ctx context.Context, flags featureFlagsClient, memory
 // differs from snapshotSandboxID when forking — and scopes the envd access token.
 // The returned callback is called inside the sandbox lock to prevent race conditions.
 // memoryMB is the request's optional guest memory (memory hotplug templates;
-// nil keeps the size recorded at pause), validated against the snapshot
-// build and limits (nil: no tier check).
-func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandboxID string, autoPauseOverride, memory *bool, allowSharedIdentity bool, resize map[string]int64, memoryMB *api.MemoryMB, limits *authtypes.TeamLimits) orchestrator.SandboxDataFetcher {
+// nil keeps the size recorded at pause), cpuCount its optional vCPU count
+// (CPU hot resize templates; nil keeps the count granted at pause), both
+// validated against the snapshot build and limits (nil: no tier check).
+func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandboxID string, autoPauseOverride, memory *bool, allowSharedIdentity bool, resize map[string]int64, memoryMB *api.MemoryMB, cpuCount *api.CPUCount, limits *authtypes.TeamLimits) orchestrator.SandboxDataFetcher {
 	return func(ctx context.Context) (orchestrator.SandboxMetadata, *api.APIError) {
 		lastSnapshot, err := a.snapshotCache.Get(ctx, snapshotSandboxID)
 		if err != nil {
@@ -404,6 +405,12 @@ func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandbox
 			return orchestrator.SandboxMetadata{}, apiErr
 		}
 
+		// vCPUs to resume with, by the same rule.
+		requestedVCPUs := cpuRequestedOrDefault(cpuCount, snapshotCPUDefault(build.Vcpu, build.RequestedVcpu))
+		if apiErr := validateSandboxCPU(limits, build.Vcpu, build.MaxVcpu, requestedVCPUs); apiErr != nil {
+			return orchestrator.SandboxMetadata{}, apiErr
+		}
+
 		// Block volumes bind to the revisions recorded with this snapshot
 		// build; resume and fork differ in which incarnation they write.
 		attacher, apiErr := a.planResumeBlockVolumes(ctx, snap.TeamID, build.ID, volumeMounts,
@@ -442,6 +449,7 @@ func (a *APIStore) buildResumeSandboxDataFromSnapshot(snapshotSandboxID, sandbox
 			FilesystemBoot:          filesystemBoot,
 			FilesystemOnlySnapshot:  snapshotIsFilesystemOnly(snap),
 			RequestedMemoryMB:       requestedMemoryMB,
+			RequestedVCPUs:          requestedVCPUs,
 		}, nil
 	}
 }

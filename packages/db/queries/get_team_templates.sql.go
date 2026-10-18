@@ -23,6 +23,7 @@ SELECT e.id, e.created_at, e.updated_at, e.public, e.build_count, e.spawn_count,
        eb.layout as build_layout,
        eb.workspace_slot_capacity_bytes as build_workspace_slot_capacity_bytes,
        eb.max_ram_mb as build_max_ram_mb,
+       eb.max_vcpu as build_max_vcpu,
        COALESCE(latest_build.status_group, 'pending') as build_status,
        e.created_by as creator_id,
        COALESCE(ea.aliases, ARRAY[]::text[])::text[] AS aliases,
@@ -36,7 +37,7 @@ LEFT JOIN LATERAL (
     WHERE env_id = e.id
 ) ea ON TRUE
 LEFT JOIN LATERAL (
-    SELECT b.id, b.created_at, b.updated_at, b.finished_at, b.status, b.dockerfile, b.start_cmd, b.vcpu, b.ram_mb, b.free_disk_size_mb, b.total_disk_size_mb, b.kernel_version, b.firecracker_version, b.env_id, b.envd_version, b.ready_cmd, b.cluster_node_id, b.reason, b.version, b.cpu_architecture, b.cpu_family, b.cpu_model, b.cpu_model_name, b.cpu_flags, b.status_group, b.team_id, b.layout, b.workspace_slot_capacity_bytes, b.max_ram_mb, b.requested_ram_mb
+    SELECT b.id, b.created_at, b.updated_at, b.finished_at, b.status, b.dockerfile, b.start_cmd, b.vcpu, b.ram_mb, b.free_disk_size_mb, b.total_disk_size_mb, b.kernel_version, b.firecracker_version, b.env_id, b.envd_version, b.ready_cmd, b.cluster_node_id, b.reason, b.version, b.cpu_architecture, b.cpu_family, b.cpu_model, b.cpu_model_name, b.cpu_flags, b.status_group, b.team_id, b.layout, b.workspace_slot_capacity_bytes, b.max_ram_mb, b.requested_ram_mb, b.max_vcpu, b.requested_vcpu
     FROM public.env_build_assignments AS ba
     JOIN public.env_builds AS b ON b.id = ba.build_id
     WHERE ba.env_id = e.id AND ba.tag = 'default'
@@ -44,7 +45,7 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) latest_build ON TRUE
 LEFT JOIN LATERAL (
-    SELECT b.id, b.created_at, b.updated_at, b.finished_at, b.status, b.dockerfile, b.start_cmd, b.vcpu, b.ram_mb, b.free_disk_size_mb, b.total_disk_size_mb, b.kernel_version, b.firecracker_version, b.env_id, b.envd_version, b.ready_cmd, b.cluster_node_id, b.reason, b.version, b.cpu_architecture, b.cpu_family, b.cpu_model, b.cpu_model_name, b.cpu_flags, b.status_group, b.team_id, b.layout, b.workspace_slot_capacity_bytes, b.max_ram_mb, b.requested_ram_mb
+    SELECT b.id, b.created_at, b.updated_at, b.finished_at, b.status, b.dockerfile, b.start_cmd, b.vcpu, b.ram_mb, b.free_disk_size_mb, b.total_disk_size_mb, b.kernel_version, b.firecracker_version, b.env_id, b.envd_version, b.ready_cmd, b.cluster_node_id, b.reason, b.version, b.cpu_architecture, b.cpu_family, b.cpu_model, b.cpu_model_name, b.cpu_flags, b.status_group, b.team_id, b.layout, b.workspace_slot_capacity_bytes, b.max_ram_mb, b.requested_ram_mb, b.max_vcpu, b.requested_vcpu
     FROM public.env_build_assignments AS ba
     JOIN public.env_builds AS b ON b.id = ba.build_id
     WHERE ba.env_id = e.id AND ba.tag = 'default' AND b.status_group = 'ready'
@@ -68,6 +69,7 @@ type GetTeamTemplatesRow struct {
 	BuildLayout                     *string
 	BuildWorkspaceSlotCapacityBytes []int64
 	BuildMaxRamMb                   *int64
+	BuildMaxVcpu                    *int64
 	BuildStatus                     types.BuildStatusGroup
 	CreatorID                       *uuid.UUID
 	Aliases                         []string
@@ -104,6 +106,7 @@ func (q *Queries) GetTeamTemplates(ctx context.Context, teamID uuid.UUID) ([]Get
 			&i.BuildLayout,
 			&i.BuildWorkspaceSlotCapacityBytes,
 			&i.BuildMaxRamMb,
+			&i.BuildMaxVcpu,
 			&i.BuildStatus,
 			&i.CreatorID,
 			&i.Aliases,

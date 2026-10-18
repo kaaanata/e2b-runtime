@@ -11,4 +11,8 @@ const (
 	// region (maxMemoryMB - memoryMB). It mirrors the slot size the
 	// template-manager configures, which re-validates the request.
 	MemoryHotplugSlotMB = int64(128)
+
+	// MaxCPUHotplugVCPUs is Firecracker's vcpu_count ceiling, the largest
+	// maxCpuCount a template can be built with.
+	MaxCPUHotplugVCPUs = int64(32)
 )

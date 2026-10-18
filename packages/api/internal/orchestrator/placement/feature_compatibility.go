@@ -53,6 +53,16 @@ var featureGates = []featureGate{
 			return req.GetSandbox().GetRequestedMemoryMb() > 0
 		},
 	},
+	{
+		// An orchestrator without CPU hot resize ignores requested_vcpu: the
+		// guest would run at the template's count while the API records the
+		// request (and a CPU-hotplug template would not restore there: its
+		// metadata capability is refused). Same nominal floor as memory.
+		feature: Feature{name: "cpu-hotplug", minVersion: semver.New(0, 16, 1, "", "")},
+		requested: func(req *orchestrator.SandboxCreateRequest) bool {
+			return req.GetSandbox().GetRequestedVcpu() > 0
+		},
+	},
 }
 
 // FeatureRequirement is the orchestrator-capability constraint a sandbox puts

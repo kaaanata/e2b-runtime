@@ -13,3 +13,15 @@ func requestedMemoryMiB(cfg *orchestrator.SandboxConfig) int64 {
 
 	return cfg.GetRamMb()
 }
+
+// requestedVCPUs is the vCPU count a sandbox occupies on its node for
+// placement and the optimistic allocation: the requested count (CPU hot
+// resize) when the request names one, else the template's count. It mirrors
+// the node's accounting, which counts the granted count (the cgroup quota).
+func requestedVCPUs(cfg *orchestrator.SandboxConfig) int64 {
+	if cfg.GetRequestedVcpu() > 0 {
+		return cfg.GetRequestedVcpu()
+	}
+
+	return cfg.GetVcpu()
+}

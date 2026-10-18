@@ -22,6 +22,8 @@ SELECT COALESCE(ea.aliases, ARRAY[]::text[])::text[] AS aliases, COALESCE(ea.nam
     eb.ram_mb AS build_ram_mb,
     eb.max_ram_mb AS build_max_ram_mb,
     eb.requested_ram_mb AS build_requested_ram_mb,
+    eb.max_vcpu AS build_max_vcpu,
+    eb.requested_vcpu AS build_requested_vcpu,
     eb.total_disk_size_mb AS build_total_disk_size_mb,
     eb.envd_version AS build_envd_version,
     eb.created_at AS build_created_at
@@ -35,7 +37,7 @@ LEFT JOIN LATERAL (
     WHERE env_id = s.base_env_id
 ) ea ON TRUE
 JOIN LATERAL (
-    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.max_ram_mb, eb.requested_ram_mb, eb.total_disk_size_mb, eb.envd_version, eb.created_at
+    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.max_ram_mb, eb.requested_ram_mb, eb.max_vcpu, eb.requested_vcpu, eb.total_disk_size_mb, eb.envd_version, eb.created_at
     FROM "public"."env_build_assignments" eba
     JOIN "public"."env_builds" eb ON eb.id = eba.build_id
     WHERE
@@ -74,6 +76,8 @@ type GetSnapshotsByTemplateWithCursorRow struct {
 	BuildRamMb           int64
 	BuildMaxRamMb        *int64
 	BuildRequestedRamMb  *int64
+	BuildMaxVcpu         *int64
+	BuildRequestedVcpu   *int64
 	BuildTotalDiskSizeMb *int64
 	BuildEnvdVersion     *string
 	BuildCreatedAt       time.Time
@@ -117,6 +121,8 @@ func (q *Queries) GetSnapshotsByTemplateWithCursor(ctx context.Context, arg GetS
 			&i.BuildRamMb,
 			&i.BuildMaxRamMb,
 			&i.BuildRequestedRamMb,
+			&i.BuildMaxVcpu,
+			&i.BuildRequestedVcpu,
 			&i.BuildTotalDiskSizeMb,
 			&i.BuildEnvdVersion,
 			&i.BuildCreatedAt,
@@ -139,6 +145,8 @@ SELECT COALESCE(ea.aliases, ARRAY[]::text[])::text[] AS aliases, COALESCE(ea.nam
     eb.ram_mb AS build_ram_mb,
     eb.max_ram_mb AS build_max_ram_mb,
     eb.requested_ram_mb AS build_requested_ram_mb,
+    eb.max_vcpu AS build_max_vcpu,
+    eb.requested_vcpu AS build_requested_vcpu,
     eb.total_disk_size_mb AS build_total_disk_size_mb,
     eb.envd_version AS build_envd_version,
     eb.created_at AS build_created_at
@@ -152,7 +160,7 @@ LEFT JOIN LATERAL (
     WHERE env_id = s.base_env_id
 ) ea ON TRUE
 JOIN LATERAL (
-    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.max_ram_mb, eb.requested_ram_mb, eb.total_disk_size_mb, eb.envd_version, eb.created_at
+    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.max_ram_mb, eb.requested_ram_mb, eb.max_vcpu, eb.requested_vcpu, eb.total_disk_size_mb, eb.envd_version, eb.created_at
     FROM "public"."env_build_assignments" eba
     JOIN "public"."env_builds" eb ON eb.id = eba.build_id
     WHERE
@@ -194,6 +202,8 @@ type GetSnapshotsByTemplateWithCursorAscRow struct {
 	BuildRamMb           int64
 	BuildMaxRamMb        *int64
 	BuildRequestedRamMb  *int64
+	BuildMaxVcpu         *int64
+	BuildRequestedVcpu   *int64
 	BuildTotalDiskSizeMb *int64
 	BuildEnvdVersion     *string
 	BuildCreatedAt       time.Time
@@ -237,6 +247,8 @@ func (q *Queries) GetSnapshotsByTemplateWithCursorAsc(ctx context.Context, arg G
 			&i.BuildRamMb,
 			&i.BuildMaxRamMb,
 			&i.BuildRequestedRamMb,
+			&i.BuildMaxVcpu,
+			&i.BuildRequestedVcpu,
 			&i.BuildTotalDiskSizeMb,
 			&i.BuildEnvdVersion,
 			&i.BuildCreatedAt,
@@ -259,6 +271,8 @@ SELECT COALESCE(ea.aliases, ARRAY[]::text[])::text[] AS aliases, COALESCE(ea.nam
     eb.ram_mb AS build_ram_mb,
     eb.max_ram_mb AS build_max_ram_mb,
     eb.requested_ram_mb AS build_requested_ram_mb,
+    eb.max_vcpu AS build_max_vcpu,
+    eb.requested_vcpu AS build_requested_vcpu,
     eb.total_disk_size_mb AS build_total_disk_size_mb,
     eb.envd_version AS build_envd_version,
     eb.created_at AS build_created_at
@@ -272,7 +286,7 @@ LEFT JOIN LATERAL (
     WHERE env_id = s.base_env_id
 ) ea ON TRUE
 JOIN LATERAL (
-    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.max_ram_mb, eb.requested_ram_mb, eb.total_disk_size_mb, eb.envd_version, eb.created_at
+    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.max_ram_mb, eb.requested_ram_mb, eb.max_vcpu, eb.requested_vcpu, eb.total_disk_size_mb, eb.envd_version, eb.created_at
     FROM "public"."env_build_assignments" eba
     JOIN "public"."env_builds" eb ON eb.id = eba.build_id
     WHERE
@@ -310,6 +324,8 @@ type GetSnapshotsWithCursorRow struct {
 	BuildRamMb           int64
 	BuildMaxRamMb        *int64
 	BuildRequestedRamMb  *int64
+	BuildMaxVcpu         *int64
+	BuildRequestedVcpu   *int64
 	BuildTotalDiskSizeMb *int64
 	BuildEnvdVersion     *string
 	BuildCreatedAt       time.Time
@@ -352,6 +368,8 @@ func (q *Queries) GetSnapshotsWithCursor(ctx context.Context, arg GetSnapshotsWi
 			&i.BuildRamMb,
 			&i.BuildMaxRamMb,
 			&i.BuildRequestedRamMb,
+			&i.BuildMaxVcpu,
+			&i.BuildRequestedVcpu,
 			&i.BuildTotalDiskSizeMb,
 			&i.BuildEnvdVersion,
 			&i.BuildCreatedAt,
@@ -374,6 +392,8 @@ SELECT COALESCE(ea.aliases, ARRAY[]::text[])::text[] AS aliases, COALESCE(ea.nam
     eb.ram_mb AS build_ram_mb,
     eb.max_ram_mb AS build_max_ram_mb,
     eb.requested_ram_mb AS build_requested_ram_mb,
+    eb.max_vcpu AS build_max_vcpu,
+    eb.requested_vcpu AS build_requested_vcpu,
     eb.total_disk_size_mb AS build_total_disk_size_mb,
     eb.envd_version AS build_envd_version,
     eb.created_at AS build_created_at
@@ -387,7 +407,7 @@ LEFT JOIN LATERAL (
     WHERE env_id = s.base_env_id
 ) ea ON TRUE
 JOIN LATERAL (
-    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.max_ram_mb, eb.requested_ram_mb, eb.total_disk_size_mb, eb.envd_version, eb.created_at
+    SELECT eb.id, eb.vcpu, eb.ram_mb, eb.max_ram_mb, eb.requested_ram_mb, eb.max_vcpu, eb.requested_vcpu, eb.total_disk_size_mb, eb.envd_version, eb.created_at
     FROM "public"."env_build_assignments" eba
     JOIN "public"."env_builds" eb ON eb.id = eba.build_id
     WHERE
@@ -427,6 +447,8 @@ type GetSnapshotsWithCursorAscRow struct {
 	BuildRamMb           int64
 	BuildMaxRamMb        *int64
 	BuildRequestedRamMb  *int64
+	BuildMaxVcpu         *int64
+	BuildRequestedVcpu   *int64
 	BuildTotalDiskSizeMb *int64
 	BuildEnvdVersion     *string
 	BuildCreatedAt       time.Time
@@ -472,6 +494,8 @@ func (q *Queries) GetSnapshotsWithCursorAsc(ctx context.Context, arg GetSnapshot
 			&i.BuildRamMb,
 			&i.BuildMaxRamMb,
 			&i.BuildRequestedRamMb,
+			&i.BuildMaxVcpu,
+			&i.BuildRequestedVcpu,
 			&i.BuildTotalDiskSizeMb,
 			&i.BuildEnvdVersion,
 			&i.BuildCreatedAt,

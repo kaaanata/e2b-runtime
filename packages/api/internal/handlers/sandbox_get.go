@@ -172,7 +172,7 @@ func (a *APIStore) GetSandboxesSandboxID(c *gin.Context, id string) {
 	}
 
 	memoryMB, maxMemoryMB := pausedMemory(lastSnapshot.EnvBuild.RamMb, lastSnapshot.EnvBuild.MaxRamMb, lastSnapshot.EnvBuild.RequestedRamMb)
-	cpuCount := int32(lastSnapshot.EnvBuild.Vcpu)
+	cpuCount, maxCPUCount := pausedCPU(lastSnapshot.EnvBuild.Vcpu, lastSnapshot.EnvBuild.MaxVcpu, lastSnapshot.EnvBuild.RequestedVcpu)
 
 	diskSize := int32(0)
 	if lastSnapshot.EnvBuild.TotalDiskSizeMb != nil {
@@ -220,6 +220,7 @@ func (a *APIStore) GetSandboxesSandboxID(c *gin.Context, id string) {
 		CpuCount:            cpuCount,
 		MemoryMB:            memoryMB,
 		MaxMemoryMB:         maxMemoryMB,
+		MaxCpuCount:         maxCPUCount,
 		DiskSizeMB:          diskSize,
 		EndAt:               lastSnapshot.EnvBuild.CreatedAt, // Latest build created_at represents last pause time
 		State:               api.Paused,

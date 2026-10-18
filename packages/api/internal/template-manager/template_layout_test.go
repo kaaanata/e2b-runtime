@@ -63,3 +63,14 @@ func TestTemplateLayoutFromBuildMetadata_MaxMemory(t *testing.T) {
 	unknown := TemplateLayoutFromBuildMetadata(&templatemanagergrpc.TemplateBuildMetadata{MaxMemoryMB: new(int32(65536))})
 	assert.Nil(t, unknown.MaxMemoryMB, "without a layout the metadata is from a template-manager that predates both")
 }
+
+func TestTemplateLayoutFromBuildMetadata_MaxCPU(t *testing.T) {
+	t.Parallel()
+
+	hot := TemplateLayoutFromBuildMetadata(&templatemanagergrpc.TemplateBuildMetadata{Layout: new(""), MaxCpuCount: new(int32(32))})
+	require.NotNil(t, hot.MaxCPUCount)
+	assert.Equal(t, int64(32), *hot.MaxCPUCount)
+
+	fixed := TemplateLayoutFromBuildMetadata(&templatemanagergrpc.TemplateBuildMetadata{Layout: new("")})
+	assert.Nil(t, fixed.MaxCPUCount)
+}

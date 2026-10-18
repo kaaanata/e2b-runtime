@@ -139,7 +139,7 @@ func placeSandbox(
 				return failed(NoNodesAvailableError{})
 			}
 
-			node, err = algorithm.chooseNode(ctx, clusterNodes, nodesExcluded, nodemanager.SandboxResources{CPUs: sbxRequest.GetSandbox().GetVcpu(), MiBMemory: requestedMemoryMiB(sbxRequest.GetSandbox())}, cpu, features, labelFilteringEnabled, requiredLabels)
+			node, err = algorithm.chooseNode(ctx, clusterNodes, nodesExcluded, nodemanager.SandboxResources{CPUs: requestedVCPUs(sbxRequest.GetSandbox()), MiBMemory: requestedMemoryMiB(sbxRequest.GetSandbox())}, cpu, features, labelFilteringEnabled, requiredLabels)
 			if err != nil {
 				// A create was already attempted: its error explains the failure
 				// better than the empty candidate set it caused.
@@ -154,7 +154,7 @@ func placeSandbox(
 		}
 
 		node.PlacementMetrics.StartPlacing(sbxRequest.GetSandbox().GetSandboxId(), nodemanager.SandboxResources{
-			CPUs:      sbxRequest.GetSandbox().GetVcpu(),
+			CPUs:      requestedVCPUs(sbxRequest.GetSandbox()),
 			MiBMemory: requestedMemoryMiB(sbxRequest.GetSandbox()),
 		})
 
@@ -172,7 +172,7 @@ func placeSandbox(
 			// Manually update node.metrics with the newly allocated resources.
 			// This will be overwritten by the next real Metrics report for auto-correction.
 			node.OptimisticAdd(nodemanager.SandboxResources{
-				CPUs:      sbxRequest.GetSandbox().GetVcpu(),
+				CPUs:      requestedVCPUs(sbxRequest.GetSandbox()),
 				MiBMemory: requestedMemoryMiB(sbxRequest.GetSandbox()),
 			})
 

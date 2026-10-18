@@ -290,3 +290,17 @@ func TestRequestedMemoryMiB(t *testing.T) {
 	assert.Equal(t, int64(8192), requestedMemoryMiB(&orchestrator.SandboxConfig{RamMb: 8192}))
 	assert.Equal(t, int64(16384), requestedMemoryMiB(&orchestrator.SandboxConfig{RamMb: 8192, RequestedMemoryMb: 16384}))
 }
+
+func TestRequiredFeatures_CPUHotplug(t *testing.T) {
+	t.Parallel()
+
+	hot := requiredFeatures(&orchestrator.SandboxCreateRequest{Sandbox: &orchestrator.SandboxConfig{Vcpu: 8, RequestedVcpu: 16}})
+	assert.Equal(t, []string{"cpu-hotplug"}, hot.FeatureNames())
+}
+
+func TestRequestedVCPUs(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, int64(8), requestedVCPUs(&orchestrator.SandboxConfig{Vcpu: 8}))
+	assert.Equal(t, int64(16), requestedVCPUs(&orchestrator.SandboxConfig{Vcpu: 8, RequestedVcpu: 16}))
+}
