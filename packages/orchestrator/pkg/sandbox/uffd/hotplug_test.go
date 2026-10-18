@@ -5,9 +5,12 @@ package uffd
 import (
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 	"golang.org/x/sys/unix"
 
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/sandbox/block"
@@ -87,18 +90,18 @@ func newPatternMemfd(t *testing.T, size int64) *block.Memfd {
 }
 
 // An unplug must release the hotplug part of the removed range, and only it.
-func TestHotplugRemovedHook_PunchesOnlyTheHotplugRegion(t *testing.T) {
+func TestHotplugRelease_PunchesOnlyTheHotplugRegion(t *testing.T) {
 	t.Parallel()
 
 	page := int64(os.Getpagesize())
 	base, total := 4*page, 8*page
 	m := newPatternMemfd(t, base+total)
-	hook := hotplugRemovedHook(func() *block.Memfd { return m }, block.Range{Start: base, Size: total}, logger.NewNopLogger())
+	release := newHotplugRelease(func() *block.Memfd { return m }, block.Range{Start: base, Size: total}, logger.NewNopLogger())
 
 	// A balloon REMOVE in boot memory and an unplug straddling into the
 	// hotplug region.
-	hook(t.Context(), block.Range{Start: 0, Size: page})
-	hook(t.Context(), block.Range{Start: base - page, Size: 3 * page})
+	release.onRemoved(t.Context(), block.Range{Start: 0, Size: page})
+	release.onRemoved(t.Context(), block.Range{Start: base - page, Size: 3 * page})
 
 	got := make([]byte, base+total)
 	_, err := m.ReadAt(got, 0)
@@ -112,7 +115,80 @@ func TestHotplugRemovedHook_PunchesOnlyTheHotplugRegion(t *testing.T) {
 		require.Equal(t, byte(0xa5), got[i], "still-plugged hotplug byte %d must stay", i)
 	}
 
-	// A handed-off memfd (snapshot export) is skipped.
-	none := hotplugRemovedHook(func() *block.Memfd { return nil }, block.Range{Start: base, Size: total}, logger.NewNopLogger())
-	none(t.Context(), block.Range{Start: base, Size: page})
+	assert.Equal(t, HotplugReleaseStats{
+		Removes:      2,
+		HotplugBytes: 2 * page,
+		BootBytes:    2 * page,
+		PunchedBytes: 2 * page,
+	}, release.Stats())
+}
+
+// A handed-off memfd (snapshot export) is skipped and counted.
+func TestHotplugRelease_SkipsAHandedOffMemfd(t *testing.T) {
+	t.Parallel()
+
+	page := int64(os.Getpagesize())
+	release := newHotplugRelease(func() *block.Memfd { return nil }, block.Range{Start: 4 * page, Size: 8 * page}, logger.NewNopLogger())
+	release.onRemoved(t.Context(), block.Range{Start: 4 * page, Size: page})
+
+	assert.Equal(t, HotplugReleaseStats{Removes: 1, HotplugBytes: page, SkippedBytes: page}, release.Stats())
+}
+
+// A punch the kernel refuses is counted, warned once, and does not stop
+// later punches.
+func TestHotplugRelease_CountsPunchFailures(t *testing.T) {
+	t.Parallel()
+
+	page := int64(os.Getpagesize())
+	base, total := 4*page, 8*page
+	m := newPatternMemfd(t, base+total)
+	core, logs := observer.New(zapcore.DebugLevel)
+	release := newHotplugRelease(func() *block.Memfd { return m }, block.Range{Start: base, Size: total}, logger.NewTracedLoggerFromCore(core))
+
+	// Out of the memfd's bounds: the memfd is smaller than the region claims.
+	shortMemfd := newPatternMemfd(t, base)
+	short := newHotplugRelease(func() *block.Memfd { return shortMemfd }, block.Range{Start: base, Size: total}, logger.NewTracedLoggerFromCore(core))
+	short.onRemoved(t.Context(), block.Range{Start: base, Size: page})
+	short.onRemoved(t.Context(), block.Range{Start: base + page, Size: page})
+	assert.Equal(t, uint64(2), short.Stats().PunchFailures)
+	assert.Zero(t, short.Stats().PunchedBytes)
+	assert.Equal(t, 1, logs.FilterMessage("memory hotplug: could not release unplugged memory").Len(), "warned once")
+
+	release.onRemoved(t.Context(), block.Range{Start: base, Size: page})
+	assert.Equal(t, page, release.Stats().PunchedBytes)
+}
+
+// The reporter logs a summary only when the counters moved, and a final one
+// at teardown.
+func TestHotplugRelease_ReportsOnlyChanges(t *testing.T) {
+	t.Parallel()
+
+	page := int64(os.Getpagesize())
+	base, total := 4*page, 8*page
+	m := newPatternMemfd(t, base+total)
+	core, logs := observer.New(zapcore.InfoLevel)
+	release := newHotplugRelease(func() *block.Memfd { return m }, block.Range{Start: base, Size: total}, logger.NewTracedLoggerFromCore(core))
+
+	release.report(t.Context(), "summary")
+	assert.Zero(t, logs.Len(), "nothing happened: no summary")
+
+	release.onRemoved(t.Context(), block.Range{Start: base, Size: 2 * page})
+	release.report(t.Context(), "summary")
+	release.report(t.Context(), "summary")
+	require.Equal(t, 1, logs.Len(), "one summary per change")
+	fields := logs.All()[0].ContextMap()
+	assert.Equal(t, 2*page, fields["punched_bytes"])
+	assert.Equal(t, uint64(1), fields["removes"])
+
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		release.reportLoop(t.Context(), time.Hour, done)
+	}()
+	release.onRemoved(t.Context(), block.Range{Start: base + 2*page, Size: page})
+	close(done)
+	<-finished
+	require.Equal(t, 2, logs.Len(), "final summary at teardown")
+	assert.Equal(t, 3*page, logs.All()[1].ContextMap()["punched_bytes"])
 }

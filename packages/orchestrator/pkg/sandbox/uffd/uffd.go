@@ -59,6 +59,9 @@ type Uffd struct {
 	// hotplug is the memory-file range of the snapshot's virtio-mem hotplug
 	// region, nil for a snapshot without one (see ExpectMemoryHotplug).
 	hotplug *block.Range
+	// hotplugRelease releases unplugged memory; set at the handshake when
+	// hotplug is set and Firecracker sent the memfd.
+	hotplugRelease atomic.Pointer[hotplugRelease]
 
 	// syncWP records whether the paired Firecracker was resumed with
 	// use_sync_wp (synchronous WP fault delivery). Set once at resume from
@@ -254,8 +257,37 @@ func (u *Uffd) handle(ctx context.Context, fdExit *fdexit.FdExit) error {
 		return err
 	}
 
-	if u.hotplug != nil && memfdSize >= 0 {
-		uffd.SetRemovedRangeHook(hotplugRemovedHook(u.memfd.Load, *u.hotplug, u.logger))
+	if u.hotplug != nil {
+		hotplugFields := []zap.Field{
+			zap.Int64("hotplug_offset", u.hotplug.Start),
+			zap.Int64("hotplug_size", u.hotplug.Size),
+			zap.Int64("memfd_size", memfdSize),
+			zap.Int("handshake_fds", len(fds)),
+			zap.Int("handshake_regions", len(regions)),
+		}
+
+		if memfdSize < 0 {
+			// Without the memfd there is nothing to punch: an unplug frees
+			// guest memory, not host memory, until the next pause.
+			u.logger.Warn(ctx, "memory hotplug: no memfd in the UFFD handshake; unplugged memory is not released on the host", hotplugFields...)
+		} else {
+			release := newHotplugRelease(u.memfd.Load, *u.hotplug, u.logger)
+			u.hotplugRelease.Store(release)
+			uffd.SetRemovedRangeHook(release.onRemoved)
+
+			done := make(chan struct{})
+			reported := make(chan struct{})
+			go func() {
+				defer close(reported)
+				release.reportLoop(ctx, hotplugReportInterval, done)
+			}()
+			defer func() {
+				close(done)
+				<-reported
+			}()
+
+			u.logger.Info(ctx, "memory hotplug: unplugged memory is released by punching holes in the memfd", hotplugFields...)
+		}
 	}
 
 	u.handler.SetValue(uffd)
