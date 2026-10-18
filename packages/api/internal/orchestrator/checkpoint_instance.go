@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -17,6 +18,27 @@ import (
 	"github.com/e2b-dev/infra/packages/shared/pkg/storage/storageopts"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
+
+// CheckpointRejectedError reports that the node refused the checkpoint with
+// FailedPrecondition: the sandbox was not (or no longer) paused and keeps
+// running healthy on its node, restored to Running here — e.g. the sandbox
+// cannot be checkpointed on this node (a workspace block volume on a
+// Firecracker without in-place checkpoint), its envd is too old, or only the
+// checkpoint artifact failed. Callers map it to a conflict, not a server
+// error.
+type CheckpointRejectedError struct {
+	// Reason is the node's message.
+	Reason string
+	Err    error
+}
+
+func (e *CheckpointRejectedError) Error() string {
+	return fmt.Sprintf("checkpoint rejected: %s", e.Reason)
+}
+
+func (e *CheckpointRejectedError) Unwrap() error {
+	return e.Err
+}
 
 // CheckpointSandbox snapshots a running sandbox in place: the sandbox is
 // briefly paused on its node, snapshotted, and resumed under the same
@@ -91,7 +113,7 @@ func (o *Orchestrator) CheckpointSandbox(ctx context.Context, teamID uuid.UUID, 
 			case codes.FailedPrecondition:
 				finish(nil)
 
-				return fmt.Errorf("checkpoint rejected: %w", err)
+				return &CheckpointRejectedError{Reason: st.Message(), Err: err}
 			case codes.ResourceExhausted:
 				logger.L().Warn(ctx, "Checkpoint refused by the node", logger.WithSandboxID(sandboxID), zap.String("node_message", st.Message()))
 				finish(nil)
@@ -132,7 +154,19 @@ func (o *Orchestrator) CheckpointSandbox(ctx context.Context, teamID uuid.UUID, 
 	// the snapshot is resumable (and forkable) only once those revisions are
 	// recorded. If recording fails the sandbox keeps running untouched and
 	// only this checkpoint is lost.
-	if err := o.recordPauseRevisions(ctx, sbx, upsertResult.BuildID, res.GetWorkspaceRevisions()); err != nil {
+	// A node that answers a block sandbox's checkpoint without revisions
+	// (one that predates workspace volumes) produced a snapshot no fork or
+	// resume can attach the volumes to: fail it here instead of at the
+	// children's start.
+	revisions := res.GetWorkspaceRevisions()
+	if len(revisions) == 0 && sbx.HasBlockVolumeMounts() {
+		err := errors.New("the node returned no workspace revisions for a sandbox with block volumes")
+		o.failSnapshotBuild(context.WithoutCancel(ctx), upsertResult.BuildID, err)
+
+		return fmt.Errorf("checkpoint failed: %w", err)
+	}
+
+	if err := o.recordPauseRevisions(ctx, sbx, upsertResult.BuildID, revisions); err != nil {
 		o.failSnapshotBuild(context.WithoutCancel(ctx), upsertResult.BuildID, err)
 
 		return fmt.Errorf("checkpoint failed: %w", err)

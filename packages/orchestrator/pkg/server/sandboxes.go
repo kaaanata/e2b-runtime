@@ -1091,24 +1091,24 @@ func (s *Server) Checkpoint(ctx context.Context, in *orchestrator.SandboxCheckpo
 
 	sbxlogger.E(sbx).Info(ctx, "Checkpointing sandbox")
 
-	// In-place checkpoint (pause, snapshot, resume the SAME FC process) is
-	// only honored for sandboxes resumed with use_sync_wp: it skips the
-	// snapshot re-load that re-arms write-protection, so dirty tracking
-	// across repeated checkpoints relies on the sync-WP serve loop. It also
-	// requires the running Firecracker's release contract to include the
-	// feature (e2b releases >= 0.2.0 — the CoW memory window drives the
-	// balloon free-page-reporting pause API). Everything else takes the
-	// resume-fresh flow, so an older FC degrades gracefully rather than
-	// erroring.
-	inPlace := sbx.UseSyncWP() &&
-		s.featureFlags.BoolFlag(ctx, featureflags.InPlaceCheckpointFlag) &&
-		firecrackerSupports(ctx, sbx, "in-place checkpoint", (*fcversion.Info).HasInPlaceCheckpoint)
+	inPlace, pathErr := selectCheckpointPath(
+		sbx.HasWorkspaceVolumes(),
+		sbx.UseSyncWP(),
+		func() bool { return s.featureFlags.BoolFlag(ctx, featureflags.InPlaceCheckpointFlag) },
+		func() bool {
+			return firecrackerSupports(ctx, sbx, "in-place checkpoint", (*fcversion.Info).HasInPlaceCheckpoint)
+		},
+	)
+	if pathErr != nil {
+		sbxlogger.E(sbx).Warn(ctx, "Refusing checkpoint", zap.Error(pathErr))
 
-	// A sandbox with workspace volumes can only be checkpointed in place: the
-	// resume-fresh flow would load the snapshot into a second VM while the
-	// first still holds the volumes. Refuse BEFORE resume-fresh marks the
-	// sandbox stopping, so the refusal leaves it running. Pause re-checks the
-	// same rule for every other caller.
+		return nil, status.Errorf(codes.FailedPrecondition, "sandbox '%s' cannot be checkpointed: %s", in.GetSandboxId(), pathErr)
+	}
+
+	// Defense in depth: the selection above never picks resume-fresh for a
+	// sandbox with workspace volumes, and Pause re-checks the same rule for
+	// every other caller. Refuse BEFORE resume-fresh marks the sandbox
+	// stopping, so a refusal leaves it running.
 	if !inPlace {
 		if err := sbx.CheckPauseSupported(sandbox.WithResumeFreshCheckpoint()); err != nil {
 			sbxlogger.E(sbx).Warn(ctx, "Refusing checkpoint", zap.Error(err))
@@ -1133,6 +1133,47 @@ func (s *Server) Checkpoint(ctx context.Context, in *orchestrator.SandboxCheckpo
 	))
 
 	return res, err
+}
+
+// errInPlaceCheckpointUnavailable refuses a checkpoint of a sandbox with
+// workspace volumes on a Firecracker whose release contract lacks the
+// in-place checkpoint: resume-fresh is not an option for it (see
+// selectCheckpointPath).
+var errInPlaceCheckpointUnavailable = errors.New("sandboxes with workspace block volumes require an in-place checkpoint, which this Firecracker release does not support")
+
+// selectCheckpointPath picks the checkpoint flow.
+//
+// In-place (pause, snapshot, resume the SAME FC process) is honored for a
+// plain sandbox only when it was resumed with use_sync_wp and the
+// in-place-checkpoint flag is on: it skips the snapshot re-load that re-arms
+// write-protection, so dirty tracking across repeated checkpoints relies on
+// the sync-WP serve loop. Everything else takes the resume-fresh flow, so an
+// older FC degrades gracefully rather than erroring.
+//
+// A sandbox with workspace volumes can ONLY be checkpointed in place: the
+// resume-fresh flow would load the snapshot into a second VM while the first
+// still holds the volumes, and the paired-memory seal must happen between
+// CreateSnapshot and ResumeInPlace of the same process. So for it neither the
+// flag nor use_sync_wp is consulted — under WP_ASYNC the pagemap dirty source
+// only over-reports after an in-place resume (pages stay WP-cleared) and the
+// in-place export union re-exports every page a previous checkpoint of this
+// FC lifetime exported, so the diff against the original template stays
+// complete; the CoW memory window, which does need sync-WP delivery, is gated
+// on it inside Pause. Only the Firecracker release contract is required; when
+// it is missing the checkpoint is refused instead of falling back.
+//
+// The flag and version probes are evaluated lazily, in that order, exactly
+// like the short-circuit they replace.
+func selectCheckpointPath(hasWorkspaceVolumes, useSyncWP bool, flagOn, fcSupportsInPlace func() bool) (inPlace bool, err error) {
+	if hasWorkspaceVolumes {
+		if !fcSupportsInPlace() {
+			return false, errInPlaceCheckpointUnavailable
+		}
+
+		return true, nil
+	}
+
+	return useSyncWP && flagOn() && fcSupportsInPlace(), nil
 }
 
 // runCheckpointUpload persists the checkpoint snapshot according to the

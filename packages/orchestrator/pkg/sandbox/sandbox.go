@@ -2664,7 +2664,13 @@ func (s *Sandbox) processMemorySnapshot(ctx context.Context, buildID uuid.UUID, 
 	// this point, so hinting needs no pause. The guest is unaffected beyond
 	// a deferred RSS reduction: its driver holds reported pages isolated
 	// until the ACK.)
-	deferOK := keepMemfdOpen &&
+	// The window needs sync-WP fault delivery: under WP_ASYNC the kernel
+	// clears write-protection in place without an event, so an armed page
+	// would be overwritten before its pre-image is captured. A plain sandbox
+	// reaches the in-place path only with sync-WP; a sandbox with workspace
+	// volumes is checkpointed in place regardless (resume-fresh is refused
+	// for it), and so takes the synchronous copy without sync-WP.
+	deferOK := keepMemfdOpen && s.useSyncWP &&
 		s.featureFlags.BoolFlag(ctx, featureflags.DeferMemoryExportFlag, sandboxLDContext(s.Runtime, s.Config))
 	fprPaused := false
 	if deferOK {

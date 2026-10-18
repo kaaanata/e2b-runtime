@@ -40,6 +40,9 @@ func (f *fakeWorkspaceBackend) recordf(format string, args ...any) {
 }
 
 func (f *fakeWorkspaceBackend) add(team, volume blockvol.ID, fsUUID string, size uint64) blockvol.IncarnationRef {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	ref := blockvol.IncarnationRef{VolumeRef: blockvol.VolumeRef{Team: team, Volume: volume}, Incarnation: blockvol.NewID()}
 	f.incs[ref.Incarnation.String()] = blockvol.IncarnationInfo{
 		Ref:            ref,
