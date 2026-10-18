@@ -148,3 +148,56 @@ func TestMemfd_PunchHole(t *testing.T) {
 	require.Error(t, m.PunchHole(6*page, 4*page), "out of bounds")
 	require.NoError(t, m.PunchHole(0, 0))
 }
+
+// TestMemfd_PunchHoleReleasesHugetlbPages is the host-side half of the
+// virtio-mem unplug release: Firecracker keeps its own shared RW mapping of
+// the hugetlb memfd and the orchestrator its read-only view, both with the
+// pages mapped, and a hole punched through the orchestrator's fd must still
+// return the pages to the pool (shared mappings do not pin hugetlb pages
+// against PUNCH_HOLE: the kernel unmaps them from every VMA).
+//
+//nolint:paralleltest // reads the host-global HugePages_Free counter
+func TestMemfd_PunchHoleReleasesHugetlbPages(t *testing.T) {
+	const pages = 8
+	const hugePage = 2 << 20
+
+	_, free := hugePagesRsvd(t)
+	if free < pages {
+		t.Skipf("needs %d free 2 MiB hugepages (free=%d)", pages, free)
+	}
+
+	fd, err := unix.MemfdCreate("test-hugetlb-punch", unix.MFD_HUGETLB|unix.MFD_HUGE_2MB)
+	if err != nil {
+		t.Skipf("hugetlb memfd unavailable: %v", err)
+	}
+	require.NoError(t, unix.Ftruncate(fd, pages*hugePage))
+
+	// The VMM's mapping: shared, writable, pages touched by the "guest".
+	vmm, err := unix.Mmap(fd, 0, pages*hugePage, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_SHARED|unix.MAP_NORESERVE)
+	require.NoError(t, err)
+	defer func() { _ = unix.Munmap(vmm) }()
+	for p := range pages {
+		vmm[p*hugePage] = byte(p + 1)
+	}
+
+	dup, err := unix.Dup(fd)
+	require.NoError(t, err)
+	require.NoError(t, unix.Close(fd))
+	m, err := NewFromFd(dup)
+	require.NoError(t, err)
+	defer m.Close()
+
+	// The orchestrator's view has the pages mapped too.
+	for p := range pages {
+		require.Equal(t, byte(p+1), m.mmap[p*hugePage])
+	}
+
+	_, before := hugePagesRsvd(t)
+	require.NoError(t, m.PunchHole(4*hugePage, 4*hugePage))
+	_, after := hugePagesRsvd(t)
+
+	// Other processes may move the counter by a page or two.
+	assert.GreaterOrEqual(t, after-before, int64(3), "punching 4 touched hugepages must return them to the pool")
+	assert.Equal(t, byte(1), vmm[0], "the unpunched half keeps its data")
+	assert.Equal(t, byte(0), vmm[4*hugePage], "the punched half reads as zeros in the VMM's mapping")
+}

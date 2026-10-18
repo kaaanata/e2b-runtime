@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -147,6 +148,41 @@ func createCgroup(fullPath string, properties map[string]string) (int, error) {
 	}
 
 	return unix.Open(fullPath, unix.O_RDONLY, 0)
+}
+
+var _ MemoryLimiter = (*Cgroup2Manager)(nil)
+
+// SetMemoryLimit sets memory.max and memory.high of procType's cgroup to
+// limit. When lowering, memory.high goes first, so the hard limit is never
+// below the soft one; when raising, memory.max goes first. A cgroup without
+// the memory controller (the properties are missing) is left alone, as at
+// creation.
+func (c Cgroup2Manager) SetMemoryLimit(procType ProcessType, limit uint64) error {
+	path, ok := c.cgroupPaths[procType]
+	if !ok {
+		return fmt.Errorf("no cgroup for %s", procType)
+	}
+
+	maxPath := filepath.Join(path, "memory.max")
+	order := []string{maxPath, filepath.Join(path, "memory.high")}
+	if cur, err := os.ReadFile(maxPath); err == nil {
+		if v, err := strconv.ParseUint(strings.TrimSpace(string(cur)), 10, 64); err == nil && limit < v {
+			order[0], order[1] = order[1], order[0]
+		}
+	}
+
+	value := strconv.FormatUint(limit, 10)
+	for _, p := range order {
+		if err := writeCgroupProp(p, value); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+
+			return fmt.Errorf("write %s: %w", p, err)
+		}
+	}
+
+	return nil
 }
 
 func (c Cgroup2Manager) GetFileDescriptor(procType ProcessType) (int, bool) {
