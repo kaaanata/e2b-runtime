@@ -27,3 +27,7 @@ Output style rules (strict, override any defaults):
 - Skip style/nit comments — `golangci-lint` covers those.
 - Skip test-coverage comments — Codecov covers those.
 - Focus on: race conditions, nil-deref, error handling, auth/authz, request routing, resource leaks, SQL/migration correctness, and gRPC/proto compatibility.
+
+## Fork owner credential proxy
+
+`volumes/credproxy` adds opt-in `CREDPROXY_ROOT` / `CREDPROXY_TEAM_ID` to the default egress factory. `pkg/credproxy` owns a persisted node CA, private Unix control socket, one atomic 0600 host lineage per provider, and coalesced expiry/reactive refresh. `cmd/credproxyctl` is the SSH-stdin management client; never print true tokens. Only `sandbox.Config.CredentialTeamID` copied from the authenticated create request authorizes interception; do not substitute `RuntimeMetadata.TeamID` or guest headers. Preserve firewall admission, private-IP checks, DSCP, exact-sentinel-only rewrite, both Claude RC path families, Codex WSS, and streaming/h2/upgrade behavior. Keep the CA stable across restart/resume and retain rotated refresh tokens across failed persistence. Real account tokens stay on the node, but RC scoped session tokens may still be in RAM; the existing shared-identity fork gate is unchanged. Architecture and umbrella `docs/credential-proxy.md` document this path. Live provider/RC/pause/fork acceptance has not been performed by this track.
