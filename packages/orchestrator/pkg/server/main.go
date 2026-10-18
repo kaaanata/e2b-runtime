@@ -295,7 +295,7 @@ func New(ctx context.Context, cfg ServiceConfig) (*Server, error) {
 			)
 
 			for _, item := range server.sandboxFactory.Sandboxes.Items() {
-				cpuAllocated += item.Config.Vcpu
+				cpuAllocated += item.Config.AccountedVCPUs()
 				memoryAllocated += item.Config.AccountedMemoryMB() * 1024 * 1024
 				diskAllocated += item.Config.TotalDiskSizeMB * 1024 * 1024
 			}

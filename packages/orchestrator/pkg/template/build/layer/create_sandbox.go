@@ -114,6 +114,8 @@ func (cs *CreateSandbox) Sandbox(
 	// Every boot of a build with a hotplug device carries it (plugged 0), so
 	// this layer's snapshot records the device and the full-size memory file.
 	cs.config.MemoryHotplug = layerExecutor.Config.MemoryHotplug.Clone()
+	// Likewise the CPU layout: the VM has the maximum vCPUs, the base online.
+	cs.config.CPUHotplug = layerExecutor.Config.CPUHotplug.Clone()
 
 	// Create new memfile with the size of the sandbox RAM, this updates the underlying memfile.
 	// This is ok as the sandbox is started from the beginning. With a hotplug
@@ -197,6 +199,12 @@ func (cs *CreateSandbox) Sandbox(
 	// Fail the build now, not the first resize of a sandbox: a guest kernel
 	// without CONFIG_VIRTIO_MEM never activates the device.
 	if err := sbx.VerifyMemoryHotplug(ctx); err != nil {
+		return nil, err
+	}
+
+	// And a guest kernel without CONFIG_HOTPLUG_CPU can never bring the
+	// extra vCPUs online.
+	if err := sbx.VerifyCPUHotplug(ctx); err != nil {
 		return nil, err
 	}
 

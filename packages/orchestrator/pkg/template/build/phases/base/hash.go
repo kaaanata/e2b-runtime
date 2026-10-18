@@ -160,6 +160,12 @@ func baseLayerKey(indexVersion, provisionVersion, baseSource string, buildContex
 		keys = append(keys, fmt.Sprintf("memory-hotplug:%d:%d:%d:%d", l.BaseMiB, l.TotalMiB, l.SlotMiB, l.BlockMiB))
 	}
 
+	// The CPU hotplug layout too: the snapshot holds MaxVCPUs vCPUs and a
+	// kernel booted with maxcpus=BaseVCPUs. Same append-only rule.
+	if l := buildContext.Config.CPUHotplug; l != nil {
+		keys = append(keys, fmt.Sprintf("cpu-hotplug:%d:%d", l.BaseVCPUs, l.MaxVCPUs))
+	}
+
 	// The rendered files differ between on and off while the template file set,
 	// and so FilesHash, does not, so the values themselves are the contribution.
 	// Made only when this build renders the files with the option on: a

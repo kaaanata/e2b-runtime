@@ -164,7 +164,8 @@ func (lb *LayerExecutor) BuildLayer(
 // stamps the virtio-mem device the VM actually carries: the snapshot's device
 // table and memory file have it whichever phase produced the layer, and the
 // next layer's resume (sandbox.Config.adoptMemoryHotplug) checks the build's
-// device against this metadata. The VM's config is the truth here, not the
+// device against this metadata. The CPU hotplug layout is stamped the same
+// way (the snapshot holds every vCPU of the VM). The VM's config is the truth here, not the
 // build config: a create boots with the build's device, a resume adopts the
 // snapshot's. A nil device clears the field and its capability.
 func layerMetadata(meta metadata.Template, buildID string, sbxConfig *sandbox.Config) metadata.Template {
@@ -172,7 +173,7 @@ func layerMetadata(meta metadata.Template, buildID string, sbxConfig *sandbox.Co
 		BuildID:            buildID,
 		KernelVersion:      sbxConfig.FirecrackerConfig.KernelVersion,
 		FirecrackerVersion: sbxConfig.FirecrackerConfig.FirecrackerVersion,
-	}).WithMemoryHotplug(sbxConfig.MemoryHotplug)
+	}).WithMemoryHotplug(sbxConfig.MemoryHotplug).WithCPUHotplug(sbxConfig.CPUHotplug)
 }
 
 // updateEnvdInSandbox updates the envd binary in the sandbox to the latest version.

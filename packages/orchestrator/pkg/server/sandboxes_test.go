@@ -84,6 +84,7 @@ func Test_server_List(t *testing.T) {
 						Vcpu:        2,
 						RamMb:       512,
 						MemoryMb:    512,
+						VcpuCount:   2,
 					},
 				},
 			},

@@ -7,6 +7,7 @@ package envd
 // which no request arriving through the public sandbox URL may reach.
 var specInternalPaths = []string{
 	"/collapse",
+	"/cpus",
 	"/freeze",
 	"/fsfreeze",
 	"/fsfreeze-set",

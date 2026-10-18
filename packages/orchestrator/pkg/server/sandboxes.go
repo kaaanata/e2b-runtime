@@ -278,7 +278,8 @@ func (s *Server) Create(ctx context.Context, req *orchestrator.SandboxCreateRequ
 		VolumeMounts:          volumeMounts,
 		WorkspaceVolumes:      workspaceVolumesFromRequest(req.GetWorkspaceSlots()),
 		MaxSandboxLengthHours: req.GetSandbox().GetMaxSandboxLength(),
-	}).WithRequestedMemoryMB(req.GetSandbox().GetRequestedMemoryMb())
+	}).WithRequestedMemoryMB(req.GetSandbox().GetRequestedMemoryMb()).
+		WithRequestedVCPUs(req.GetSandbox().GetRequestedVcpu())
 	childSpan.SetAttributes(
 		telemetry.WithFirecrackerVersion(config.FirecrackerConfig.FirecrackerVersion),
 	)
@@ -442,6 +443,8 @@ func (s *Server) Create(ctx context.Context, req *orchestrator.SandboxCreateRequ
 		// flag, which drifts from this frozen value whenever the flag moves.
 		ResolvedFirecrackerVersion: resolvedFCVersion,
 		MemoryMb:                   sbx.Config.CurrentMemoryMB(),
+		VcpuCount:                  sbx.Config.RequestedVCPUs(),
+		OnlineVcpu:                 sbx.Config.OnlineVCPUs(),
 	}, nil
 }
 
@@ -689,6 +692,7 @@ func (s *Server) List(ctx context.Context, _ *emptypb.Empty) (*orchestrator.Sand
 			Vcpu:        sbx.Config.Vcpu,
 			RamMb:       sbx.Config.RamMB,
 			MemoryMb:    sbx.Config.AccountedMemoryMB(),
+			VcpuCount:   sbx.Config.AccountedVCPUs(),
 		})
 	}
 
@@ -1027,6 +1031,7 @@ func (s *Server) Pause(ctx context.Context, in *orchestrator.SandboxPauseRequest
 		SchedulingMetadata: res.schedulingMetadata,
 		WorkspaceRevisions: workspaceRevisionsToProto(res.workspaceSeals),
 		MemoryMb:           res.memoryMB,
+		VcpuCount:          res.vcpus,
 	}, nil
 }
 
@@ -1353,6 +1358,7 @@ func (s *Server) checkpointInPlace(ctx context.Context, sbx *sandbox.Sandbox, in
 		SchedulingMetadata: res.schedulingMetadata,
 		WorkspaceRevisions: workspaceRevisionsToProto(res.workspaceSeals),
 		MemoryMb:           res.memoryMB,
+		VcpuCount:          res.vcpus,
 	}, nil
 }
 
@@ -1493,6 +1499,7 @@ func (s *Server) checkpointResumeFresh(ctx context.Context, sbx *sandbox.Sandbox
 		SchedulingMetadata: res.schedulingMetadata,
 		WorkspaceRevisions: workspaceRevisionsToProto(res.workspaceSeals),
 		MemoryMb:           res.memoryMB,
+		VcpuCount:          res.vcpus,
 	}, nil
 }
 
@@ -1555,7 +1562,9 @@ type snapshotResult struct {
 	memoryExportDeferred bool
 	// memoryMB is the guest memory recorded in the snapshot (boot + plugged
 	// hotplug), 0 for a filesystem-only one.
-	memoryMB         int64
+	memoryMB int64
+	// vcpus is the vCPU count granted at the snapshot (CPU hotplug), else 0.
+	vcpus            int64
 	waitMemorySealed func(ctx context.Context) error
 	// workspaceSeals are the workspace revisions the pause sealed, for the
 	// response (the control plane records them as snapshot_volume_refs).
@@ -1687,6 +1696,7 @@ func (s *Server) snapshotAndCacheSandbox(
 		rootfsDiff:           snapshot.RootfsDiff,
 		memoryExportDeferred: snapshot.MemoryExportDeferred,
 		memoryMB:             snapshot.MemoryMB,
+		vcpus:                snapshot.VCPUs,
 		waitMemorySealed:     snapshot.WaitMemorySealed,
 		workspaceSeals:       snapshot.WorkspaceSeals,
 	}, nil

@@ -153,7 +153,7 @@ func (ppb *PostProcessingBuilder) Layer(
 	// layer.BuildLayer stamps the finalize VM's device again when it pauses,
 	// as it does for every layer of the build; the two agree, as the finalize
 	// VM boots with this config's device.
-	result = result.WithMemoryHotplug(ppb.Config.MemoryHotplug)
+	result = result.WithMemoryHotplug(ppb.Config.MemoryHotplug).WithCPUHotplug(ppb.Config.CPUHotplug)
 
 	return phases.LayerResult{
 		Metadata: result,

@@ -261,6 +261,77 @@ func (h *CgroupHandle) Remove(ctx context.Context) error {
 	return nil
 }
 
+// CPUQuotaPeriodUsec is the cpu.max period of a CPU-quota'd sandbox. The
+// kernel default. A guest that runs more busy CPUs than its quota (only
+// possible when its root onlines CPUs it was not granted, or for the moment
+// between a lowered quota and envd taking the CPUs offline) is stalled for up
+// to one period at a time; measured on the fork FC: 16 busy vCPUs under a
+// 4-CPU quota saw ~78 ms gaps at 100 ms and ~11 ms at 10 ms, while 4 busy
+// vCPUs under a 4-CPU quota ran at full speed (x1.002).
+const CPUQuotaPeriodUsec = 100_000
+
+// ErrNoCPUQuota reports a CPU quota requested on a handle without a real
+// cgroup (cgroup accounting disabled or its creation failed).
+var ErrNoCPUQuota = errors.New("the sandbox has no cgroup to hold a CPU quota")
+
+// SetCPUQuota limits the cgroup to vcpus CPUs (cpu.max = vcpus × period);
+// vcpus <= 0 removes the limit. It applies to every thread of the Firecracker
+// process (vCPUs and the VMM's own), immediately.
+func (h *CgroupHandle) SetCPUQuota(vcpus int64) error {
+	if h == nil || h.noop || h.removed {
+		return ErrNoCPUQuota
+	}
+
+	value := "max"
+	if vcpus > 0 {
+		value = strconv.FormatInt(vcpus*CPUQuotaPeriodUsec, 10)
+	}
+
+	line := fmt.Sprintf("%s %d", value, CPUQuotaPeriodUsec)
+	if err := os.WriteFile(filepath.Join(h.path, "cpu.max"), []byte(line), 0); err != nil {
+		return fmt.Errorf("failed to write cpu.max %q: %w", line, err)
+	}
+
+	return nil
+}
+
+// CPUQuota reads the cgroup's cpu.max back as a CPU count (0 = unlimited).
+func (h *CgroupHandle) CPUQuota() (float64, error) {
+	if h == nil || h.noop || h.removed {
+		return 0, ErrNoCPUQuota
+	}
+
+	data, err := os.ReadFile(filepath.Join(h.path, "cpu.max"))
+	if err != nil {
+		return 0, fmt.Errorf("failed to read cpu.max: %w", err)
+	}
+
+	return parseCPUMax(string(data))
+}
+
+func parseCPUMax(data string) (float64, error) {
+	fields := strings.Fields(data)
+	if len(fields) != 2 {
+		return 0, fmt.Errorf("invalid cpu.max %q", data)
+	}
+
+	if fields[0] == "max" {
+		return 0, nil
+	}
+
+	quota, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid cpu.max quota %q: %w", data, err)
+	}
+
+	period, err := strconv.ParseFloat(fields[1], 64)
+	if err != nil || period <= 0 {
+		return 0, fmt.Errorf("invalid cpu.max period %q", data)
+	}
+
+	return quota / period, nil
+}
+
 // Path returns the filesystem path to the cgroup directory
 func (h *CgroupHandle) Path() string {
 	if h == nil {
@@ -566,4 +637,12 @@ func ListSandboxCgroups(root string) ([]string, error) {
 	slices.Sort(names)
 
 	return names, nil
+}
+
+// HandleAtPath returns a handle for the cgroup directory at path without
+// creating, opening or owning it: SetCPUQuota/CPUQuota/GetStats work on it,
+// Remove deletes the directory. For tests and tools that point at a cgroup (or
+// a stand-in directory) they manage themselves.
+func HandleAtPath(path string) *CgroupHandle {
+	return &CgroupHandle{cgroupName: filepath.Base(path), path: path, manager: &managerImpl{}}
 }

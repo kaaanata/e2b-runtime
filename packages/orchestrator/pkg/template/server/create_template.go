@@ -150,6 +150,14 @@ func (s *ServerStore) TemplateCreate(ctx context.Context, templateRequest *templ
 		childSpan.SetAttributes(attribute.Int64("env.max_memory_mb", memoryHotplug.MaxMiB()))
 	}
 
+	cpuHotplug, err := resolveCPUHotplug(ctx, cfg, parent)
+	if err != nil {
+		return nil, err
+	}
+	if cpuHotplug != nil {
+		childSpan.SetAttributes(attribute.Int64("env.max_cpu_count", cpuHotplug.MaxVCPUs))
+	}
+
 	template := config.TemplateConfig{
 		Version:              version,
 		TeamID:               cfg.GetTeamID(),
@@ -179,6 +187,7 @@ func (s *ServerStore) TemplateCreate(ctx context.Context, templateRequest *templ
 		// Same rule for the hotplug device: its capability is in this
 		// reader's KnownCapabilities before any build can produce it.
 		MemoryHotplug: memoryHotplug,
+		CPUHotplug:    cpuHotplug,
 	}
 
 	logs := buildlogger.NewLogEntryLogger()
@@ -256,13 +265,13 @@ func (s *ServerStore) TemplateCreate(ctx context.Context, templateRequest *templ
 
 			buildInfo.SetFail(userError)
 		} else {
-			buildInfo.SetSuccess(withBuildMemoryHotplug(withBuildLayout(&templatemanager.TemplateBuildMetadata{
+			buildInfo.SetSuccess(withBuildCPUHotplug(withBuildMemoryHotplug(withBuildLayout(&templatemanager.TemplateBuildMetadata{
 				RootfsSizeKey:      int32(res.RootfsSizeMB),
 				EnvdVersionKey:     res.EnvdVersion,
 				KernelVersion:      res.KernelVersion,
 				FirecrackerVersion: res.FirecrackerVersion,
 				SchedulingMetadata: res.SchedulingMetadata,
-			}, template.Layout, template.Workspace), template.MemoryHotplug))
+			}, template.Layout, template.Workspace), template.MemoryHotplug), template.CPUHotplug))
 			telemetry.ReportEvent(ctx, "Environment built")
 		}
 	}(context.WithoutCancel(ctx))

@@ -140,6 +140,12 @@ func (f *Factory) RebootSandbox(
 		return nil, err
 	}
 
+	// Likewise the CPU layout: the cold boot creates the VM with its
+	// maximum, boots the base and brings the granted count online below.
+	if err := config.adoptCPUHotplug(meta); err != nil {
+		return nil, err
+	}
+
 	// The masked empty memfile is used only for sizing NoopMemory — guest RAM
 	// is FC's own fresh anonymous memory.
 	pageSize := int64(header.PageSize)
@@ -250,6 +256,8 @@ func (f *Factory) RebootSandbox(
 
 		return nil, errors.Join(err, closeErr)
 	}
+
+	sbx.settleRequestedCPUs(ctx)
 
 	// deferMarkRunning: the caller promotes the sandbox to live itself after a
 	// post-resume step (the resume-time envd live-upgrade's post-/init), so it is

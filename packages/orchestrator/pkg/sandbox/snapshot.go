@@ -56,6 +56,10 @@ type Snapshot struct {
 	// before applying its own request. 0 for a filesystem-only snapshot.
 	MemoryMB int64
 
+	// VCPUs is the vCPU count granted to a CPU-hotplug sandbox when it was
+	// paused (0 for a fixed-size template).
+	VCPUs int64
+
 	// FilesystemSnapshot is true for filesystem-only snapshots: the memfile diff
 	// is empty (NoDiff) and the memfile, memfile header, and snapfile are not
 	// uploaded. It records the decision made at pause time, which can't be

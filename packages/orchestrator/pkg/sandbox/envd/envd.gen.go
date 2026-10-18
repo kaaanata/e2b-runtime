@@ -99,6 +99,30 @@ func (e PostFreezeParamsMode) Valid() bool {
 	}
 }
 
+// CPUsRequest defines model for CPUsRequest.
+type CPUsRequest struct {
+	// Online How many CPUs should be online after the call
+	Online int64 `json:"online"`
+}
+
+// CPUsResult defines model for CPUsResult.
+type CPUsResult struct {
+	// Changed CPUs this call brought online or offline
+	Changed int64 `json:"changed,omitempty"`
+
+	// Errors One entry per CPU whose state could not be changed
+	Errors []string `json:"errors,omitempty"`
+
+	// Hotpluggable Whether every present CPU but cpu0 has an online control (CONFIG_HOTPLUG_CPU)
+	Hotpluggable bool `json:"hotpluggable"`
+
+	// Online CPUs online after the call (/sys/devices/system/cpu/online)
+	Online int64 `json:"online"`
+
+	// Present CPUs present (the VM's vCPU count)
+	Present int64 `json:"present"`
+}
+
 // CollapseResult Per-call statistics from a heap collapse
 type CollapseResult struct {
 	// AlreadyHuge Chunks MADV_COLLAPSE accepted but were already hugepages (no work)
@@ -482,6 +506,9 @@ type PostInitJSONBody struct {
 	Timestamp    time.Time     `json:"timestamp,omitempty"`
 	VolumeMounts []VolumeMount `json:"volumeMounts,omitempty"`
 }
+
+// PostCpusJSONRequestBody defines body for PostCpus for application/json ContentType.
+type PostCpusJSONRequestBody = CPUsRequest
 
 // PostFilesMultipartRequestBody defines body for PostFiles for multipart/form-data ContentType.
 type PostFilesMultipartRequestBody PostFilesMultipartBody

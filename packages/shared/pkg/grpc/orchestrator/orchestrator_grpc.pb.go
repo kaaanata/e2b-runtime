@@ -27,6 +27,7 @@ const (
 	SandboxService_Pause_FullMethodName        = "/SandboxService/Pause"
 	SandboxService_Checkpoint_FullMethodName   = "/SandboxService/Checkpoint"
 	SandboxService_ResizeMemory_FullMethodName = "/SandboxService/ResizeMemory"
+	SandboxService_ResizeCpu_FullMethodName    = "/SandboxService/ResizeCpu"
 )
 
 // SandboxServiceClient is the client API for SandboxService service.
@@ -40,6 +41,7 @@ type SandboxServiceClient interface {
 	Pause(ctx context.Context, in *SandboxPauseRequest, opts ...grpc.CallOption) (*SandboxPauseResponse, error)
 	Checkpoint(ctx context.Context, in *SandboxCheckpointRequest, opts ...grpc.CallOption) (*SandboxCheckpointResponse, error)
 	ResizeMemory(ctx context.Context, in *SandboxResizeMemoryRequest, opts ...grpc.CallOption) (*SandboxResizeMemoryResponse, error)
+	ResizeCpu(ctx context.Context, in *SandboxResizeCpuRequest, opts ...grpc.CallOption) (*SandboxResizeCpuResponse, error)
 }
 
 type sandboxServiceClient struct {
@@ -120,6 +122,16 @@ func (c *sandboxServiceClient) ResizeMemory(ctx context.Context, in *SandboxResi
 	return out, nil
 }
 
+func (c *sandboxServiceClient) ResizeCpu(ctx context.Context, in *SandboxResizeCpuRequest, opts ...grpc.CallOption) (*SandboxResizeCpuResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SandboxResizeCpuResponse)
+	err := c.cc.Invoke(ctx, SandboxService_ResizeCpu_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SandboxServiceServer is the server API for SandboxService service.
 // All implementations must embed UnimplementedSandboxServiceServer
 // for forward compatibility.
@@ -131,6 +143,7 @@ type SandboxServiceServer interface {
 	Pause(context.Context, *SandboxPauseRequest) (*SandboxPauseResponse, error)
 	Checkpoint(context.Context, *SandboxCheckpointRequest) (*SandboxCheckpointResponse, error)
 	ResizeMemory(context.Context, *SandboxResizeMemoryRequest) (*SandboxResizeMemoryResponse, error)
+	ResizeCpu(context.Context, *SandboxResizeCpuRequest) (*SandboxResizeCpuResponse, error)
 	mustEmbedUnimplementedSandboxServiceServer()
 }
 
@@ -161,6 +174,9 @@ func (UnimplementedSandboxServiceServer) Checkpoint(context.Context, *SandboxChe
 }
 func (UnimplementedSandboxServiceServer) ResizeMemory(context.Context, *SandboxResizeMemoryRequest) (*SandboxResizeMemoryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResizeMemory not implemented")
+}
+func (UnimplementedSandboxServiceServer) ResizeCpu(context.Context, *SandboxResizeCpuRequest) (*SandboxResizeCpuResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResizeCpu not implemented")
 }
 func (UnimplementedSandboxServiceServer) mustEmbedUnimplementedSandboxServiceServer() {}
 func (UnimplementedSandboxServiceServer) testEmbeddedByValue()                        {}
@@ -309,6 +325,24 @@ func _SandboxService_ResizeMemory_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxService_ResizeCpu_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SandboxResizeCpuRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxServiceServer).ResizeCpu(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxService_ResizeCpu_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxServiceServer).ResizeCpu(ctx, req.(*SandboxResizeCpuRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SandboxService_ServiceDesc is the grpc.ServiceDesc for SandboxService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -343,6 +377,10 @@ var SandboxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResizeMemory",
 			Handler:    _SandboxService_ResizeMemory_Handler,
+		},
+		{
+			MethodName: "ResizeCpu",
+			Handler:    _SandboxService_ResizeCpu_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
