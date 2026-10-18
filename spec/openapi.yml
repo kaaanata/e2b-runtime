@@ -2333,7 +2333,8 @@ components:
             sandbox_no_compatible_node, sandbox_create_failed, internal_server_error.
             Block volume refusals (409): block_volume_shared_identity_required,
             volume_attached, volume_referenced_by_snapshot, volume_creating,
-            template_layout_mismatch, volume_resize_invalid.
+            template_layout_mismatch, volume_resize_invalid,
+            checkpoint_unsupported.
         message:
           type: string
           description: Error
@@ -3291,7 +3292,11 @@ paths:
         fork leaves no snapshot and no block volume revision behind. 409 when
         the sandbox is not running (e.g. paused) or when it mounts block
         volumes and `allowSharedIdentity` is not true (`error_code`
-        `block_volume_shared_identity_required`).
+        `block_volume_shared_identity_required`). 409 with `error_code`
+        `checkpoint_unsupported` when the node rejects the in-place
+        checkpoint while keeping the sandbox running (e.g. block volumes on
+        a node without in-place checkpoint support); no fork is attempted
+        and no snapshot or revision is recorded.
       tags: [sandboxes]
       security:
         - ApiKeyAuth: []
