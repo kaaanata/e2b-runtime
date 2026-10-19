@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 
 	"github.com/e2b-dev/infra/packages/shared/pkg/consts"
+	e2bgrpc "github.com/e2b-dev/infra/packages/shared/pkg/grpc"
 	"github.com/e2b-dev/infra/packages/shared/pkg/telemetry"
 )
 
@@ -32,6 +33,8 @@ func (a instanceAuthorization) RequireTransportSecurity() bool {
 
 func createClient(tel *telemetry.Client, auth *instanceAuthorization, endpoint string, endpointTLS bool) (*GRPCClient, error) {
 	grpcOptions := []grpc.DialOption{
+		// Template builds send their steps inline (TemplateCreate), past grpc-go's 4 MiB default.
+		e2bgrpc.MessageSizeDialOption(),
 		grpc.WithStatsHandler(
 			otelgrpc.NewClientHandler(
 				otelgrpc.WithTracerProvider(tel.TracerProvider),

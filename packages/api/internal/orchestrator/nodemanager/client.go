@@ -13,6 +13,7 @@ import (
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	"github.com/e2b-dev/infra/packages/api/internal/clusters"
+	e2bgrpc "github.com/e2b-dev/infra/packages/shared/pkg/grpc"
 	orchestratorinfo "github.com/e2b-dev/infra/packages/shared/pkg/grpc/orchestrator-info"
 )
 
@@ -27,6 +28,8 @@ var OrchestratorToApiNodeStateMapper = map[orchestratorinfo.ServiceInfoStatus]ap
 func NewClient(tracerProvider trace.TracerProvider, meterProvider metric.MeterProvider, host string) (*clusters.GRPCClient, error) {
 	conn, err := grpc.NewClient(host,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// Template builds send their steps inline (TemplateCreate), past grpc-go's 4 MiB default.
+		e2bgrpc.MessageSizeDialOption(),
 		grpc.WithStatsHandler(
 			otelgrpc.NewClientHandler(
 				otelgrpc.WithTracerProvider(tracerProvider),
