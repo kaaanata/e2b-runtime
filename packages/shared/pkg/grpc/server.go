@@ -110,7 +110,7 @@ func NewGRPCServer(tel *telemetry.Client, opts ...ServerOption) *grpc.Server {
 	}
 	unaryInterceptors = append(unaryInterceptors, cfg.unaryInterceptors...)
 
-	return grpc.NewServer(
+	serverOpts := append(MessageSizeServerOptions(),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             5 * time.Second,
 			PermitWithoutStream: true,
@@ -130,6 +130,8 @@ func NewGRPCServer(tel *telemetry.Client, opts ...ServerOption) *grpc.Server {
 			),
 		),
 	)
+
+	return grpc.NewServer(serverOpts...)
 }
 
 // extractSandboxResumeAttrs reads sandbox.resume from gRPC metadata set by the
