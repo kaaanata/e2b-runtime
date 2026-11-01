@@ -1,11 +1,7 @@
-//go:build unix
-
 package credproxy
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -17,70 +13,69 @@ import (
 	"time"
 )
 
-func TestPrivateManagementSocket(t *testing.T) {
+func TestPrivateManagementAndRetiredImport(t *testing.T) {
 	t.Parallel()
-	// Keep the Unix socket path below macOS's 104-byte sockaddr limit.
-	root, err := os.MkdirTemp("", "cp-test-") //nolint:usetesting // t.TempDir exceeds macOS sockaddr_un path length for this test.
+	root, err := os.MkdirTemp("", "cred-test-") //nolint:usetesting // t.TempDir exceeds macOS's 104-byte Unix socket path limit.
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(root)
-	p, err := New(root, "owner")
+	p, err := New(root, "owner", "/unused.sock")
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.Store.owner = &fakeOwner{}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- p.ServeManagement(ctx) }()
 	socket := filepath.Join(root, "control.sock")
-	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
-	}}}
-	defer client.CloseIdleConnections()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		info, e := os.Stat(socket)
-		if e == nil && info.Mode().Perm() == 0o600 {
+		if info, err := os.Stat(socket); err == nil && info.Mode().Perm() == 0o600 {
 			break
-		}
-		select {
-		case e := <-done:
-			t.Fatalf("management start: %v", e)
-		default:
 		}
 		if time.Now().After(deadline) {
 			t.Fatal("socket did not start")
 		}
 		time.Sleep(time.Millisecond)
 	}
-	c := credential(Claude)
-	raw, err := json.Marshal(c)
+	client := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	}}}
+	defer client.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://unix/guest/codex", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://unix/import", bytes.NewReader(raw))
+	res, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := client.Do(req)
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || strings.Contains(string(b), "synthetic-access") {
+		t.Fatal("management lease not masked")
+	}
+	request, err = http.NewRequestWithContext(t.Context(), http.MethodPost, "http://unix/import", strings.NewReader(`{"refresh_token":"must-not-be-imported"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil || resp.StatusCode != http.StatusOK {
-		t.Fatal("import failed")
+	request.Header.Set("Content-Type", "application/json")
+	res, err = client.Do(request)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(string(body), c.AccessToken) || strings.Contains(string(body), c.RefreshToken) {
-		t.Fatal("management returned real token")
+	res.Body.Close()
+	if res.StatusCode != http.StatusGone {
+		t.Fatal("legacy import accepted")
 	}
-	second, err := New(root, "owner")
+	second, err := New(root, "owner", "/unused.sock")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = second.ServeManagement(t.Context()); err == nil {
-		t.Fatal("two refresh owners admitted")
+		t.Fatal("duplicate management owner")
 	}
 	cancel()
 	select {
@@ -89,6 +84,6 @@ func TestPrivateManagementSocket(t *testing.T) {
 			t.Fatal(err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("management did not stop")
+		t.Fatal("shutdown did not complete")
 	}
 }

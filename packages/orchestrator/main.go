@@ -55,7 +55,7 @@ func defaultEgressFactory(_ context.Context, deps *factories.Deps) (*factories.E
 		if !filepath.IsAbs(root) {
 			return nil, errors.New("CREDPROXY_ROOT must be absolute")
 		}
-		credentials, err := credproxy.New(root, os.Getenv("CREDPROXY_TEAM_ID"))
+		credentials, err := credproxy.New(root, os.Getenv("CREDPROXY_TEAM_ID"), os.Getenv("CREDPROXY_OWNER_SOCKET"))
 		if err != nil {
 			return nil, err
 		}

@@ -14,8 +14,8 @@ import (
 	"time"
 )
 
-// ServeManagement exposes only masked guest documents. Access to import a real
-// lineage is restricted by the node's root-owned directory and Unix socket.
+// ServeManagement exposes only masked control-account documents. Native account
+// login and renewal are owned by credowner, never by this management endpoint.
 func (p *Proxy) ServeManagement(ctx context.Context) error {
 	lock, err := os.OpenFile(filepath.Join(p.Store.root, "daemon.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -39,22 +39,9 @@ func (p *Proxy) ServeManagement(ctx context.Context) error {
 		return err
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /import", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /import", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		var c Credential
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&c) != nil {
-			http.Error(w, "invalid credential document", http.StatusBadRequest)
-
-			return
-		}
-		files, err := p.Store.Import(c, r.URL.Query().Get("replace") == "true")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(files)
+		http.Error(w, "credential import retired; use the external native credowner login", http.StatusGone)
 	})
 	mux.HandleFunc("GET /guest/{provider}", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")

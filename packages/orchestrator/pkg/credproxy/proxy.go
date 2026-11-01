@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,11 +22,11 @@ type Proxy struct {
 	team      string
 }
 
-func New(root, team string) (*Proxy, error) {
+func New(root, team, ownerSocket string) (*Proxy, error) {
 	if team == "" {
 		return nil, errors.New("CREDPROXY_TEAM_ID is required")
 	}
-	store, err := OpenStore(root)
+	store, err := OpenStore(root, ownerSocket)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +58,7 @@ func provider(host string) Provider {
 
 // Handler binds authority to the verified TLS SNI. A guest Host header never
 // controls where a credential is sent. ReverseProxy streams SSE and upgrades.
-func (p *Proxy) Handler(host string, transport http.RoundTripper) http.Handler {
+func (p *Proxy) Handler(host string, transport http.RoundTripper, sandbox string) http.Handler {
 	reverse := &httputil.ReverseProxy{Transport: transport, FlushInterval: -1, ErrorLog: log.New(io.Discard, "", 0), ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 		http.Error(w, "credential proxy upstream unavailable", http.StatusBadGateway)
 	}, Rewrite: func(r *httputil.ProxyRequest) {
@@ -73,6 +74,7 @@ func (p *Proxy) Handler(host string, transport http.RoundTripper) http.Handler {
 	}}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		if !p.Intercepts(host) || (r.Host != host && r.Host != host+":443") || (r.URL.IsAbs() && r.URL.Host != host && r.URL.Host != host+":443") {
 			http.Error(w, "authority mismatch", http.StatusBadRequest)
 
@@ -86,25 +88,55 @@ func (p *Proxy) Handler(host string, transport http.RoundTripper) http.Handler {
 		}
 		marker := r.Header.Get("Authorization") == "Bearer "+provider(host).AccessSentinel() || r.Header.Get("X-Api-Key") == provider(host).AccessSentinel()
 		if marker {
+			if a, k := r.Header.Get("Authorization"), r.Header.Get("X-Api-Key"); (a != "" && a != "Bearer "+provider(host).AccessSentinel()) || (k != "" && k != provider(host).AccessSentinel()) {
+				http.Error(w, "mixed credential identities refused", http.StatusBadRequest)
+
+				return
+			}
 			allowed := host == "api.anthropic.com" || (host == "chatgpt.com" && strings.HasPrefix(r.URL.Path, "/backend-api/"))
 			if !allowed {
 				http.Error(w, "credential destination refused", http.StatusForbidden)
 
 				return
 			}
-			c, err := p.Store.Current(r.Context(), provider(host))
+			r = r.Clone(ctx)
+			routing, err := routeRequest(host, p.team, sandbox, r)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+
+				return
+			}
+			lease, err := p.Store.owner.Resolve(ctx, routing.resolve)
 			if err != nil {
 				http.Error(w, "login or refresh required on host", http.StatusServiceUnavailable)
 
 				return
 			}
-			r = r.Clone(r.Context())
+			c := lease.Credential
+			if c.Provider != provider(host) || c.Validate() != nil || !c.ExpiresAt.After(time.Now()) {
+				http.Error(w, "invalid credential lease", http.StatusServiceUnavailable)
+
+				return
+			}
+			if err = routing.apply(r, c); err != nil {
+				http.Error(w, "inference identity cannot be prepared", http.StatusBadRequest)
+
+				return
+			}
 			if r.Header.Get("Authorization") == "Bearer "+c.Provider.AccessSentinel() {
 				r.Header.Set("Authorization", "Bearer "+c.AccessToken)
 			}
 			if r.Header.Get("X-Api-Key") == c.Provider.AccessSentinel() {
 				r.Header.Set("X-Api-Key", c.AccessToken)
 			}
+			// Feedback never replays an accepted request or a streaming response.
+			// A pool credential failure is not a revocation of control account A.
+			proxy := *reverse
+			proxy.ModifyResponse = func(res *http.Response) error { return p.observeResponse(ctx, routing.resolve, lease, res) }
+
+			proxy.ServeHTTP(w, r)
+
+			return
 		} else if strings.Contains(r.Header.Get("Authorization"), "sbx-proxy-managed") || strings.Contains(r.Header.Get("X-Api-Key"), "sbx-proxy-managed") {
 			http.Error(w, "wrong provider sentinel", http.StatusForbidden)
 
@@ -114,6 +146,28 @@ func (p *Proxy) Handler(host string, transport http.RoundTripper) http.Handler {
 		// Codex WebSocket tokens, are passed through without account-token rewrite.
 		reverse.ServeHTTP(w, r)
 	})
+}
+
+func (p *Proxy) observeResponse(ctx context.Context, route ResolveRequest, lease Lease, res *http.Response) error {
+	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusTooManyRequests {
+		retry, _ := strconv.Atoi(res.Header.Get("Retry-After"))
+		if err := p.Store.owner.Observe(ctx, Outcome{Provider: lease.Credential.Provider, Purpose: route.Purpose, Session: route.Session, Account: lease.Account, Status: res.StatusCode, RetryAfter: retry, Generation: lease.Credential.Generation()}); err != nil {
+			return errors.New("native credential owner could not process upstream failure")
+		}
+		if res.StatusCode == http.StatusUnauthorized && route.Purpose == Inference {
+			res.Body.Close()
+			res.StatusCode = 503
+			res.Status = "503 Service Unavailable"
+			body := `{"error":{"type":"credential_unavailable","message":"inference account requires native renewal; control login is unchanged"}}`
+			res.Body = io.NopCloser(strings.NewReader(body))
+			res.ContentLength = int64(len(body))
+			res.Header.Del("Content-Encoding")
+			res.Header.Del("Content-Length")
+			res.Header.Set("Content-Type", "application/json")
+		}
+	}
+
+	return nil
 }
 
 func (p *Proxy) refreshResponse(w http.ResponseWriter, r *http.Request, prov Provider) {
@@ -182,7 +236,7 @@ func (p *Proxy) refreshResponse(w http.ResponseWriter, r *http.Request, prov Pro
 
 // ServeConn consumes an admitted transparent-proxy connection. ServeTLS uses
 // net/http's HTTP/2 support (h2 ALPN) and keeps WebSocket/H1 upgrade support.
-func (p *Proxy) ServeConn(ctx context.Context, conn net.Conn, host string, transport http.RoundTripper) {
+func (p *Proxy) ServeConn(ctx context.Context, conn net.Conn, host string, transport http.RoundTripper, sandbox string) {
 	defer conn.Close()
 	cert, err := p.authority.leaf(host)
 	if err != nil {
@@ -190,7 +244,7 @@ func (p *Proxy) ServeConn(ctx context.Context, conn net.Conn, host string, trans
 	}
 	tracked := &closeConn{Conn: conn, done: make(chan struct{})}
 	ln := &singleListener{conn: tracked}
-	server := &http.Server{Handler: p.Handler(host, transport), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20, ErrorLog: log.New(io.Discard, "", 0), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{*cert}}, BaseContext: func(net.Listener) context.Context { return ctx }}
+	server := &http.Server{Handler: p.Handler(host, transport, sandbox), ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20, ErrorLog: log.New(io.Discard, "", 0), TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{*cert}}, BaseContext: func(net.Listener) context.Context { return ctx }}
 	stop := context.AfterFunc(ctx, func() { _ = server.Close() })
 	defer stop()
 	defer server.Close()

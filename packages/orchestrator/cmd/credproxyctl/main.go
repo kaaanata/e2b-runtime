@@ -1,7 +1,7 @@
 //go:build unix
 
 // credproxyctl is an SSH-friendly client to the orchestrator's private socket.
-// import reads secrets from stdin; stdout contains only masked guest files.
+// Native login belongs to credowner; stdout contains only masked guest files.
 package main
 
 import (
@@ -26,12 +26,11 @@ func main() {
 func run() error {
 	flags := flag.NewFlagSet("credproxyctl", flag.ContinueOnError)
 	socket := flags.String("socket", "/var/lib/e2b/credproxy/control.sock", "private node socket")
-	replace := flags.Bool("replace", false, "allow replacing a different account")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
-	if flags.NArg() != 2 || (flags.Arg(0) != "import" && flags.Arg(0) != "guest") {
-		return errors.New("usage: credproxyctl [--socket PATH] [--replace] import|guest claude|codex")
+	if flags.NArg() != 2 || flags.Arg(0) != "guest" {
+		return errors.New("usage: credproxyctl [--socket PATH] guest claude|codex; login is managed by credowner")
 	}
 	provider := flags.Arg(1)
 	if provider != "claude" && provider != "codex" {
@@ -43,17 +42,7 @@ func run() error {
 		return (&net.Dialer{}).DialContext(ctx, "unix", *socket)
 	}}}
 	endpoint := "http://unix/guest/" + provider
-	method := http.MethodGet
-	var body io.Reader
-	if flags.Arg(0) == "import" {
-		method = http.MethodPost
-		endpoint = "http://unix/import"
-		if *replace {
-			endpoint += "?replace=true"
-		}
-		body = io.LimitReader(os.Stdin, (1<<20)+1)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}

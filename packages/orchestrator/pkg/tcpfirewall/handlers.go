@@ -99,7 +99,7 @@ func domainHandler(ctx context.Context, c egressConn) {
 			return dialer.DialContext(dialCtx, network, addr)
 		}}
 		defer transport.CloseIdleConnections()
-		c.credentials.ServeConn(ctx, c.conn, hostname, transport)
+		c.credentials.ServeConn(ctx, c.conn, hostname, transport, c.sbx.Runtime.SandboxID)
 
 		return
 	}

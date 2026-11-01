@@ -3,7 +3,9 @@
 package credproxy
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,13 +24,12 @@ const (
 	CodexRefresh           = "oai-refresh-sbx-proxy-managed"
 )
 
-// Credential is the private node-side wire format, sent only over SSH/Unix socket.
+// Credential is an access-only lease, sent only over the private owner socket.
 // Do not log or format it. State holds public Claude onboarding metadata only.
 type Credential struct {
 	Provider         Provider        `json:"provider"`
 	AccountID        string          `json:"account_id"`
 	AccessToken      string          `json:"access_token"`
-	RefreshToken     string          `json:"refresh_token"`
 	IDToken          string          `json:"id_token,omitempty"`
 	ExpiresAt        time.Time       `json:"expires_at"`
 	Scope            string          `json:"scope,omitempty"`
@@ -39,7 +40,12 @@ type Credential struct {
 
 func (c Credential) String() string   { return "[credential redacted]" }
 func (c Credential) GoString() string { return c.String() }
-func (p Provider) Valid() bool        { return p == Claude || p == Codex }
+func (c Credential) Generation() string {
+	sum := sha256.Sum256([]byte(c.AccessToken))
+
+	return hex.EncodeToString(sum[:])
+}
+func (p Provider) Valid() bool { return p == Claude || p == Codex }
 func (p Provider) AccessSentinel() string {
 	if p == Claude {
 		return ClaudeAccess
@@ -57,10 +63,10 @@ func (p Provider) RefreshSentinel() string {
 }
 
 func (c Credential) Validate() error {
-	if !c.Provider.Valid() || c.AccountID == "" || c.AccessToken == "" || c.RefreshToken == "" || c.ExpiresAt.IsZero() {
+	if !c.Provider.Valid() || c.AccountID == "" || c.AccessToken == "" || c.ExpiresAt.IsZero() {
 		return errors.New("incomplete credential")
 	}
-	if strings.Contains(c.AccessToken, "proxy-managed") || strings.Contains(c.RefreshToken, "proxy-managed") {
+	if strings.Contains(c.AccessToken, "proxy-managed") {
 		return errors.New("cannot import guest sentinels")
 	}
 	if c.Provider == Codex {
@@ -141,24 +147,4 @@ func publicIDToken(token string) (string, error) {
 	}
 
 	return "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0." + base64.RawURLEncoding.EncodeToString(raw) + ".c2J4LXByb3h5LW1hbmFnZWQ", nil
-}
-
-// Some Codex token responses express expiry only in the access JWT.
-func accessExpiry(token string) time.Time {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return time.Time{}
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return time.Time{}
-	}
-	var claims struct {
-		Exp int64 `json:"exp"`
-	}
-	if json.Unmarshal(raw, &claims) != nil || claims.Exp <= 0 {
-		return time.Time{}
-	}
-
-	return time.Unix(claims.Exp, 0)
 }

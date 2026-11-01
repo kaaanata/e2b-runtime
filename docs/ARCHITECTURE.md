@@ -747,10 +747,10 @@ Cross-service contracts are all generated: OpenAPI specs in `spec/`, gRPC protos
 `packages/orchestrator/*.proto` and `packages/envd/spec/`, SQL in `packages/db/queries/`.
 Run `make generate` after changing any of them.
 
-### Opt-in owner credential proxy (fork track `volumes/credproxy`)
+### Opt-in credential proxy and external native owner
 
 The default orchestrator egress factory can enable `pkg/credproxy` with
-`CREDPROXY_ROOT` and a required `CREDPROXY_TEAM_ID`. The normal TCP firewall
+`CREDPROXY_ROOT`, `CREDPROXY_TEAM_ID` and `CREDPROXY_OWNER_SOCKET`. The normal TCP firewall
 still owns admission, connection limits, TOS marking and private-address
 checks. `Sandbox.Config.CredentialTeamID` comes from the authenticated create
 request (including resume/fork); runtime log metadata and guest headers never
@@ -760,20 +760,39 @@ For that team only, admitted TLS traffic to the exact four Anthropic/OpenAI
 hosts is terminated with a persisted node CA. `CABundle()` delivers the same
 CA through the existing envd `/init` trust-store path, including after resume.
 The HTTP authority is pinned to SNI, upstream TLS is verified, and only exact
-provider sentinel headers become real account credentials. Non-sentinel RC
+provider sentinel headers become short-lived account credentials. Non-sentinel RC
 session tokens pass unchanged, including Claude server-mode work polling and
 Codex WebSocket paths. `net/http` handles h2 ALPN, streaming SSE and upgrades.
-Token endpoints accept only sentinel refresh grants and return masked tokens.
+Token endpoints accept only sentinel refresh grants, delegate renewal to the
+external owner, and return masked tokens. They never make OAuth grant requests.
 
-The node owns one credential lineage per provider, a mode-0700 directory with
-mode-0600 atomic credential/CA files, and a mode-0600 Unix control socket.
-`cmd/credproxyctl` imports credentials from stdin and returns only masked guest
-documents; the umbrella Go CLI performs browser PKCE and deposits over SSH.
-One process lock owns refreshes, per-provider mutexes coalesce expiry/reactive
-refreshes, and a persistence failure retains the rotated token in memory and
-refuses service until it can be saved. The signed Codex ID token stays on the
-node; the guest receives unsigned allowlisted account/plan metadata in its
-ChatGPT-format cache. Credential proxy is disabled when `CREDPROXY_ROOT` is
-unset and introduces no externally reachable management listener. RC scoped
-session tokens can still exist in RAM; existing shared-identity fork admission
-continues to apply.
+The orchestrator retains its persisted node CA and masked-document management
+socket. It obtains leases over a private Unix socket from a separate
+`cmd/credowner` process (`pkg/credentialowner`), and never stores a refresh token.
+The previous credential-import endpoint returns 410 rather than enabling a second
+credential writer. Existing CA files are retained during an explicit migration.
+
+The external owner runs native Claude Code/Codex in one private home per account.
+Native CLIs perform login, renewal and durable token rotation; the owner validates
+their files after the native operation, serializes operations per account with a
+mutex and process lock, and reports expired/revoked identities without copying
+desktop caches. Claude uses its native refresh-login environment contract; Codex
+uses its native app-server refresh RPC without requesting tokens in RPC output.
+The owner periodically renews credentials before expiry and coalesces explicit
+refresh signals. Only public identity metadata and sentinels enter the guest.
+
+Control endpoints remain on the configured control account. Explicit Claude
+Messages/count-token and Codex Responses/compact/WebSocket routes select from the
+inference pool. Each conversation is durably pinned to an account; absent a native
+conversation ID, the trusted sandbox ID scopes the binding (compact rejects that
+fallback). Account IDs and known Claude caller metadata are aligned with the
+selected lease. An existing conversation is never reassigned on a 429 or account
+removal; new conversations avoid temporarily throttled accounts. Streams are not
+replayed, and active WebSockets retain their handshake identity. Changing the
+control account requires a cold migration, preserving the umbrella CLI's existing
+pre-resume identity fence.
+
+Both services use mode-0700 roots and mode-0600 private sockets/files. There is no
+public credential management listener. RC scoped session tokens may still exist
+in RAM; shared-identity fork admission remains required. Proxy/native-owner tests
+do not establish live subscription, Remote Control or pause/fork acceptance.
