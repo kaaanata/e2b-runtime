@@ -20,6 +20,9 @@ import (
 type nativeState struct {
 	credential credproxy.Credential
 	refresh    string
+	// plan is the subscription plan the native login reports, for display
+	// only. It never enters a lease.
+	plan string
 }
 
 type nativeRunner interface {
@@ -217,6 +220,7 @@ func readNative(a Account, home string) (nativeState, error) {
 		c.Scope = strings.Join(doc.OAuth.Scopes, " ")
 		c.SubscriptionType = doc.OAuth.Plan
 		c.RateLimitTier = doc.OAuth.Tier
+		state.plan = doc.OAuth.Plan
 		// Only these public profile fields enter the VM, never CLI state or
 		// cached feature flags from the native credential owner.
 		c.State, err = json.Marshal(profile)
@@ -256,10 +260,35 @@ func readNative(a Account, home string) (nativeState, error) {
 			return state, errors.New("native Codex access expiry unavailable")
 		}
 		c.ExpiresAt = time.Unix(claims.Exp, 0)
+		state.plan = codexPlan(c.IDToken)
 	}
 	if state.refresh == "" || c.Validate() != nil {
 		return state, errors.New("native credentials incomplete")
 	}
 
 	return state, nil
+}
+
+// codexPlan reads the ChatGPT plan claim from the native ID token. The token
+// was written by the native CLI; it is not verified here and the value is
+// display only.
+func codexPlan(idToken string) string {
+	parts := strings.Split(idToken, ".")
+	if len(parts) != 3 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Auth struct {
+			Plan string `json:"chatgpt_plan_type"`
+		} `json:"https://api.openai.com/auth"`
+	}
+	if json.Unmarshal(payload, &claims) != nil {
+		return ""
+	}
+
+	return claims.Auth.Plan
 }

@@ -48,7 +48,7 @@ func writeFixture(t *testing.T, a *accountState, account string, expiry time.Tim
 		}
 	} else {
 		access := marshalFixture(t, map[string]int64{"exp": expiry.Unix()})
-		id := marshalFixture(t, map[string]any{"sub": "subject-" + account, "https://api.openai.com/auth": map[string]string{"chatgpt_account_id": account}})
+		id := marshalFixture(t, map[string]any{"sub": "subject-" + account, "https://api.openai.com/auth": map[string]string{"chatgpt_account_id": account, "chatgpt_plan_type": "pro"}})
 		b := marshalFixture(t, map[string]any{"auth_mode": "chatgpt", "tokens": map[string]string{"access_token": token(string(access)), "refresh_token": "refresh-private", "id_token": token(string(id)), "account_id": account}})
 		if err := os.WriteFile(filepath.Join(a.home, "codex", "auth.json"), b, 0o600); err != nil {
 			t.Fatal(err)

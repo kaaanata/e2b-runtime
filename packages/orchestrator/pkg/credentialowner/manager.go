@@ -47,7 +47,9 @@ type Manager struct {
 	mu       sync.Mutex
 	bindings bindings
 	cooldown map[string]time.Time
-	logins   loginSessions
+	// limited records the last upstream 429 per account, in memory only.
+	limited map[string]time.Time
+	logins  loginSessions
 }
 
 func Open(config Config) (*Manager, error) {
@@ -72,7 +74,7 @@ func Open(config Config) (*Manager, error) {
 	}
 	m := &Manager{
 		config: config, accounts: map[string]*accountState{}, runner: commandRunner{},
-		bindings: bindings{Sessions: map[string]string{}, Next: map[credproxy.Provider]uint64{}, Controls: map[credproxy.Provider]string{}}, cooldown: map[string]time.Time{},
+		bindings: bindings{Sessions: map[string]string{}, Next: map[credproxy.Provider]uint64{}, Controls: map[credproxy.Provider]string{}}, cooldown: map[string]time.Time{}, limited: map[string]time.Time{},
 	}
 	if config.MaxSessions == 0 {
 		m.config.MaxSessions = 10000
@@ -480,6 +482,7 @@ func (m *Manager) Observe(ctx context.Context, o credproxy.Outcome) error {
 	if o.Status == 429 {
 		m.mu.Lock()
 		m.cooldown[o.Account] = time.Now().Add(time.Duration(min(max(o.RetryAfter, 30), 3600)) * time.Second)
+		m.limited[o.Account] = time.Now()
 		m.mu.Unlock()
 	}
 
@@ -493,18 +496,41 @@ type AccountStatus struct {
 	Provider  credproxy.Provider `json:"provider"`
 	State     string             `json:"state"`
 	ExpiresAt time.Time          `json:"expires_at,omitzero"`
+	// Usage is what the owner itself observed. It is not the provider's
+	// remaining quota, which no native credential reports.
+	Plan          string    `json:"plan,omitempty"`
+	RateLimitTier string    `json:"rate_limit_tier,omitempty"`
+	Sessions      int       `json:"sessions"`
+	CoolingUntil  time.Time `json:"cooling_until,omitzero"`
+	LastLimitedAt time.Time `json:"last_limited_at,omitzero"`
 }
 
 func (m *Manager) Status() []AccountStatus {
 	specs := m.accountList()
 	result := make([]AccountStatus, 0, len(specs))
+	m.mu.Lock()
+	sessions := map[string]int{}
+	for _, name := range m.bindings.Sessions {
+		sessions[name]++
+	}
+	cooling, limited := maps.Clone(m.cooldown), maps.Clone(m.limited)
+	m.mu.Unlock()
+	usage := func(s AccountStatus) AccountStatus {
+		s.Sessions = sessions[s.Name]
+		if until := cooling[s.Name]; time.Now().Before(until) {
+			s.CoolingUntil = until
+		}
+		s.LastLimitedAt = limited[s.Name]
+
+		return s
+	}
 	for _, spec := range specs {
 		a, ok := m.account(spec.Name)
 		if !ok {
 			continue
 		}
 		if a.signingIn.Load() {
-			result = append(result, AccountStatus{Name: spec.Name, Provider: spec.Provider, State: "signing_in"})
+			result = append(result, usage(AccountStatus{Name: spec.Name, Provider: spec.Provider, State: "signing_in"}))
 
 			continue
 		}
@@ -513,6 +539,7 @@ func (m *Manager) Status() []AccountStatus {
 		state, err := readNative(spec, a.home)
 		if err == nil && bindIdentity(a, state.credential, false) == nil {
 			s.ExpiresAt = state.credential.ExpiresAt
+			s.Plan, s.RateLimitTier = state.plan, state.credential.RateLimitTier
 			s.State = "ready"
 			if !s.ExpiresAt.After(time.Now()) {
 				s.State = "expired"
@@ -522,7 +549,7 @@ func (m *Manager) Status() []AccountStatus {
 			}
 		}
 		a.mu.Unlock()
-		result = append(result, s)
+		result = append(result, usage(s))
 	}
 
 	return result
