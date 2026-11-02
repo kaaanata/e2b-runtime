@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/e2b-dev/infra/packages/orchestrator/pkg/credproxy"
@@ -20,6 +22,7 @@ import (
 
 type accountState struct {
 	mu                 sync.Mutex
+	signingIn          atomic.Bool
 	config             Account
 	home               string
 	lastRefresh        time.Time
@@ -35,15 +38,21 @@ type bindings struct {
 }
 
 type Manager struct {
+	// pmu guards the mutable policy: config.Accounts, config.Routes and the
+	// accounts map. It is never held across a native CLI call.
+	pmu      sync.RWMutex
 	config   Config
 	accounts map[string]*accountState
 	runner   nativeRunner
 	mu       sync.Mutex
 	bindings bindings
 	cooldown map[string]time.Time
+	logins   loginSessions
 }
 
 func Open(config Config) (*Manager, error) {
+	config.Routes = maps.Clone(config.Routes)
+	config.Accounts = slices.Clone(config.Accounts)
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
@@ -58,6 +67,9 @@ func Open(config Config) (*Manager, error) {
 	if err := privateDir(filepath.Join(config.Root, "native")); err != nil {
 		return nil, err
 	}
+	if config, err = loadPolicy(config); err != nil {
+		return nil, err
+	}
 	m := &Manager{
 		config: config, accounts: map[string]*accountState{}, runner: commandRunner{},
 		bindings: bindings{Sessions: map[string]string{}, Next: map[credproxy.Provider]uint64{}, Controls: map[credproxy.Provider]string{}}, cooldown: map[string]time.Time{},
@@ -66,16 +78,11 @@ func Open(config Config) (*Manager, error) {
 		m.config.MaxSessions = 10000
 	}
 	for _, a := range config.Accounts {
-		home := filepath.Join(config.Root, "native", a.Name)
-		if err := privateDir(home); err != nil {
+		state, err := newAccountState(config.Root, a)
+		if err != nil {
 			return nil, err
 		}
-		for _, dir := range []string{"claude", "codex", "config", "cache"} {
-			if err := privateDir(filepath.Join(home, dir)); err != nil {
-				return nil, err
-			}
-		}
-		m.accounts[a.Name] = &accountState{config: a, home: home}
+		m.accounts[a.Name] = state
 	}
 	path := filepath.Join(config.Root, "sessions.json")
 	if _, err := os.Lstat(path); err == nil {
@@ -109,6 +116,43 @@ func Open(config Config) (*Manager, error) {
 	}
 
 	return m, nil
+}
+
+func newAccountState(root string, a Account) (*accountState, error) {
+	home := filepath.Join(root, "native", a.Name)
+	if err := privateDir(home); err != nil {
+		return nil, err
+	}
+	for _, dir := range []string{"claude", "codex", "config", "cache"} {
+		if err := privateDir(filepath.Join(home, dir)); err != nil {
+			return nil, err
+		}
+	}
+
+	return &accountState{config: a, home: home}, nil
+}
+
+func (m *Manager) account(name string) (*accountState, bool) {
+	m.pmu.RLock()
+	defer m.pmu.RUnlock()
+	a, ok := m.accounts[name]
+
+	return a, ok
+}
+
+func (m *Manager) route(p credproxy.Provider) (Route, bool) {
+	m.pmu.RLock()
+	defer m.pmu.RUnlock()
+	r, ok := m.config.Routes[p]
+
+	return r, ok
+}
+
+func (m *Manager) accountList() []Account {
+	m.pmu.RLock()
+	defer m.pmu.RUnlock()
+
+	return slices.Clone(m.config.Accounts)
 }
 
 func identity(c credproxy.Credential) (string, error) {
@@ -183,7 +227,7 @@ func savePrivate(path string, b []byte) error {
 // Login runs only the selected native CLI in its dedicated account home. It
 // does not copy desktop caches or issue an OAuth HTTP request itself.
 func (m *Manager) Login(ctx context.Context, name string, in io.Reader, out, stderr io.Writer) error {
-	a, ok := m.accounts[name]
+	a, ok := m.account(name)
 	if !ok {
 		return errors.New("unknown account alias")
 	}
@@ -209,9 +253,12 @@ func (m *Manager) Login(ctx context.Context, name string, in io.Reader, out, std
 }
 
 func (m *Manager) current(ctx context.Context, name string, force bool) (credproxy.Credential, error) {
-	a, ok := m.accounts[name]
+	a, ok := m.account(name)
 	if !ok {
 		return credproxy.Credential{}, errors.New("account alias is no longer configured")
+	}
+	if a.signingIn.Load() {
+		return credproxy.Credential{}, errors.New("native sign-in in progress for this account")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -271,7 +318,7 @@ func (m *Manager) current(ctx context.Context, name string, force bool) (credpro
 }
 
 func (m *Manager) Resolve(ctx context.Context, r credproxy.ResolveRequest) (credproxy.Lease, error) {
-	route, ok := m.config.Routes[r.Provider]
+	route, ok := m.route(r.Provider)
 	if !ok || !r.Provider.Valid() {
 		return credproxy.Lease{}, errors.New("provider is not configured")
 	}
@@ -311,8 +358,18 @@ func (m *Manager) Resolve(ctx context.Context, r credproxy.ResolveRequest) (cred
 
 			return credproxy.Lease{Account: chosen, Credential: c}, err
 		}
-		for offset := range len(route.Inference) {
-			name := route.Inference[(int(next%uint64(len(route.Inference)))+offset)%len(route.Inference)]
+		cycle := route.schedule()
+		start := 0
+		if route.Strategy != Order && len(cycle) > 0 {
+			start = int(next % uint64(len(cycle)))
+		}
+		tried := map[string]bool{}
+		for offset := range cycle {
+			name := cycle[(start+offset)%len(cycle)]
+			if tried[name] {
+				continue
+			}
+			tried[name] = true
 			m.mu.Lock()
 			cool := time.Now().Before(m.cooldown[name])
 			m.mu.Unlock()
@@ -374,7 +431,7 @@ func (m *Manager) Resolve(ctx context.Context, r credproxy.ResolveRequest) (cred
 }
 
 func (m *Manager) Observe(ctx context.Context, o credproxy.Outcome) error {
-	route, ok := m.config.Routes[o.Provider]
+	route, ok := m.route(o.Provider)
 	if !ok {
 		return errors.New("unknown outcome provider")
 	}
@@ -397,7 +454,7 @@ func (m *Manager) Observe(ctx context.Context, o credproxy.Outcome) error {
 		if len(o.Generation) != 64 {
 			return errors.New("credential rejection requires a lease generation")
 		}
-		a, exists := m.accounts[o.Account]
+		a, exists := m.account(o.Account)
 		if !exists {
 			return errors.New("outcome account is no longer configured")
 		}
@@ -439,9 +496,18 @@ type AccountStatus struct {
 }
 
 func (m *Manager) Status() []AccountStatus {
-	result := make([]AccountStatus, 0, len(m.config.Accounts))
-	for _, spec := range m.config.Accounts {
-		a := m.accounts[spec.Name]
+	specs := m.accountList()
+	result := make([]AccountStatus, 0, len(specs))
+	for _, spec := range specs {
+		a, ok := m.account(spec.Name)
+		if !ok {
+			continue
+		}
+		if a.signingIn.Load() {
+			result = append(result, AccountStatus{Name: spec.Name, Provider: spec.Provider, State: "signing_in"})
+
+			continue
+		}
 		a.mu.Lock()
 		s := AccountStatus{Name: spec.Name, Provider: spec.Provider, State: "login_required"}
 		state, err := readNative(spec, a.home)
@@ -463,7 +529,7 @@ func (m *Manager) Status() []AccountStatus {
 }
 
 func (m *Manager) Sweep(ctx context.Context) {
-	for _, a := range m.config.Accounts {
+	for _, a := range m.accountList() {
 		if ctx.Err() != nil {
 			return
 		}

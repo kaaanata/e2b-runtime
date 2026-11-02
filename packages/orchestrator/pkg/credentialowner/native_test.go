@@ -15,7 +15,7 @@ import (
 // The test binary stands in for the native executables, exercising real pipes,
 // process cleanup, argv, isolated homes and native persistence without a login.
 func TestMain(m *testing.M) {
-	if len(os.Args) > 1 && (os.Args[1] == "auth" || os.Args[1] == "app-server") {
+	if len(os.Args) > 1 && (os.Args[1] == "auth" || os.Args[1] == "app-server" || os.Args[1] == "login") {
 		nativeFixtureMain()
 
 		return
@@ -35,6 +35,9 @@ func fixtureJSON(value any) []byte {
 }
 
 func nativeFixture() int {
+	if code, ok := loginFixture(); ok {
+		return code
+	}
 	if os.Args[1] == "auth" {
 		if len(os.Args) != 3 || os.Args[2] != "login" || os.Getenv("CLAUDE_CODE_OAUTH_REFRESH_TOKEN") != "refresh-private" {
 			return 20
