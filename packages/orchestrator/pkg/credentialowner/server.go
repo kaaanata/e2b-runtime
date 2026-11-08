@@ -95,7 +95,7 @@ func decodeAdmin(w http.ResponseWriter, r *http.Request, v any) bool {
 // socket can never obtain an access token.
 func (m *Manager) AdminHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, _ *http.Request) { adminJSON(w, 200, m.Status()) })
+	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, r *http.Request) { adminJSON(w, 200, m.StatusWithQuota(r.Context())) })
 	mux.HandleFunc("GET /v1/policy", func(w http.ResponseWriter, _ *http.Request) { adminJSON(w, 200, m.Policy()) })
 	mux.HandleFunc("PUT /v1/routes/{provider}", func(w http.ResponseWriter, r *http.Request) {
 		var route Route

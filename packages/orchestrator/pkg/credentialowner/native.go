@@ -20,9 +20,10 @@ import (
 type nativeState struct {
 	credential credproxy.Credential
 	refresh    string
-	// plan is the subscription plan the native login reports, for display
-	// only. It never enters a lease.
-	plan string
+	// plan and email are what the native login reports, for display only.
+	// They never enter a lease.
+	plan  string
+	email string
 }
 
 type nativeRunner interface {
@@ -221,6 +222,7 @@ func readNative(a Account, home string) (nativeState, error) {
 		c.SubscriptionType = doc.OAuth.Plan
 		c.RateLimitTier = doc.OAuth.Tier
 		state.plan = doc.OAuth.Plan
+		state.email = profile.Account.Email
 		// Only these public profile fields enter the VM, never CLI state or
 		// cached feature flags from the native credential owner.
 		c.State, err = json.Marshal(profile)
@@ -260,7 +262,7 @@ func readNative(a Account, home string) (nativeState, error) {
 			return state, errors.New("native Codex access expiry unavailable")
 		}
 		c.ExpiresAt = time.Unix(claims.Exp, 0)
-		state.plan = codexPlan(c.IDToken)
+		state.plan, state.email = codexClaims(c.IDToken)
 	}
 	if state.refresh == "" || c.Validate() != nil {
 		return state, errors.New("native credentials incomplete")
@@ -269,26 +271,27 @@ func readNative(a Account, home string) (nativeState, error) {
 	return state, nil
 }
 
-// codexPlan reads the ChatGPT plan claim from the native ID token. The token
-// was written by the native CLI; it is not verified here and the value is
-// display only.
-func codexPlan(idToken string) string {
+// codexClaims reads the ChatGPT plan and account email from the native ID
+// token. The token was written by the native CLI; it is not verified here and
+// the values are display only.
+func codexClaims(idToken string) (plan, email string) {
 	parts := strings.Split(idToken, ".")
 	if len(parts) != 3 {
-		return ""
+		return "", ""
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	var claims struct {
-		Auth struct {
+		Email string `json:"email"`
+		Auth  struct {
 			Plan string `json:"chatgpt_plan_type"`
 		} `json:"https://api.openai.com/auth"`
 	}
 	if json.Unmarshal(payload, &claims) != nil {
-		return ""
+		return "", ""
 	}
 
-	return claims.Auth.Plan
+	return claims.Auth.Plan, claims.Email
 }

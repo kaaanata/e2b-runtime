@@ -47,6 +47,7 @@ type Manager struct {
 	mu       sync.Mutex
 	bindings bindings
 	cooldown map[string]time.Time
+	quotas   quotaCache
 	// limited records the last upstream 429 per account, in memory only.
 	limited map[string]time.Time
 	logins  loginSessions
@@ -498,11 +499,15 @@ type AccountStatus struct {
 	ExpiresAt time.Time          `json:"expires_at,omitzero"`
 	// Usage is what the owner itself observed. It is not the provider's
 	// remaining quota, which no native credential reports.
+	Email         string    `json:"email,omitempty"`
 	Plan          string    `json:"plan,omitempty"`
 	RateLimitTier string    `json:"rate_limit_tier,omitempty"`
 	Sessions      int       `json:"sessions"`
 	CoolingUntil  time.Time `json:"cooling_until,omitzero"`
 	LastLimitedAt time.Time `json:"last_limited_at,omitzero"`
+	// Quota is the provider's own usage report, fetched only for the admin
+	// socket. It is nil on the lease socket.
+	Quota *Quota `json:"quota,omitempty"`
 }
 
 func (m *Manager) Status() []AccountStatus {
@@ -539,7 +544,7 @@ func (m *Manager) Status() []AccountStatus {
 		state, err := readNative(spec, a.home)
 		if err == nil && bindIdentity(a, state.credential, false) == nil {
 			s.ExpiresAt = state.credential.ExpiresAt
-			s.Plan, s.RateLimitTier = state.plan, state.credential.RateLimitTier
+			s.Email, s.Plan, s.RateLimitTier = state.email, state.plan, state.credential.RateLimitTier
 			s.State = "ready"
 			if !s.ExpiresAt.After(time.Now()) {
 				s.State = "expired"
