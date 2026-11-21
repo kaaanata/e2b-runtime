@@ -1,5 +1,7 @@
 # AGENTS.md
 
+- 试验分支验证按已准入 VM 的 ID 区分控制账号租约和刷新，现有推理仍由 session 路由。持久绑定的切换原语只供协调器在停止目标 Agent 后调用，本分支暂不开放管理 API 或部署。上线前需要随 VM 身份记录和目标进程一同完成可重试切换。
+
 - 运行中的 sbx 项目可通过 SandboxUpdate.agentBinding 新增一个供应方的控制身份摘要。Embed 在 team 与运行态存储锁边界校验 startedAt、已有绑定和目标摘要，拒绝覆盖。快照沿用同一服务端 metadata，数据面授权仍取 authenticated team。
 
 - Self-hosted deployments can enable `sbx-projects-without-deadline` for sandboxes whose metadata has `managed-by=sbx`. Create, resume and explicit timeout refresh use the same deadline policy. The RFC3339 end-time sentinel is reserved for this policy, stays out of timed eviction, and must not be clamped to the plan duration by the store. Manual lifecycle actions still apply.

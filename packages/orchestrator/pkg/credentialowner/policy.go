@@ -241,6 +241,14 @@ func (m *Manager) RemoveAccount(name string) error {
 			return errors.New("remove the account from its routing pool first")
 		}
 	}
+	m.mu.Lock()
+	for _, alias := range m.bindings.SandboxControls {
+		if alias == name {
+			m.mu.Unlock()
+			return errors.New("the account is bound to a sandbox")
+		}
+	}
+	m.mu.Unlock()
 	if a.signingIn.Load() || !a.mu.TryLock() {
 		return errors.New("the account is busy; try again")
 	}

@@ -32,9 +32,10 @@ type accountState struct {
 }
 
 type bindings struct {
-	Sessions map[string]string             `json:"sessions"`
-	Next     map[credproxy.Provider]uint64 `json:"next"`
-	Controls map[credproxy.Provider]string `json:"controls"`
+	Sessions        map[string]string             `json:"sessions"`
+	Next            map[credproxy.Provider]uint64 `json:"next"`
+	Controls        map[credproxy.Provider]string `json:"controls"`
+	SandboxControls map[string]string             `json:"sandbox_controls,omitempty"`
 }
 
 type Manager struct {
@@ -116,6 +117,13 @@ func Open(config Config) (*Manager, error) {
 		if err = savePrivate(path, b); err != nil {
 			return nil, err
 		}
+	}
+
+	if m.bindings.SandboxControls == nil {
+		m.bindings.SandboxControls = make(map[string]string)
+	}
+	if err := m.validateSandboxControls(); err != nil {
+		return nil, err
 	}
 
 	return m, nil
@@ -326,16 +334,8 @@ func (m *Manager) Resolve(ctx context.Context, r credproxy.ResolveRequest) (cred
 		return credproxy.Lease{}, errors.New("provider is not configured")
 	}
 	if r.Purpose == credproxy.Control {
-		c, err := m.current(ctx, route.Control, r.Force)
-		if err == nil && r.Provider == credproxy.Claude {
-			for _, scope := range []string{"user:profile", "user:inference", "user:sessions:claude_code"} {
-				if !slices.Contains(strings.Fields(c.Scope), scope) {
-					return credproxy.Lease{}, errors.New("control account requires native full-scope Claude login")
-				}
-			}
-		}
-
-		return credproxy.Lease{Account: route.Control, Credential: c}, err
+		account := m.controlAlias(r.Provider, r.SandboxID, route.Control)
+		return m.resolveControl(ctx, r.Provider, account, r.Force)
 	}
 	if r.Purpose != credproxy.Inference || len(r.Session) != 64 {
 		return credproxy.Lease{}, errors.New("inference requires a bounded stable session")
@@ -440,7 +440,7 @@ func (m *Manager) Observe(ctx context.Context, o credproxy.Outcome) error {
 	}
 	switch o.Purpose {
 	case credproxy.Control:
-		if o.Account != route.Control {
+		if o.Account != m.controlAlias(o.Provider, o.SandboxID, route.Control) {
 			return errors.New("control outcome identity mismatch")
 		}
 	case credproxy.Inference:

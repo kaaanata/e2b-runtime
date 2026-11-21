@@ -128,6 +128,7 @@ func TestControlAndInferenceAreSeparate(t *testing.T) {
 			req := httptest.NewRequestWithContext(t.Context(), test.method, "https://"+test.host+test.path, strings.NewReader(test.body))
 			req.Header.Set("Authorization", "Bearer "+provider(test.host).AccessSentinel())
 			req.Header.Set("session_id", "thread")
+			req.Header.Set("X-Sandbox-ID", "guest-supplied")
 			rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 				name := "control"
 				if test.purpose == Inference {
@@ -154,7 +155,7 @@ func TestControlAndInferenceAreSeparate(t *testing.T) {
 			})
 			w := httptest.NewRecorder()
 			p.Handler(test.host, rt, "sandbox").ServeHTTP(w, req)
-			if w.Code != 200 || len(o.requests) != 1 || o.requests[0].Purpose != test.purpose {
+			if w.Code != 200 || len(o.requests) != 1 || o.requests[0].Purpose != test.purpose || o.requests[0].SandboxID != "sandbox" {
 				t.Fatalf("routing status=%d requests=%v", w.Code, o.requests)
 			}
 		})
@@ -231,7 +232,7 @@ func TestMaskedRefreshDelegatesToNativeOwner(t *testing.T) {
 
 		return nil, nil
 	}), "sandbox").ServeHTTP(w, r)
-	if w.Code != 200 || len(o.requests) != 1 || !o.requests[0].Force || o.requests[0].Purpose != Control || strings.Contains(w.Body.String(), "synthetic-access") {
+	if w.Code != 200 || len(o.requests) != 1 || !o.requests[0].Force || o.requests[0].Purpose != Control || o.requests[0].SandboxID != "sandbox" || strings.Contains(w.Body.String(), "synthetic-access") {
 		t.Fatal("masked native refresh contract failed")
 	}
 }

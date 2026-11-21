@@ -21,12 +21,14 @@ const (
 )
 
 // ResolveRequest crosses only the private owner socket. Session is a routing
-// key, never an authorization or an account selector.
+// key. SandboxID comes from the admitted sandbox connection and never from
+// headers or body fields supplied by the guest.
 type ResolveRequest struct {
-	Provider Provider `json:"provider"`
-	Purpose  Purpose  `json:"purpose"`
-	Session  string   `json:"session,omitempty"`
-	Force    bool     `json:"force,omitzero"`
+	Provider  Provider `json:"provider"`
+	Purpose   Purpose  `json:"purpose"`
+	Session   string   `json:"session,omitempty"`
+	SandboxID string   `json:"sandbox_id,omitempty"`
+	Force     bool     `json:"force,omitzero"`
 }
 
 // Lease carries no refresh token. Only the native CLI can renew its account.
@@ -42,6 +44,7 @@ type Outcome struct {
 	Provider   Provider `json:"provider"`
 	Purpose    Purpose  `json:"purpose"`
 	Session    string   `json:"session,omitempty"`
+	SandboxID  string   `json:"sandbox_id,omitempty"`
 	Account    string   `json:"account"`
 	Status     int      `json:"status"`
 	Generation string   `json:"generation,omitempty"`

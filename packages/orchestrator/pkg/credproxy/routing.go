@@ -36,7 +36,7 @@ type requestRouting struct {
 }
 
 func routeRequest(host, team, sandbox string, r *http.Request) (requestRouting, error) {
-	x := requestRouting{resolve: ResolveRequest{Provider: provider(host), Purpose: Control}}
+	x := requestRouting{resolve: ResolveRequest{Provider: provider(host), Purpose: Control, SandboxID: sandbox}}
 	if !inferencePath(host, r) {
 		return x, nil
 	}

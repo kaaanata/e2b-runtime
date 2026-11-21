@@ -39,8 +39,8 @@ func (s *Store) Current(ctx context.Context, p Provider) (Credential, error) {
 	return l.Credential, err
 }
 
-func (s *Store) Refresh(ctx context.Context, p Provider) (Credential, error) {
-	l, err := s.owner.Resolve(ctx, ResolveRequest{Provider: p, Purpose: Control, Force: true})
+func (s *Store) Refresh(ctx context.Context, p Provider, sandboxID string) (Credential, error) {
+	l, err := s.owner.Resolve(ctx, ResolveRequest{Provider: p, Purpose: Control, Force: true, SandboxID: sandboxID})
 
 	return l.Credential, err
 }

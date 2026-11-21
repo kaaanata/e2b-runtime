@@ -82,7 +82,7 @@ func (p *Proxy) Handler(host string, transport http.RoundTripper, sandbox string
 		}
 		endpoint := (host == "platform.claude.com" && r.URL.Path == "/v1/oauth/token") || (host == "auth.openai.com" && r.URL.Path == "/oauth/token")
 		if endpoint {
-			p.refreshResponse(w, r, provider(host))
+			p.refreshResponse(w, r, provider(host), sandbox)
 
 			return
 		}
@@ -151,7 +151,7 @@ func (p *Proxy) Handler(host string, transport http.RoundTripper, sandbox string
 func (p *Proxy) observeResponse(ctx context.Context, route ResolveRequest, lease Lease, res *http.Response) error {
 	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusTooManyRequests {
 		retry, _ := strconv.Atoi(res.Header.Get("Retry-After"))
-		if err := p.Store.owner.Observe(ctx, Outcome{Provider: lease.Credential.Provider, Purpose: route.Purpose, Session: route.Session, Account: lease.Account, Status: res.StatusCode, RetryAfter: retry, Generation: lease.Credential.Generation()}); err != nil {
+		if err := p.Store.owner.Observe(ctx, Outcome{Provider: lease.Credential.Provider, Purpose: route.Purpose, Session: route.Session, SandboxID: route.SandboxID, Account: lease.Account, Status: res.StatusCode, RetryAfter: retry, Generation: lease.Credential.Generation()}); err != nil {
 			return errors.New("native credential owner could not process upstream failure")
 		}
 		if res.StatusCode == http.StatusUnauthorized && route.Purpose == Inference {
@@ -170,7 +170,7 @@ func (p *Proxy) observeResponse(ctx context.Context, route ResolveRequest, lease
 	return nil
 }
 
-func (p *Proxy) refreshResponse(w http.ResponseWriter, r *http.Request, prov Provider) {
+func (p *Proxy) refreshResponse(w http.ResponseWriter, r *http.Request, prov Provider, sandboxID string) {
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -208,7 +208,7 @@ func (p *Proxy) refreshResponse(w http.ResponseWriter, r *http.Request, prov Pro
 
 		return
 	}
-	c, err := p.Store.Refresh(r.Context(), prov)
+	c, err := p.Store.Refresh(r.Context(), prov, sandboxID)
 	if err != nil {
 		http.Error(w, "host credential unavailable", http.StatusServiceUnavailable)
 
