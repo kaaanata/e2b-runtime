@@ -1112,10 +1112,36 @@ components:
             409 (`error_code` `cpu_not_hot_resizable`) for a template without
             CPU hot resize when the value differs from its cpuCount.
 
+    SandboxAgentBindingUpdate:
+      type: object
+      description: Add a control-account fingerprint for an agent to an already running sbx project.
+      required: [provider, fingerprint, startedAt, existingBindings]
+      properties:
+        provider:
+          type: string
+          enum: [claude, codex]
+        fingerprint:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        startedAt:
+          type: string
+          format: date-time
+          description: Start time of the running sandbox read before validating its bindings.
+        existingBindings:
+          type: object
+          description: Verified fingerprints of the project's other already bound providers.
+          additionalProperties:
+            type: string
+            pattern: "^[0-9a-f]{64}$"
+
     SandboxUpdate:
       type: object
       description: Fields of a running sandbox that can be changed in place.
       properties:
+        agentBinding:
+          allOf:
+            - $ref: "#/components/schemas/SandboxAgentBindingUpdate"
+          description: Add a provider binding independently of CPU and memory changes.
         memoryMB:
           allOf:
             - $ref: "#/components/schemas/MemoryMB"
@@ -3364,7 +3390,9 @@ paths:
         vCPU count (`cpuCount`) for a template built with maxCpuCount (guest
         CPUs brought online/offline, host CPU quota moved). No restart and no
         snapshot. Returns the sandbox with the requested `memoryMB`/`cpuCount`
-        and the achieved `currentMemoryMB`/`currentCpuCount`.
+        and the achieved `currentMemoryMB`/`currentCpuCount`. The separate
+        `agentBinding` operation enrolls a provider in a running sbx project
+        and rejects replacing an existing fingerprint.
       tags: [sandboxes]
       security:
         - ApiKeyAuth: []

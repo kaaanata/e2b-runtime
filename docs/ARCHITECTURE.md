@@ -8,6 +8,12 @@ into the code.
 > responsibilities, ports, protocols, data stores, flows, deployment topology), update this file
 > in the same PR.
 
+A team can enroll an additional control-account fingerprint for a running sbx
+project through the sandbox update API. The control plane adds it under the
+lifecycle lock, and the next snapshot saves it with the sandbox's metadata.
+Fingerprint values are immutable once set. The authenticated team authorizes
+the data plane.
+
 ## What this repository implements
 
 E2B provides **sandboxes**: isolated Linux VMs that start almost instantly (they resume pre-booted

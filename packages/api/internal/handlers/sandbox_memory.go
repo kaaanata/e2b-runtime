@@ -122,6 +122,29 @@ func (a *APIStore) PatchSandboxesSandboxID(c *gin.Context, id string) {
 		return
 	}
 
+	if body.AgentBinding != nil {
+		if body.MemoryMB != nil || body.CpuCount != nil {
+			a.sendAPIStoreError(c, http.StatusBadRequest, "Add an agent binding separately from resizing")
+
+			return
+		}
+		domain, apiErr := a.sandboxDomain(teamInfo)
+		if apiErr != nil {
+			apierrors.SendAPIError(c, apiErr)
+
+			return
+		}
+		updated, apiErr := a.orchestrator.BindSandboxAgent(ctx, team.ID, sandboxID, *body.AgentBinding)
+		if apiErr != nil {
+			apierrors.SendAPIError(c, apiErr)
+
+			return
+		}
+		c.JSON(http.StatusOK, runningSandboxDetail(updated, domain))
+
+		return
+	}
+
 	if body.MemoryMB == nil && body.CpuCount == nil {
 		a.sendAPIStoreError(c, http.StatusBadRequest, "Nothing to update: memoryMB or cpuCount is required")
 
