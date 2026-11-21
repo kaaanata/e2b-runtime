@@ -11,10 +11,17 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 	"github.com/e2b-dev/infra/packages/api/internal/sandbox"
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
+	"github.com/e2b-dev/infra/packages/shared/pkg/featureflags"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
 )
 
 var errMaxInstanceLengthExceeded = errors.New("max instance length exceeded")
+
+func (o *Orchestrator) sbxWithoutDeadline(ctx context.Context, teamID uuid.UUID, sandboxID string, metadata map[string]string) bool {
+	return metadata["managed-by"] == "sbx" && o.featureFlagsClient != nil &&
+		o.featureFlagsClient.BoolFlag(ctx, featureflags.SBXProjectsWithoutDeadline,
+			featureflags.TeamContext(teamID.String()), featureflags.SandboxContext(sandboxID))
+}
 
 func (o *Orchestrator) KeepAliveFor(ctx context.Context, teamID uuid.UUID, sandboxID string, duration time.Duration, allowShorter bool) (*sandbox.Sandbox, *api.APIError) {
 	now := time.Now()
@@ -22,6 +29,11 @@ func (o *Orchestrator) KeepAliveFor(ctx context.Context, teamID uuid.UUID, sandb
 	updateFunc := func(sbx sandbox.Sandbox) (sandbox.Sandbox, error) {
 		if sbx.State != sandbox.StateRunning {
 			return sbx, &sandbox.NotRunningError{SandboxID: sandboxID, State: sbx.State}
+		}
+		if o.sbxWithoutDeadline(ctx, teamID, sandboxID, sbx.Metadata) {
+			sbx.EndTime = sandbox.NoRuntimeDeadline()
+
+			return sbx, nil
 		}
 
 		// Calculate the maximum TTL that can be set without exceeding the max instance length
@@ -32,7 +44,7 @@ func (o *Orchestrator) KeepAliveFor(ctx context.Context, teamID uuid.UUID, sandb
 			return sbx, errMaxInstanceLengthExceeded
 		}
 
-		if !allowShorter && endTime.Before(sbx.EndTime) {
+		if !allowShorter && !sbx.EndTime.Equal(sandbox.NoRuntimeDeadline()) && endTime.Before(sbx.EndTime) {
 			// If shorter than the current end time, we don't extend, so we can return
 			return sbx, nil
 		}

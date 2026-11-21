@@ -318,6 +318,11 @@ func (o *Orchestrator) CreateSandbox(
 		return sandbox.Sandbox{}, fetchErr
 	}
 
+	withoutDeadline := o.sbxWithoutDeadline(ctx, team.ID, sandboxID, sbxData.Metadata)
+	if withoutDeadline {
+		endTime = sandbox.NoRuntimeDeadline()
+	}
+
 	var requiredNode *nodemanager.Node
 	if sbxData.RequiredNodeID != nil {
 		requiredNode = o.GetNode(clusters.WithClusterFallback(team.ClusterID), *sbxData.RequiredNodeID)
@@ -498,7 +503,9 @@ func (o *Orchestrator) CreateSandbox(
 	// This is to compensate for the time it takes to start the instance
 	// Otherwise it could cause the instance to expire before user has a chance to use it
 	startTime = time.Now()
-	endTime = startTime.Add(timeout)
+	if !withoutDeadline {
+		endTime = startTime.Add(timeout)
+	}
 
 	// The record carries the version the sandbox actually RUNS when the
 	// orchestrator echoes it: the declared build version resolved through the

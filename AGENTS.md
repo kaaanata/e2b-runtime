@@ -1,5 +1,7 @@
 # AGENTS.md
 
+- Self-hosted deployments can enable `sbx-projects-without-deadline` for sandboxes whose metadata has `managed-by=sbx`. Create, resume and explicit timeout refresh use the same deadline policy. The RFC3339 end-time sentinel is reserved for this policy, stays out of timed eviction, and must not be clamped to the plan duration by the store. Manual lifecycle actions still apply.
+
 - 2026-11-01 `volumes/native-credentials-20261101` replaces in-proxy OAuth refresh with an external Linux `credowner` process. Require `CREDPROXY_OWNER_SOCKET`; native Claude/Codex account homes are the exclusive refresh-token writers. The proxy receives access-only leases, legacy import returns 410, control identity stays fixed, inference sessions are durably pinned across restarts, and 401/429 feedback never replays a stream. Preserve exact sentinel/team/authority checks, scoped RC tokens, account metadata consistency and existing snapshot identity fences. New source/tests are not live provider acceptance. Update architecture and umbrella credential-proxy/status docs together.
 
 Instructions for AI agents working in this repository.

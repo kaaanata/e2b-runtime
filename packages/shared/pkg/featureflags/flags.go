@@ -598,6 +598,10 @@ var (
 	// values are ignored at refresh time.
 	MaxConcurrentEvictions = NewIntFlag("max-concurrent-evictions", 256)
 
+	// SBXProjectsWithoutDeadline allows self-hosted deployments to keep sbx
+	// projects running until explicitly paused or stopped.
+	SBXProjectsWithoutDeadline = NewBoolFlag("sbx-projects-without-deadline", false)
+
 	// AutoPauseOverstayBudgetMs is how long the evictor keeps retrying a memory
 	// snapshot for an expired auto-pause sandbox the node refuses, counted from
 	// the first refusal of the current episode, before it requests a

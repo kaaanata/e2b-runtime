@@ -103,6 +103,11 @@ The control-plane entry point (Gin, OpenAPI-generated from `spec/openapi.yml`, p
 
 - **Resources**: sandboxes (create/list/kill/pause/resume/connect/timeout/metrics/logs),
   templates and builds, teams, volumes, API keys, secrets, admin operations.
+- **Runtime deadline**: self-hosted deployments can enable
+  `sbx-projects-without-deadline` for projects tagged `managed-by=sbx`.
+  Create, resume and timeout refresh give opted-in running sandboxes the
+  `9999-12-31T23:59:59Z` end-time sentinel in the API, Redis and node
+  records. They stay running until a manual lifecycle action.
 - **Auth** (via `packages/auth`): team API keys (`X-API-Key`, `e2b_` prefix), auth-provider JWTs
   (OIDC), and either an admin token or a service JWT verified from the configured admin JWKS.
   Backed by an auth DB (Postgres) with a Redis team cache.

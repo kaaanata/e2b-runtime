@@ -79,7 +79,7 @@ func (s *Store) Add(ctx context.Context, sandbox Sandbox, creation *CreationMeta
 
 	endTime := sandbox.EndTime
 
-	if endTime.Sub(sandbox.StartTime) > sandbox.MaxInstanceLength {
+	if !endTime.Equal(NoRuntimeDeadline()) && endTime.Sub(sandbox.StartTime) > sandbox.MaxInstanceLength {
 		sandbox.EndTime = sandbox.StartTime.Add(sandbox.MaxInstanceLength)
 	}
 
