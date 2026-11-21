@@ -21,12 +21,14 @@ var (
 
 const agentBindingPrefix = "sbx-proxy-v1-"
 
-// BindSandboxAgent writes only an initially absent identity. The update uses
+// BindSandboxAgent writes an initially absent identity or compares and replaces
+// it in an explicit control-account switch. The update uses
 // the same sandbox-store lock as lifecycle transitions. Pausing a sandbox
 // persists these metadata with the snapshot before the execution stops.
 func (o *Orchestrator) BindSandboxAgent(ctx context.Context, teamID uuid.UUID, sandboxID string, req api.SandboxAgentBindingUpdate) (sandbox.Sandbox, *api.APIError) {
 	provider := string(req.Provider)
-	if (provider != "claude" && provider != "codex") || req.StartedAt.IsZero() || !agentFingerprint.MatchString(req.Fingerprint) {
+	if (provider != "claude" && provider != "codex") || req.StartedAt.IsZero() || !agentFingerprint.MatchString(req.Fingerprint) ||
+		req.PreviousFingerprint != nil && !agentFingerprint.MatchString(*req.PreviousFingerprint) {
 		return sandbox.Sandbox{}, &api.APIError{Code: http.StatusBadRequest, ClientMsg: "Invalid agent binding request"}
 	}
 
@@ -53,7 +55,8 @@ func withSandboxAgentBinding(current sandbox.Sandbox, req api.SandboxAgentBindin
 	provider := string(req.Provider)
 	key := agentBindingPrefix + provider
 	old := current.Metadata[key]
-	if old != "" && old != req.Fingerprint {
+	if req.PreviousFingerprint != nil && old == "" ||
+		old != "" && old != req.Fingerprint && (req.PreviousFingerprint == nil || old != *req.PreviousFingerprint) {
 		return current, fmt.Errorf("%w: provider already has a different identity", errAgentBindingConflict)
 	}
 
@@ -66,9 +69,15 @@ func withSandboxAgentBinding(current sandbox.Sandbox, req api.SandboxAgentBindin
 	if expected != actual || old == "" && !agentFingerprint.MatchString(actual) {
 		return current, fmt.Errorf("%w: existing control identity is unverified", errAgentBindingConflict)
 	}
-	if old == "" {
+	if old != req.Fingerprint {
 		current.Metadata = maps.Clone(current.Metadata)
 		current.Metadata[key] = req.Fingerprint
+	}
+	if req.PreviousFingerprint != nil && current.Metadata["sbx-control-v1-"+provider] != "scoped" {
+		if old == req.Fingerprint {
+			current.Metadata = maps.Clone(current.Metadata)
+		}
+		current.Metadata["sbx-control-v1-"+provider] = "scoped"
 	}
 	return current, nil
 }

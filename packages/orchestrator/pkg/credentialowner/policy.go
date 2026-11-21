@@ -248,6 +248,12 @@ func (m *Manager) RemoveAccount(name string) error {
 			return errors.New("the account is bound to a sandbox")
 		}
 	}
+	for _, pending := range m.bindings.ControlSwitches {
+		if pending.From == name || pending.To == name {
+			m.mu.Unlock()
+			return errors.New("the account is used by a pending sandbox control switch")
+		}
+	}
 	m.mu.Unlock()
 	if a.signingIn.Load() || !a.mu.TryLock() {
 		return errors.New("the account is busy; try again")

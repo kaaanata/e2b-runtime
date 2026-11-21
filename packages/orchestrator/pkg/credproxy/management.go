@@ -43,9 +43,13 @@ func (p *Proxy) ServeManagement(ctx context.Context) error {
 		w.Header().Set("Cache-Control", "no-store")
 		http.Error(w, "credential import retired; use the external native credowner login", http.StatusGone)
 	})
-	mux.HandleFunc("GET /guest/{provider}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /capabilities", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"controlAccountSwitch": true})
+	})
+	guest := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		files, err := p.Store.Guest(r.Context(), Provider(r.PathValue("provider")))
+		files, err := p.Store.GuestForSandbox(r.Context(), Provider(r.PathValue("provider")), r.PathValue("id"))
 		if err != nil {
 			http.Error(w, "host login required", http.StatusServiceUnavailable)
 
@@ -53,7 +57,9 @@ func (p *Proxy) ServeManagement(ctx context.Context) error {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(files)
-	})
+	}
+	mux.HandleFunc("GET /guest/{provider}", guest)
+	mux.HandleFunc("GET /guest/{provider}/{id}", guest)
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 35 * time.Second}
 	stop := context.AfterFunc(ctx, func() { _ = server.Close() })
 	defer stop()

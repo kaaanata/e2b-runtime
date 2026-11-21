@@ -843,6 +843,9 @@ components:
         - state
         - envdVersion
       properties:
+        controlAccountSwitch:
+          type: boolean
+          description: The running API supports a compare-and-replace agent binding.
         templateID:
           type: string
           description: Identifier of the template from which is the sandbox created
@@ -1123,6 +1126,10 @@ components:
         fingerprint:
           type: string
           pattern: "^[0-9a-f]{64}$"
+        previousFingerprint:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: Compare and replace an existing fingerprint during an explicit control-account switch.
         startedAt:
           type: string
           format: date-time
@@ -3392,7 +3399,7 @@ paths:
         snapshot. Returns the sandbox with the requested `memoryMB`/`cpuCount`
         and the achieved `currentMemoryMB`/`currentCpuCount`. The separate
         `agentBinding` operation enrolls a provider in a running sbx project
-        and rejects replacing an existing fingerprint.
+        and supports a compare-and-replace switch with `previousFingerprint`.
       tags: [sandboxes]
       security:
         - ApiKeyAuth: []

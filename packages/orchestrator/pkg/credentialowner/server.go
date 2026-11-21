@@ -109,6 +109,28 @@ func (m *Manager) AdminHandler() http.Handler {
 		}
 		adminJSON(w, 200, m.Policy())
 	})
+	mux.HandleFunc("GET /v1/sandbox-controls/{id}/{provider}", func(w http.ResponseWriter, r *http.Request) {
+		view, err := m.sandboxControl(credproxy.Provider(r.PathValue("provider")), r.PathValue("id"))
+		if err != nil {
+			adminError(w, http.StatusBadRequest, err)
+			return
+		}
+		adminJSON(w, 200, view)
+	})
+	mux.HandleFunc("GET /v1/sandbox-controls/{id}/{provider}/guest/{account}", func(w http.ResponseWriter, r *http.Request) {
+		p := credproxy.Provider(r.PathValue("provider"))
+		if _, err := m.sandboxControl(p, r.PathValue("id")); err != nil {
+			adminError(w, http.StatusBadRequest, err)
+			return
+		}
+		_, files, err := m.validateControlTarget(r.Context(), p, r.PathValue("account"))
+		if err != nil {
+			adminError(w, http.StatusUnprocessableEntity, err)
+			return
+		}
+		adminJSON(w, 200, files)
+	})
+	mux.HandleFunc("POST /v1/sandbox-controls/{id}/{provider}/{step}", m.switchSandboxControl)
 	mux.HandleFunc("POST /v1/accounts", func(w http.ResponseWriter, r *http.Request) {
 		var body storedAccount
 		if !decodeAdmin(w, r, &body) {
@@ -247,4 +269,43 @@ func (m *Manager) Serve(ctx context.Context) error {
 	}
 
 	return err
+}
+
+func (m *Manager) switchSandboxControl(w http.ResponseWriter, r *http.Request) {
+	p, id := credproxy.Provider(r.PathValue("provider")), r.PathValue("id")
+	view, err := m.sandboxControl(p, id)
+	if err != nil {
+		adminError(w, http.StatusBadRequest, err)
+		return
+	}
+	var body sandboxControlSwitch
+	if !decodeAdmin(w, r, &body) {
+		return
+	}
+	switch r.PathValue("step") {
+	case "stage":
+		err = m.stageSandboxControl(r.Context(), p, id, body)
+	case "commit":
+		if view.Pending == nil || view.Pending.From != body.From || view.Pending.To != body.To ||
+			view.Pending.PreviousFingerprint != body.PreviousFingerprint || view.Pending.Fingerprint != body.Fingerprint {
+			err = errors.New("the prepared switch does not match")
+		} else {
+			err = m.setSandboxControl(r.Context(), p, id, body.From, body.To)
+		}
+	case "finish":
+		err = m.finishSandboxControl(p, id, body.To)
+	default:
+		adminError(w, http.StatusNotFound, errors.New("unknown sandbox control switch step"))
+		return
+	}
+	if err != nil {
+		adminError(w, http.StatusConflict, err)
+		return
+	}
+	view, err = m.sandboxControl(p, id)
+	if err != nil {
+		adminError(w, http.StatusConflict, err)
+		return
+	}
+	adminJSON(w, 200, view)
 }

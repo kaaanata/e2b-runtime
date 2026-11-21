@@ -32,10 +32,11 @@ type accountState struct {
 }
 
 type bindings struct {
-	Sessions        map[string]string             `json:"sessions"`
-	Next            map[credproxy.Provider]uint64 `json:"next"`
-	Controls        map[credproxy.Provider]string `json:"controls"`
-	SandboxControls map[string]string             `json:"sandbox_controls,omitempty"`
+	Sessions        map[string]string               `json:"sessions"`
+	Next            map[credproxy.Provider]uint64   `json:"next"`
+	Controls        map[credproxy.Provider]string   `json:"controls"`
+	SandboxControls map[string]string               `json:"sandbox_controls,omitempty"`
+	ControlSwitches map[string]sandboxControlSwitch `json:"control_switches,omitempty"`
 }
 
 type Manager struct {
@@ -121,6 +122,9 @@ func Open(config Config) (*Manager, error) {
 
 	if m.bindings.SandboxControls == nil {
 		m.bindings.SandboxControls = make(map[string]string)
+	}
+	if m.bindings.ControlSwitches == nil {
+		m.bindings.ControlSwitches = make(map[string]sandboxControlSwitch)
 	}
 	if err := m.validateSandboxControls(); err != nil {
 		return nil, err
@@ -334,8 +338,25 @@ func (m *Manager) Resolve(ctx context.Context, r credproxy.ResolveRequest) (cred
 		return credproxy.Lease{}, errors.New("provider is not configured")
 	}
 	if r.Purpose == credproxy.Control {
-		account := m.controlAlias(r.Provider, r.SandboxID, route.Control)
-		return m.resolveControl(ctx, r.Provider, account, r.Force)
+		m.mu.Lock()
+		pending := m.bindings.ControlSwitches[controlKey(r.Provider, r.SandboxID)]
+		account := m.controlAliasLocked(r.Provider, r.SandboxID, route.Control)
+		m.mu.Unlock()
+		if pending.Phase == controlStaged {
+			return credproxy.Lease{}, errors.New("the sandbox control account is being switched")
+		}
+		lease, err := m.resolveControl(ctx, r.Provider, account, r.Force)
+		if err != nil || r.SandboxID == "" {
+			return lease, err
+		}
+		m.mu.Lock()
+		pending = m.bindings.ControlSwitches[controlKey(r.Provider, r.SandboxID)]
+		stillCurrent := account == m.controlAliasLocked(r.Provider, r.SandboxID, route.Control)
+		m.mu.Unlock()
+		if pending.Phase == controlStaged || !stillCurrent {
+			return credproxy.Lease{}, errors.New("the sandbox control account changed")
+		}
+		return lease, nil
 	}
 	if r.Purpose != credproxy.Inference || len(r.Session) != 64 {
 		return credproxy.Lease{}, errors.New("inference requires a bounded stable session")

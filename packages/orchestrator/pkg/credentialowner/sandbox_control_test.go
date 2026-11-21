@@ -15,6 +15,12 @@ func TestScopedControlKeepsOtherSandboxesAndInferencePinned(t *testing.T) {
 			a, b := strings.Repeat("a", 20), strings.Repeat("b", 20)
 			req := credproxy.ResolveRequest{Provider: provider, Purpose: credproxy.Control, SandboxID: a}
 			inference := pick(t, m, provider, "existing-inference")
+			if err := m.stageSandboxControl(t.Context(), provider, a, sandboxControlSwitch{
+				From: "control", To: "worker2", PreviousFingerprint: strings.Repeat("a", 64), Fingerprint: strings.Repeat("b", 64),
+				Launch: sandboxControlLaunch{Directory: "/workspace", Name: "project", Mode: "default"},
+			}); err != nil {
+				t.Fatal(err)
+			}
 			if err := m.setSandboxControl(t.Context(), provider, a, "control", "worker2"); err != nil {
 				t.Fatal(err)
 			}

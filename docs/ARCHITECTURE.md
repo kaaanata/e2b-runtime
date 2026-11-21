@@ -8,27 +8,21 @@ into the code.
 > responsibilities, ports, protocols, data stores, flows, deployment topology), update this file
 > in the same PR.
 
-A team can enroll an additional control-account fingerprint for a running sbx
-project through the sandbox update API. The control plane adds it under the
-lifecycle lock, and the next snapshot saves it with the sandbox's metadata.
-Fingerprint values are immutable once set. The authenticated team authorizes
-the data plane.
+### Per-project control accounts
 
-### Scoped control-account switch experiment
+The credential proxy passes the admitted sandbox ID on the private owner socket.
+The owner uses the provider and sandbox key for control requests and OAuth renewal.
+The coordinator stages an explicit switch for one provider. While staged, the
+owner fences control leases for that scope. The Dashboard stops the managed
+Agent, installs masked credentials, and uses the sandbox update API to compare
+and replace the provider fingerprint under the lifecycle lock. The fingerprint
+is saved with the sandbox metadata in its next snapshot.
 
-The egress proxy sends the admitted sandbox ID on the private credential-owner
-socket. Control requests and OAuth renewal use the same provider and sandbox key.
-The owner prototype persists that key with its selected account, alongside the
-separate inference session assignments. Requests from an older unscoped proxy
-use the original provider control route.
-
-A production switch requires a resumable operation that fences the target Agent,
-stops its processes, updates the sandbox binding and masked profile, and starts
-Remote Control under the selected account. The controller must handle failures
-between writes before exposing the operation in Dashboard. The single-node
-deployment must first roll the credential owner and the proxy together through
-a sandbox maintenance window. The scoped lease tests exercise local routing and
-persistence.
+The owner commits the scoped account and records that the Agent needs restarting.
+A retry after commit resumes the restart phase. Inference sessions retain their
+stored account assignments. Older unscoped management traffic resolves the
+provider's default control account. Fork admission rejects scoped control
+accounts before snapshotting because a fork receives a different sandbox ID.
 
 ## What this repository implements
 

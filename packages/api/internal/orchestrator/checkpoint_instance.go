@@ -78,6 +78,13 @@ func (o *Orchestrator) CheckpointSandbox(ctx context.Context, teamID uuid.UUID, 
 	}
 	defer finish(nil)
 
+	// A new sandbox ID would resolve the default account while the cloned
+	// memory retained the scoped account. Keep that case outside checkpoint
+	// admission until scoped ownership can be transferred to the fork.
+	if sbx.Metadata["sbx-control-v1-claude"] == "scoped" || sbx.Metadata["sbx-control-v1-codex"] == "scoped" {
+		return &CheckpointRejectedError{Reason: "A scoped control account cannot be inherited by a sandbox fork"}
+	}
+
 	node := o.getOrConnectNode(ctx, sbx.ClusterID, sbx.NodeID)
 	if node == nil {
 		return fmt.Errorf("node '%s' not found", sbx.NodeID)

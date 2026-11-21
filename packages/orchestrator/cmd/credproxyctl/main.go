@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"time"
 )
 
@@ -29,8 +30,8 @@ func run() error {
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		return err
 	}
-	if flags.NArg() != 2 || flags.Arg(0) != "guest" {
-		return errors.New("usage: credproxyctl [--socket PATH] guest claude|codex; login is managed by credowner")
+	if (flags.NArg() != 2 && flags.NArg() != 3) || flags.Arg(0) != "guest" {
+		return errors.New("usage: credproxyctl [--socket PATH] guest claude|codex [SANDBOX]")
 	}
 	provider := flags.Arg(1)
 	if provider != "claude" && provider != "codex" {
@@ -42,6 +43,12 @@ func run() error {
 		return (&net.Dialer{}).DialContext(ctx, "unix", *socket)
 	}}}
 	endpoint := "http://unix/guest/" + provider
+	if id := flags.Arg(2); flags.NArg() == 3 {
+		if ok, _ := regexp.MatchString("^[a-z0-9]{20}$", id); !ok {
+			return errors.New("invalid sandbox ID")
+		}
+		endpoint += "/" + id
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err

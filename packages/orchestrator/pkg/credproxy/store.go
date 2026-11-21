@@ -46,12 +46,15 @@ func (s *Store) Refresh(ctx context.Context, p Provider, sandboxID string) (Cred
 }
 
 func (s *Store) Guest(ctx context.Context, p Provider) (GuestFiles, error) {
-	c, err := s.Current(ctx, p)
+	return s.GuestForSandbox(ctx, p, "")
+}
+
+func (s *Store) GuestForSandbox(ctx context.Context, p Provider, id string) (GuestFiles, error) {
+	l, err := s.owner.Resolve(ctx, ResolveRequest{Provider: p, Purpose: Control, SandboxID: id})
 	if err != nil {
 		return GuestFiles{}, err
 	}
-
-	return c.GuestFiles()
+	return l.Credential.GuestFiles()
 }
 
 func atomicPrivate(path string, raw []byte) error {
