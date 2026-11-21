@@ -13,10 +13,10 @@ import (
 	e2bcatalog "github.com/e2b-dev/infra/packages/shared/pkg/sandbox-catalog"
 )
 
-func (o *Orchestrator) addSandboxToRoutingTable(ctx context.Context, sandbox sandbox.Sandbox) error {
-	node := o.GetNode(sandbox.ClusterID, sandbox.NodeID)
+func (o *Orchestrator) addSandboxToRoutingTable(ctx context.Context, sbx sandbox.Sandbox) error {
+	node := o.GetNode(sbx.ClusterID, sbx.NodeID)
 	if node == nil {
-		return fmt.Errorf("node '%s' not found", sandbox.NodeID)
+		return fmt.Errorf("node '%s' not found", sbx.NodeID)
 	}
 
 	// For remote cluster nodes we are using gPRC metadata for routing registration instead
@@ -30,14 +30,17 @@ func (o *Orchestrator) addSandboxToRoutingTable(ctx context.Context, sandbox san
 		OrchestratorID: node.Metadata().ServiceInstanceID,
 		OrchestratorIP: nodeIP,
 
-		ExecutionID:      sandbox.ExecutionID,
-		StartedAt:        sandbox.StartTime,
-		MaxLengthInHours: int64(sandbox.MaxInstanceLength / time.Hour),
+		ExecutionID:      sbx.ExecutionID,
+		StartedAt:        sbx.StartTime,
+		MaxLengthInHours: int64(sbx.MaxInstanceLength / time.Hour),
 	}
 
 	lifetime := time.Duration(info.MaxLengthInHours) * time.Hour
+	if sbx.EndTime.Equal(sandbox.NoRuntimeDeadline()) {
+		lifetime = 0
+	}
 
-	return o.routingCatalog.StoreSandbox(ctx, sandbox.SandboxID, &info, lifetime)
+	return o.routingCatalog.StoreSandbox(ctx, sbx.SandboxID, &info, lifetime)
 }
 
 func (o *Orchestrator) addSandboxToRoutingTableOrLog(ctx context.Context, sandbox sandbox.Sandbox) {

@@ -13,6 +13,7 @@ import (
 	"github.com/e2b-dev/infra/packages/api/internal/utils"
 	"github.com/e2b-dev/infra/packages/shared/pkg/featureflags"
 	"github.com/e2b-dev/infra/packages/shared/pkg/logger"
+	e2bcatalog "github.com/e2b-dev/infra/packages/shared/pkg/sandbox-catalog"
 )
 
 var errMaxInstanceLengthExceeded = errors.New("max instance length exceeded")
@@ -25,12 +26,16 @@ func (o *Orchestrator) sbxWithoutDeadline(ctx context.Context, teamID uuid.UUID,
 
 func (o *Orchestrator) KeepAliveFor(ctx context.Context, teamID uuid.UUID, sandboxID string, duration time.Duration, allowShorter bool) (*sandbox.Sandbox, *api.APIError) {
 	now := time.Now()
+	var updateRoutingTTL bool
 
 	updateFunc := func(sbx sandbox.Sandbox) (sandbox.Sandbox, error) {
 		if sbx.State != sandbox.StateRunning {
 			return sbx, &sandbox.NotRunningError{SandboxID: sandboxID, State: sbx.State}
 		}
-		if o.sbxWithoutDeadline(ctx, teamID, sandboxID, sbx.Metadata) {
+		withoutDeadline := o.sbxWithoutDeadline(ctx, teamID, sandboxID, sbx.Metadata)
+		wasWithoutDeadline := sbx.EndTime.Equal(sandbox.NoRuntimeDeadline())
+		updateRoutingTTL = withoutDeadline || wasWithoutDeadline
+		if withoutDeadline {
 			sbx.EndTime = sandbox.NoRuntimeDeadline()
 
 			return sbx, nil
@@ -44,7 +49,7 @@ func (o *Orchestrator) KeepAliveFor(ctx context.Context, teamID uuid.UUID, sandb
 			return sbx, errMaxInstanceLengthExceeded
 		}
 
-		if !allowShorter && !sbx.EndTime.Equal(sandbox.NoRuntimeDeadline()) && endTime.Before(sbx.EndTime) {
+		if !allowShorter && !wasWithoutDeadline && endTime.Before(sbx.EndTime) {
 			// If shorter than the current end time, we don't extend, so we can return
 			return sbx, nil
 		}
@@ -76,6 +81,16 @@ func (o *Orchestrator) KeepAliveFor(ctx context.Context, teamID uuid.UUID, sandb
 		}
 
 		return nil, &api.APIError{Code: http.StatusInternalServerError, ClientMsg: "Error when setting sandbox timeout", Err: err}
+	}
+
+	if catalog, ok := o.routingCatalog.(*e2bcatalog.RedisSandboxCatalog); ok && updateRoutingTTL {
+		expiration := sbx.MaxInstanceLength
+		if sbx.EndTime.Equal(sandbox.NoRuntimeDeadline()) {
+			expiration = 0
+		}
+		if err := catalog.SetExpiration(ctx, sandboxID, sbx.ExecutionID, expiration); err != nil {
+			return nil, &api.APIError{Code: http.StatusInternalServerError, ClientMsg: "Error when setting sandbox routing timeout", Err: err}
+		}
 	}
 
 	return &sbx, nil

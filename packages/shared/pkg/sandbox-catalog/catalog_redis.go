@@ -44,6 +44,19 @@ end
 return 2
 `)
 
+var expirationIfSameExecution = redis.NewScript(`
+local value = redis.call('GET', KEYS[1])
+if not value then return 0 end
+local ok, info = pcall(cjson.decode, value)
+if not ok or type(info) ~= 'table' or info.execution_id ~= ARGV[1] then
+  return 0
+end
+if tonumber(ARGV[2]) == 0 then
+  return redis.call('PERSIST', KEYS[1])
+end
+return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+`)
+
 const (
 	// catalogKeyPrefix is the API-owned routing record.
 	catalogKeyPrefix = "sandbox:catalog:"
@@ -121,6 +134,14 @@ func (c *RedisSandboxCatalog) StoreSandbox(ctx context.Context, sandboxID string
 	}
 
 	return nil
+}
+
+// SetExpiration changes the routing record's lifetime if it still belongs to
+// the specified execution. A zero duration makes the record persistent.
+func (c *RedisSandboxCatalog) SetExpiration(ctx context.Context, sandboxID, executionID string, expiration time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, catalogRedisTimeout)
+	defer cancel()
+	return expirationIfSameExecution.Run(ctx, c.redisClient, []string{c.getCatalogKey(sandboxID)}, executionID, expiration.Milliseconds()).Err()
 }
 
 // DeleteSandbox is best-effort: a Redis error is logged and swallowed, the entry then expires via TTL.
