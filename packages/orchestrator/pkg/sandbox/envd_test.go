@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -144,4 +146,40 @@ func TestEnvdInitEmptyCaBundle(t *testing.T) { //nolint:paralleltest
 	defer resp.Body.Close()
 
 	assert.Empty(t, captured.CaBundle, "caBundle should be omitted when empty")
+}
+
+func TestEnvdInitRetriesBusyAndKeepsGuestError(t *testing.T) { //nolint:paralleltest
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+
+			return
+		}
+
+		w.WriteHeader(http.StatusBadRequest)
+		assert.NoError(t, http.NewResponseController(w).Flush())
+		time.Sleep(20 * time.Millisecond)
+		_, err := io.WriteString(w, "workspace initialization failed")
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+
+	originalClient := sandboxHttpClient
+	sandboxHttpClient = *server.Client()
+	t.Cleanup(func() { sandboxHttpClient = originalClient })
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	sbx := newTestSandboxWithBundle("")
+	response, attempts, err := sbx.doRequestWithInfiniteRetries(ctx, http.MethodPost, server.URL+"/init")
+	require.NoError(t, err)
+	defer response.Body.Close()
+
+	require.EqualValues(t, 2, attempts)
+	require.Equal(t, http.StatusBadRequest, response.StatusCode)
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.Equal(t, "workspace initialization failed", string(body))
 }

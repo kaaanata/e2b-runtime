@@ -30,7 +30,9 @@ import (
 )
 
 const (
-	loopDelay = 5 * time.Millisecond
+	loopDelay         = 5 * time.Millisecond
+	envdBusyDelay     = 100 * time.Millisecond
+	envdInitBodyLimit = 4 << 10
 )
 
 // envdInitExitType classifies the outcome of an envd init call.
@@ -117,16 +119,35 @@ func (s *Sandbox) doRequestWithInfiniteRetries(
 		}
 
 		response, err := sandboxHttpClient.Do(request)
-		cancel()
-
+		delay := loopDelay
 		if err == nil {
-			return response, requestCount, nil
+			// Read the response before canceling the attempt, so the caller
+			// can see the guest's actual init error even when the body arrives
+			// after the headers.
+			var body []byte
+			body, err = io.ReadAll(io.LimitReader(response.Body, envdInitBodyLimit))
+			_ = response.Body.Close()
+			if err == nil && response.StatusCode != http.StatusServiceUnavailable {
+				cancel()
+				response.Body = io.NopCloser(bytes.NewReader(body))
+
+				return response, requestCount, nil
+			}
+			if response.StatusCode == http.StatusServiceUnavailable {
+				// envd returns 503 while another init or CA installation
+				// still holds its lock. Keep the VM and retry.
+				delay = envdBusyDelay
+				if err == nil {
+					err = errors.New("envd init returned HTTP 503")
+				}
+			}
 		}
+		cancel()
 
 		select {
 		case <-ctx.Done():
-			return nil, requestCount, fmt.Errorf("%w with cause: %w", ctx.Err(), context.Cause(ctx))
-		case <-time.After(loopDelay):
+			return nil, requestCount, fmt.Errorf("%w with cause: %w; last envd init attempt: %w", ctx.Err(), context.Cause(ctx), err)
+		case <-time.After(delay):
 		}
 	}
 }
