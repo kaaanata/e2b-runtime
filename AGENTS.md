@@ -1,5 +1,7 @@
 # AGENTS.md
 
+- A block volume mounted at `/root` is the root user's home. Envd sets the mounted directory to mode 0700 before marking the mount ready. Snapshot attachment paths keep their recorded values.
+
 - Dashboard 对单个运行项目的 Claude/Codex 切换通过私有 owner API 分阶段持久化。代理以已准入的 sandbox ID 路由该 Agent 的控制请求和刷新。Embed compare-and-replace 只更新该供应方的摘要，核对运行实例和对端已有绑定，记录随快照保存。默认控制账号和数据面认证 team 沿用已有边界。
 
 - Self-hosted deployments can enable `sbx-projects-without-deadline` for sandboxes whose metadata has `managed-by=sbx`. Create, resume and explicit timeout refresh use the same deadline policy. The RFC3339 end-time sentinel is reserved for this policy, stays out of timed eviction, and must not be clamped to the plan duration by the store. Manual lifecycle actions still apply.

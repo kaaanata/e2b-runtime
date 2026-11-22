@@ -568,6 +568,8 @@ The orchestrator passes each sandbox's volumes to envd in `/init` (`VolumeMount`
   Block volumes reach the node only as `SandboxCreateRequest.workspace_slots` (slot, volume,
   incarnation, mount path, expected ext4 UUID and capacity): a new sandbox takes the template's
   slots in mount order, a resume or fork the slot recorded in `snapshot_volume_refs.slot`.
+  A volume at `/root` serves as the sandbox root user's home. Envd applies mode 0700 to the
+  mounted directory before recording it as ready.
   `volume_mounts` carries NFS volumes only and a node refuses a block entry there. A pause or
   checkpoint returns one `SandboxWorkspaceRevision` per bound slot (response field 20), sealed
   after `CreateSnapshot` and before any resume; the API records them (revision rows, finished

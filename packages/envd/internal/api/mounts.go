@@ -405,6 +405,13 @@ func (a *API) setupBlock(ctx context.Context, logger zerolog.Logger, lifecycleID
 		}
 	}
 
+	// The ext4 root's mode replaces the hidden directory's mode at mount.
+	// Keep the root user's home private even on a freshly formatted volume.
+	if volume.Path == "/root" {
+		if err := os.Chmod(volume.Path, 0o700); err != nil {
+			return fmt.Errorf("set permissions on root home volume: %w", err)
+		}
+	}
 	a.storeMount(volume.Path, mountRecord{LifecycleID: lifecycleID, SourceType: Block, Device: device})
 
 	return nil
