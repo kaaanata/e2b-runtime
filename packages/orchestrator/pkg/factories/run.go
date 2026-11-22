@@ -993,7 +993,7 @@ func run(config cfg.Config, opts Options) (success bool) {
 	orchestrator.RegisterVolumeServiceServer(grpcServer, volumeService)
 	if blockVolumes != nil {
 		orchestrator.RegisterBlockVolumeServiceServer(grpcServer,
-			blockvol.NewGRPCServer(blockVolumes, blockVolumes.Layout().Root(), config.BlockVolumeCapacityTiers()))
+			blockvol.NewGRPCServer(blockVolumes, blockVolumes.Layout().Root()))
 	}
 	orchestrator.RegisterChunkServiceServer(grpcServer, orchestratorService)
 

@@ -2,11 +2,17 @@ package handlers
 
 import (
 	"fmt"
+	"math"
 	"net/http"
-	"slices"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
 )
+
+const maxBlockVolumeCapacityGiB = math.MaxInt64 >> 30
+
+func validBlockVolumeCapacity(capacityGiB int64) bool {
+	return capacityGiB > 0 && capacityGiB <= maxBlockVolumeCapacityGiB
+}
 
 // volumeResizes validates the volumeMounts of a resume or connect request
 // and returns the requested capacities (volume name -> bytes). Whether each
@@ -28,8 +34,8 @@ func (a *APIStore) volumeResizes(mounts *[]api.ResumeVolumeMount) (map[string]in
 			return nil, &api.APIError{Code: http.StatusBadRequest, ClientMsg: fmt.Sprintf("volumeMounts: volume '%s' is listed twice", m.Name)}
 		}
 
-		if !slices.Contains(a.config.BlockVolumeCapacityTiersGiB, m.CapacityGiB) {
-			return nil, &api.APIError{Code: http.StatusBadRequest, ClientMsg: fmt.Sprintf("volumeMounts: capacityGiB of volume '%s' must be one of %v", m.Name, a.config.BlockVolumeCapacityTiersGiB)}
+		if !validBlockVolumeCapacity(m.CapacityGiB) {
+			return nil, &api.APIError{Code: http.StatusBadRequest, ClientMsg: fmt.Sprintf("volumeMounts: capacityGiB of volume '%s' must be between 1 and %d", m.Name, maxBlockVolumeCapacityGiB)}
 		}
 
 		out[m.Name] = m.CapacityGiB << 30

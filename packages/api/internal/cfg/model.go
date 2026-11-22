@@ -154,9 +154,7 @@ type Config struct {
 	// from the database.
 	OutboxBacklogInterval time.Duration `env:"OUTBOX_BACKLOG_INTERVAL" envDefault:"30s"`
 
-	// BlockVolumeCapacityTiersGiB is the set of capacities (GiB) a block
-	// volume can be created with. Empty disables creating block volumes.
-	BlockVolumeCapacityTiersGiB []int64 `env:"BLOCK_VOLUME_CAPACITY_TIERS_GIB" envSeparator:","`
+	BlockVolumeEnabled bool `env:"BLOCK_VOLUME_ENABLED" envDefault:"false"`
 }
 
 type FailureCondition string

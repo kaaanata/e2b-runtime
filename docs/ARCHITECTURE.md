@@ -229,6 +229,8 @@ gRPC services on :5008 (`pkg/server/`, `pkg/service/`, `pkg/template/server/`, `
   operation id. An enabled node advertises the `volume-backend=block` label; the API only places
   block volumes on such nodes. The same `blockvol.Service` instance is the sandbox factory's
   workspace backend (bind on start, seal on pause, release after the VM exits).
+  The API accepts whole GiB capacities with `BLOCK_VOLUME_ENABLED` enabled. The owner node
+  checks free data and metadata watermarks before it reserves storage.
 
 Process shutdown, triggered by `SIGINT`, `SIGTERM`, `SIGUSR1`, or a service failure, moves
 the node to `ShuttingDown` before draining builds and sandboxes. Like `Draining`, this excludes new

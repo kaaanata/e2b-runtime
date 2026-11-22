@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
-	"slices"
 	"strconv"
 
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -27,16 +27,14 @@ type GRPCServer struct {
 
 	backend Backend
 	root    string
-	tiers   []uint64
 }
 
 var _ orchestrator.BlockVolumeServiceServer = (*GRPCServer)(nil)
 
 // NewGRPCServer serves backend, whose layout is rooted at root (used to report
-// subvolume paths relative to it). capacityTiers, when non-empty, is the
-// exhaustive set of capacities (bytes) CreateBlockVolume accepts.
-func NewGRPCServer(backend Backend, root string, capacityTiers []uint64) *GRPCServer {
-	return &GRPCServer{backend: backend, root: root, tiers: slices.Clone(capacityTiers)}
+// subvolume paths relative to it).
+func NewGRPCServer(backend Backend, root string) *GRPCServer {
+	return &GRPCServer{backend: backend, root: root}
 }
 
 func (s *GRPCServer) CreateBlockVolume(ctx context.Context, req *orchestrator.CreateBlockVolumeRequest) (*orchestrator.CreateBlockVolumeResponse, error) {
@@ -61,12 +59,8 @@ func (s *GRPCServer) CreateBlockVolume(ctx context.Context, req *orchestrator.Cr
 	}
 
 	capacity := req.GetCapacityBytes()
-	if capacity == 0 {
-		return nil, status.Error(codes.InvalidArgument, "capacity_bytes must be positive")
-	}
-
-	if len(s.tiers) > 0 && !slices.Contains(s.tiers, capacity) {
-		return nil, status.Errorf(codes.InvalidArgument, "capacity_bytes %d is not one of the node's capacity tiers", capacity)
+	if capacity == 0 || capacity > math.MaxInt64 {
+		return nil, status.Error(codes.InvalidArgument, "capacity_bytes must be a positive signed 64-bit size")
 	}
 
 	res, err := s.backend.Create(ctx, op, IncarnationRef{VolumeRef: vol, Incarnation: incID}, revID, capacity)

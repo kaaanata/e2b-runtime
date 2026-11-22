@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
-	"slices"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -224,7 +223,7 @@ var errReplay = errors.New("replayed request")
 func (a *APIStore) postBlockVolume(c *gin.Context, team *types.Team, body api.NewVolume, params api.PostVolumesParams) {
 	ctx := c.Request.Context()
 
-	if len(a.config.BlockVolumeCapacityTiersGiB) == 0 {
+	if !a.config.BlockVolumeEnabled {
 		a.sendAPIStoreError(c, http.StatusNotImplemented, "Block volumes are not enabled in this deployment")
 
 		return
@@ -236,8 +235,8 @@ func (a *APIStore) postBlockVolume(c *gin.Context, team *types.Team, body api.Ne
 		return
 	}
 
-	if !slices.Contains(a.config.BlockVolumeCapacityTiersGiB, *body.CapacityGiB) {
-		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("capacityGiB must be one of %v", a.config.BlockVolumeCapacityTiersGiB))
+	if !validBlockVolumeCapacity(*body.CapacityGiB) {
+		a.sendAPIStoreError(c, http.StatusBadRequest, fmt.Sprintf("capacityGiB must be between 1 and %d", maxBlockVolumeCapacityGiB))
 
 		return
 	}

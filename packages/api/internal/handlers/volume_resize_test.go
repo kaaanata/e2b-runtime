@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/e2b-dev/infra/packages/api/internal/api"
-	"github.com/e2b-dev/infra/packages/api/internal/cfg"
 	"github.com/e2b-dev/infra/packages/api/internal/sandbox"
 	"github.com/e2b-dev/infra/packages/auth/pkg/auth"
 	authtypes "github.com/e2b-dev/infra/packages/auth/pkg/types"
@@ -27,20 +26,21 @@ import (
 func TestVolumeResizes(t *testing.T) {
 	t.Parallel()
 
-	store := &APIStore{config: cfg.Config{BlockVolumeCapacityTiersGiB: []int64{10, 20}}}
+	store := &APIStore{}
 
 	got, apiErr := store.volumeResizes(nil)
 	require.Nil(t, apiErr)
 	assert.Nil(t, got)
 
-	got, apiErr = store.volumeResizes(&[]api.ResumeVolumeMount{{Name: "ws", CapacityGiB: 20}})
+	got, apiErr = store.volumeResizes(&[]api.ResumeVolumeMount{{Name: "ws", CapacityGiB: 4097}})
 	require.Nil(t, apiErr)
-	assert.Equal(t, map[string]int64{"ws": 20 << 30}, got)
+	assert.Equal(t, map[string]int64{"ws": 4097 << 30}, got)
 
 	for name, mounts := range map[string][]api.ResumeVolumeMount{
-		"not a tier": {{Name: "ws", CapacityGiB: 15}},
-		"no name":    {{CapacityGiB: 20}},
-		"duplicate":  {{Name: "ws", CapacityGiB: 20}, {Name: "ws", CapacityGiB: 20}},
+		"negative":  {{Name: "ws", CapacityGiB: -1}},
+		"overflows": {{Name: "ws", CapacityGiB: maxBlockVolumeCapacityGiB + 1}},
+		"no name":   {{CapacityGiB: 20}},
+		"duplicate": {{Name: "ws", CapacityGiB: 20}, {Name: "ws", CapacityGiB: 20}},
 	} {
 		_, apiErr = store.volumeResizes(&mounts)
 		require.NotNil(t, apiErr, name)
@@ -189,7 +189,7 @@ func TestConnect_ResizeOfRunningSandboxRefused(t *testing.T) {
 		Limits: &authtypes.TeamLimits{MaxLengthHours: 24},
 	})
 
-	store := &APIStore{connectBackendOverride: stub, config: cfg.Config{BlockVolumeCapacityTiersGiB: []int64{10, 20}}}
+	store := &APIStore{connectBackendOverride: stub}
 	//nolint:contextcheck // the handler reads ctx from ginCtx.Request.Context().
 	store.PostSandboxesSandboxIDConnect(ginCtx, sandboxID)
 

@@ -33,12 +33,12 @@ type grpcFixture struct {
 	live   *fakeLiveness
 }
 
-func newGRPCFixture(t *testing.T, tiers ...uint64) grpcFixture {
+func newGRPCFixture(t *testing.T) grpcFixture {
 	t.Helper()
 
 	svc, runner, live := newFakeService(t, smallWatermarks())
 
-	return grpcFixture{srv: NewGRPCServer(svc, svc.Layout().Root(), tiers), svc: svc, runner: runner, live: live}
+	return grpcFixture{srv: NewGRPCServer(svc, svc.Layout().Root()), svc: svc, runner: runner, live: live}
 }
 
 func refProto(v VolumeRef) *orchestrator.BlockVolumeRef {
@@ -130,7 +130,7 @@ func TestGRPCCreateBlockVolume(t *testing.T) {
 func TestGRPCCreateBlockVolumeValidation(t *testing.T) {
 	t.Parallel()
 
-	f := newGRPCFixture(t, 2*fakeCapacity)
+	f := newGRPCFixture(t)
 	vol, _ := newVolume()
 
 	valid := func() *orchestrator.CreateBlockVolumeRequest {
@@ -144,12 +144,12 @@ func TestGRPCCreateBlockVolumeValidation(t *testing.T) {
 	}
 
 	for name, mutate := range map[string]func(*orchestrator.CreateBlockVolumeRequest){
-		"missing operation":   func(r *orchestrator.CreateBlockVolumeRequest) { r.OperationId = "" },
-		"non-canonical team":  func(r *orchestrator.CreateBlockVolumeRequest) { r.Volume.TeamId = "../etc" },
-		"missing volume":      func(r *orchestrator.CreateBlockVolumeRequest) { r.Volume = nil },
-		"uppercase revision":  func(r *orchestrator.CreateBlockVolumeRequest) { r.RevisionId = "ABCDEF00-0000-0000-0000-000000000000" },
-		"zero capacity":       func(r *orchestrator.CreateBlockVolumeRequest) { r.CapacityBytes = 0 },
-		"capacity off a tier": func(r *orchestrator.CreateBlockVolumeRequest) { r.CapacityBytes = fakeCapacity },
+		"missing operation":  func(r *orchestrator.CreateBlockVolumeRequest) { r.OperationId = "" },
+		"non-canonical team": func(r *orchestrator.CreateBlockVolumeRequest) { r.Volume.TeamId = "../etc" },
+		"missing volume":     func(r *orchestrator.CreateBlockVolumeRequest) { r.Volume = nil },
+		"uppercase revision": func(r *orchestrator.CreateBlockVolumeRequest) { r.RevisionId = "ABCDEF00-0000-0000-0000-000000000000" },
+		"zero capacity":      func(r *orchestrator.CreateBlockVolumeRequest) { r.CapacityBytes = 0 },
+		"capacity overflow":  func(r *orchestrator.CreateBlockVolumeRequest) { r.CapacityBytes = 1 << 63 },
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -162,14 +162,14 @@ func TestGRPCCreateBlockVolumeValidation(t *testing.T) {
 	}
 
 	_, err := f.srv.CreateBlockVolume(t.Context(), valid())
-	require.NoError(t, err, "a tier capacity is accepted")
+	require.NoError(t, err)
 }
 
 func TestGRPCCreateBlockVolumeBelowWatermark(t *testing.T) {
 	t.Parallel()
 
 	svc, _, _ := newFakeService(t, Watermarks{MinDataFree: 1 << 50, MinMetadataFree: 1})
-	srv := NewGRPCServer(svc, svc.Layout().Root(), nil)
+	srv := NewGRPCServer(svc, svc.Layout().Root())
 	vol, _ := newVolume()
 
 	_, err := srv.CreateBlockVolume(t.Context(), &orchestrator.CreateBlockVolumeRequest{

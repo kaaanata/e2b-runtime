@@ -427,7 +427,7 @@ func (b *blockVolumeAttacher) discardForkClones(ctx context.Context, sandboxID s
 //     snapshot it keeps the filesystem identity and requires
 //     allowSharedIdentity;
 //   - a resume may grow volumes (resize: volume name -> capacity in bytes,
-//     already checked against the capacity tiers); every name must be a
+//     already checked for valid capacity); every name must be a
 //     block mount of the snapshot and no capacity smaller than the
 //     snapshot's.
 //

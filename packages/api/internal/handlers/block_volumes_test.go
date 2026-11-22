@@ -97,7 +97,7 @@ func newBlockAPIFixture(t *testing.T, db *testutils.Database, nodes ...*nodemana
 			sqlcDB:       db.SqlcClient,
 			volumeNodes:  staticNodes{nodes: nodes},
 			volumeJobs:   riverEnqueuer{client: client},
-			config:       cfg.Config{BlockVolumeCapacityTiersGiB: []int64{10, 20}},
+			config:       cfg.Config{BlockVolumeEnabled: true},
 		},
 		team: &authtypes.Team{Team: &authqueries.Team{ID: teamID}},
 	}
@@ -192,13 +192,13 @@ func TestPostVolumes_Block(t *testing.T) {
 
 		f := newBlockAPIFixture(t, db)
 		key := "create-1"
-		body := api.NewVolume{Name: "ws", Backend: new(api.Block), CapacityGiB: new(int64(10))}
+		body := api.NewVolume{Name: "ws", Backend: new(api.Block), CapacityGiB: new(int64(17))}
 
 		code, accepted := f.create(t, body, &key)
 		require.Equal(t, http.StatusAccepted, code)
 		assert.Equal(t, api.VolumeStateCreating, *accepted.Volume.State)
 		assert.Equal(t, api.Block, *accepted.Volume.Backend)
-		assert.Equal(t, int64(10), *accepted.Volume.CapacityGiB)
+		assert.Equal(t, int64(17), *accepted.Volume.CapacityGiB)
 		assert.Equal(t, "node-a", *accepted.Volume.OwnerNode)
 		assert.Equal(t, dboutbox.VolumeOperationCreate, accepted.Operation.Kind)
 		assert.Equal(t, dboutbox.VolumeOperationPending, accepted.Operation.State)
@@ -208,7 +208,7 @@ func TestPostVolumes_Block(t *testing.T) {
 		op, err := f.db.SqlcClient.GetVolumeOperation(t.Context(), queries.GetVolumeOperationParams{ID: uuid.MustParse(accepted.Operation.OperationID), TeamID: f.team.ID})
 		require.NoError(t, err)
 		require.NoError(t, json.Unmarshal(op.Params, &params))
-		assert.Equal(t, int64(10<<30), params.Create.CapacityBytes)
+		assert.Equal(t, int64(17<<30), params.Create.CapacityBytes)
 		assert.Equal(t, "node-a", params.NodeID)
 
 		code, replay := f.create(t, body, &key)
@@ -244,13 +244,13 @@ func TestPostVolumes_Block(t *testing.T) {
 		code, _ := f.create(t, api.NewVolume{Name: "a", Backend: new(api.Block)}, nil)
 		assert.Equal(t, http.StatusBadRequest, code, "capacity is required")
 
-		code, _ = f.create(t, api.NewVolume{Name: "a", Backend: new(api.Block), CapacityGiB: new(int64(7))}, nil)
-		assert.Equal(t, http.StatusBadRequest, code, "capacity must be a tier")
+		code, _ = f.create(t, api.NewVolume{Name: "a", Backend: new(api.Block), CapacityGiB: new(int64(0))}, nil)
+		assert.Equal(t, http.StatusBadRequest, code, "capacity must be positive")
 
 		code, _ = f.create(t, api.NewVolume{Name: "a", CapacityGiB: new(int64(10))}, nil)
 		assert.Equal(t, http.StatusBadRequest, code, "capacity is for block volumes")
 
-		f.store.config.BlockVolumeCapacityTiersGiB = nil
+		f.store.config.BlockVolumeEnabled = false
 		code, _ = f.create(t, api.NewVolume{Name: "a", Backend: new(api.Block), CapacityGiB: new(int64(10))}, nil)
 		assert.Equal(t, http.StatusNotImplemented, code)
 

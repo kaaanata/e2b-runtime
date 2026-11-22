@@ -1288,8 +1288,8 @@ components:
       type: object
       description: >-
         A new capacity for one block volume of a paused sandbox, applied when
-        the sandbox resumes. `capacityGiB` must be one of the deployment's
-        capacity tiers (400 otherwise) and at least the volume's current
+        the sandbox resumes. `capacityGiB` is a positive whole GiB value
+        subject to storage admission and must be at least the volume's current
         capacity (409 `volume_resize_invalid` when smaller; equal is a no-op).
         Volumes only grow. Resuming a memory snapshot grows the disk device and
         the guest grows the mounted filesystem online; resuming a
@@ -2734,7 +2734,7 @@ components:
           type: integer
           format: int64
           minimum: 1
-          description: Capacity of a block volume in GiB; must be one of the deployment's capacity tiers. Required for block volumes.
+          description: Positive whole GiB capacity, subject to storage admission. Required for block volumes.
       required:
         - name
 

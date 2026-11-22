@@ -124,10 +124,6 @@ type Config struct {
 	// BlockVolumeRoot is the Btrfs directory holding every block volume of
 	// the node. Empty uses the blockvol package default.
 	BlockVolumeRoot string `env:"BLOCK_VOLUME_ROOT"`
-	// BlockVolumeCapacityTiersGiB, when set, is the exhaustive list of volume
-	// capacities (GiB) the node creates. Empty accepts any positive capacity
-	// the control plane asks for.
-	BlockVolumeCapacityTiersGiB []uint64 `env:"BLOCK_VOLUME_CAPACITY_TIERS_GIB"`
 	// BlockVolumeMinDataFreeBytes and BlockVolumeMinMetadataFreeBytes are the
 	// Btrfs free-space watermarks below which create, clone and seal are
 	// refused with RESOURCE_EXHAUSTED. Zero keeps the blockvol defaults.
@@ -149,16 +145,6 @@ func (c Config) AdvertisedLabels() []string {
 	}
 
 	return labels
-}
-
-// BlockVolumeCapacityTiers returns BlockVolumeCapacityTiersGiB in bytes.
-func (c Config) BlockVolumeCapacityTiers() []uint64 {
-	tiers := make([]uint64, 0, len(c.BlockVolumeCapacityTiersGiB))
-	for _, gib := range c.BlockVolumeCapacityTiersGiB {
-		tiers = append(tiers, gib<<30)
-	}
-
-	return tiers
 }
 
 // AdditionalClickhouseEndpoints returns the non-blank entries from
